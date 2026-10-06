@@ -1,7 +1,8 @@
 {
   "version": "0.0.1",
   "configurations": [
-    { "name": "fishing-house", "runtimeExecutable": "node", "runtimeArgs": ["tools/serve.js", "5173"], "port": 5173 },
-    { "name": "fishing-house-test", "runtimeExecutable": "node", "runtimeArgs": ["tools/serve.js", "5174"], "port": 5174 }
+    { "name": "fishing-house", "runtimeExecutable": "npm", "runtimeArgs": ["run", "dev"], "port": 3000 },
+    { "name": "fishing-house-app", "runtimeExecutable": "npm", "runtimeArgs": ["run", "dev", "-w", "app"], "port": 3000 },
+    { "name": "fishing-house-game-server", "runtimeExecutable": "npm", "runtimeArgs": ["run", "dev", "-w", "game-server"], "port": 2567 }
   ]
 }

@@ -1,0 +1,21 @@
+{
+  "name": "@fh/game-server",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Игровой сервер на Colyseus: общий мир, движение, рыбалка",
+  "scripts": {
+    "dev": "tsx watch --env-file-if-exists=../.env src/index.ts",
+    "start": "node --env-file-if-exists=../.env dist/index.mjs",
+    "build": "node build.mjs",
+    "typecheck": "tsc --noEmit",
+    "smoke": "tsx --env-file-if-exists=../.env scripts/smoke.ts"
+  },
+  "dependencies": {
+    "@colyseus/schema": "^5.0.36",
+    "colyseus": "^0.18.9",
+    "drizzle-orm": "^0.45.3",
+    "postgres": "^3.4.9",
+    "zod": "^4.6.5"
+  }
+}

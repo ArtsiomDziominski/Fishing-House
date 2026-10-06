@@ -1,0 +1,105 @@
+/* Общий вид сайта и игры: тёмное дерево, бумага и жёлтый плащ рыбака. */
+:root {
+  --ink: #240702;
+  --paper: #f4e3c1;
+  --paper-dim: rgba(244, 227, 193, 0.7);
+  --wood: rgba(40, 22, 12, 0.82);
+  --wood-solid: #28160c;
+  --wood-hover: rgba(70, 40, 20, 0.95);
+  --line: rgba(244, 227, 193, 0.22);
+  --coat: #fac708;
+  --coat-dark: #c27709;
+  --bad: #c9532d;
+  --good: #8abd5a;
+  --water: #94d6f1;
+  --pixel: "Tiny5", "Segoe UI", system-ui, sans-serif;
+  --text: "Segoe UI", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
+  --mono: Consolas, "Courier New", monospace;
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+
+html, body { min-height: 100%; margin: 0; }
+body {
+  background: #0f1c14;
+  color: var(--paper);
+  font: 14px/1.45 var(--text);
+}
+/* в игре страница не прокручивается и не выделяется — всё управление на холсте */
+body.in-game { height: 100%; overflow: hidden; -webkit-user-select: none; user-select: none; touch-action: none; }
+
+a { color: var(--coat); }
+a:hover { color: #ffe27a; }
+
+h1, h2, h3 { font-family: var(--pixel); font-weight: 400; letter-spacing: 0.03em; line-height: 1.15; margin: 0; }
+
+kbd {
+  display: inline-block;
+  min-width: 1.5em;
+  margin: 0 1px;
+  padding: 0 4px;
+  border: 1px solid rgba(244, 227, 193, 0.5);
+  border-bottom-width: 2px;
+  border-radius: 4px;
+  background: rgba(244, 227, 193, 0.12);
+  font: 600 11px/1.5 var(--mono);
+  text-align: center;
+}
+
+/* Поля вокруг — размытое продолжение картинки мира. */
+.backdrop {
+  position: fixed;
+  inset: -48px;
+  width: calc(100% + 96px);
+  height: calc(100% + 96px);
+  object-fit: cover;
+  filter: blur(26px) brightness(0.42) saturate(1.15);
+  pointer-events: none;
+  z-index: -1;
+}
+
+.panel {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--wood);
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.45);
+  backdrop-filter: blur(2px);
+}
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 10px 18px;
+  border: 1px solid rgba(244, 227, 193, 0.35);
+  border-radius: 9px;
+  background: rgba(40, 22, 12, 0.9);
+  color: var(--paper);
+  font: 600 15px/1.2 var(--text);
+  text-decoration: none;
+  cursor: pointer;
+  transition: background 0.15s ease, transform 0.15s ease;
+}
+.btn:hover { background: var(--wood-hover); color: var(--paper); }
+.btn:active { transform: translateY(1px); }
+.btn:disabled { opacity: 0.5; cursor: default; }
+.btn.primary { border-color: var(--ink); background: var(--coat); color: var(--ink); box-shadow: 0 3px 0 var(--coat-dark); }
+.btn.primary:hover { background: #ffd43a; color: var(--ink); }
+.btn.ghost { background: transparent; }
+.btn:focus-visible, input:focus-visible { outline: 2px solid var(--coat); outline-offset: 2px; }
+
+label.field { display: grid; gap: 6px; font-weight: 600; }
+label.field input {
+  padding: 10px 12px;
+  border: 1px solid rgba(244, 227, 193, 0.35);
+  border-radius: 8px;
+  background: rgba(15, 8, 4, 0.6);
+  color: var(--paper);
+  font: 15px/1.3 var(--text);
+}
+label.field small { font-weight: 400; color: var(--paper-dim); }
+
+.error { color: #ff9b78; }
+.muted { color: var(--paper-dim); }

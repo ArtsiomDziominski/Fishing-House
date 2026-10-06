@@ -1,0 +1,25 @@
+// Состояние комнаты-причала, которое Colyseus сам рассылает всем в комнате (только изменения, в двоичном виде).
+// Здесь только то, что видно о других игроках. Улов и рыбалку игрок получает сообщениями — их видит только он.
+// Поля совпадают с PlayerView из @fh/shared — клиент читает их оттуда.
+
+import { schema, t, type SchemaType } from '@colyseus/schema';
+
+export const PlayerState = schema({
+  pid: t.string(),            // публичный id: по нему открывается профиль
+  name: t.string(),
+  x: t.float32(),
+  y: t.float32(),
+  dir: t.string(),
+  sitting: t.boolean(),       // сидит на краю причала с удочкой
+  carrying: t.boolean(),      // ведро в руке
+  bx: t.int16(),              // где стоит ведро, если не в руке
+  by: t.int16(),
+  bucketHome: t.boolean(),    // ведро на своём месте у дома
+  recent: t.array('string'),  // хвосты последних рыб над ведром
+}, 'PlayerState');
+export type PlayerState = SchemaType<typeof PlayerState>;
+
+export const PierState = schema({
+  players: t.map(PlayerState),   // ключ — sessionId соединения
+}, 'PierState');
+export type PierState = SchemaType<typeof PierState>;

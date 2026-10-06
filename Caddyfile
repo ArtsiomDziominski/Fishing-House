@@ -1,0 +1,23 @@
+# Caddy: HTTPS (сертификат Let's Encrypt — сам), сайт и игровые серверы за одним адресом.
+# DOMAIN приходит из .env через docker-compose.yml.
+
+{$DOMAIN} {
+	encode zstd gzip
+
+	# WebSocket к конкретному процессу игрового сервера: адрес приходит игроку из PUBLIC_ADDRESS этого процесса.
+	handle_path /game/1/* {
+		reverse_proxy game-1:2567
+	}
+	handle_path /game/2/* {
+		reverse_proxy game-2:2567
+	}
+	# Матчмейкинг (найти или открыть комнату) — любому процессу: они договариваются через Redis.
+	handle_path /game/* {
+		reverse_proxy game-1:2567 game-2:2567
+	}
+
+	# Всё остальное — сайт: страницы, API, картинки.
+	handle {
+		reverse_proxy app:3000
+	}
+}
