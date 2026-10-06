@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+  <title>Fishing House</title>
+  <link rel="icon" type="image/png" href="assets/icon.png">
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <img id="backdrop" src="assets/world.png" alt="" aria-hidden="true">
+  <main id="stage">
+    <canvas id="game" width="240" height="320" aria-label="Домик рыбака у реки"></canvas>
+  </main>
+
+  <aside id="catch" aria-label="Улов">
+    <div id="catch-head"><img src="assets/bucket.png" alt=""><span>В ведре</span><b id="catch-total">пусто</b></div>
+    <ul id="catch-list"></ul>
+  </aside>
+
+  <div id="toast" role="status" aria-live="polite"></div>
+
+  <div id="dock">
+    <div id="actions">
+      <button id="act-bucket" type="button" hidden><kbd>E</kbd><span></span></button>
+      <button id="act-fish" type="button" hidden><kbd>F</kbd><span></span></button>
+      <button id="act-stand" type="button" hidden><kbd>Esc</kbd><span></span></button>
+    </div>
+
+    <div id="hint">
+      <span class="for-keys"><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> или клик — идти</span>
+      <span class="for-keys"><kbd>E</kbd> — взять или поставить ведро</span>
+      <span class="for-keys"><kbd>F</kbd> или пробел — рыбачить</span>
+      <span class="for-touch">Коснись места — рыбак пойдёт туда</span>
+      <span class="for-touch">Ведро и рыбалка — кнопками внизу</span>
+    </div>
+  </div>
+  <div id="zoom" aria-label="Масштаб">
+    <button id="zoom-out" type="button" title="Мельче (−)">−</button>
+    <button id="zoom-in" type="button" title="Крупнее (+)">+</button>
+  </div>
+
+  <script src="js/world-data.js"></script>
+  <script src="js/world.js"></script>
+  <script src="js/hero.js"></script>
+  <script src="js/fish.js"></script>
+  <script src="js/fishing.js"></script>
+  <script src="js/ui.js"></script>
+  <script src="js/game.js"></script>
+</body>
+</html>

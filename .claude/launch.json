@@ -1,0 +1,7 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    { "name": "fishing-house", "runtimeExecutable": "node", "runtimeArgs": ["tools/serve.js", "5173"], "port": 5173 },
+    { "name": "fishing-house-test", "runtimeExecutable": "node", "runtimeArgs": ["tools/serve.js", "5174"], "port": 5174 }
+  ]
+}

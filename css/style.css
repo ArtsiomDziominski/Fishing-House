@@ -1,0 +1,208 @@
+:root {
+  --ink: #240702;
+  --paper: #f4e3c1;
+  --wood: rgba(40, 22, 12, 0.78);
+  --line: rgba(244, 227, 193, 0.22);
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+  background: #0f1c14;
+  color: var(--paper);
+  font: 13px/1.4 "Segoe UI", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
+  -webkit-user-select: none;
+  user-select: none;
+  touch-action: none;
+}
+
+/* Поля вокруг мира — размытое продолжение той же картинки. */
+#backdrop {
+  position: fixed;
+  inset: -48px;
+  width: calc(100% + 96px);
+  height: calc(100% + 96px);
+  object-fit: cover;
+  filter: blur(26px) brightness(0.42) saturate(1.15);
+  pointer-events: none;
+}
+
+#stage {
+  position: fixed;
+  inset: 0;
+  display: grid;
+  place-items: center;
+}
+
+#game {
+  display: block;
+  image-rendering: pixelated;
+  image-rendering: crisp-edges;
+  cursor: pointer;
+  box-shadow: 0 0 0 2px rgba(20, 8, 4, 0.9), 0 18px 60px rgba(0, 0, 0, 0.6);
+}
+
+kbd {
+  display: inline-block;
+  min-width: 1.5em;
+  margin: 0 1px;
+  padding: 0 4px;
+  border: 1px solid rgba(244, 227, 193, 0.5);
+  border-bottom-width: 2px;
+  border-radius: 4px;
+  background: rgba(244, 227, 193, 0.12);
+  font: 600 11px/1.5 Consolas, "Courier New", monospace;
+  text-align: center;
+}
+
+/* ---------- улов: что лежит в ведре ---------- */
+#catch {
+  position: fixed;
+  left: 12px;
+  top: 12px;
+  padding: 8px 12px 9px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--wood);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.35);
+}
+#catch-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-bottom: 6px;
+  margin-bottom: 6px;
+  border-bottom: 1px solid var(--line);
+}
+#catch-head img { width: 34px; height: 36px; image-rendering: pixelated; }
+#catch-head b { margin-left: auto; padding-left: 14px; font-weight: 600; }
+#catch-list { margin: 0; padding: 0; list-style: none; }
+#catch-list li { display: flex; align-items: center; gap: 8px; height: 24px; opacity: 0.55; }
+#catch-list li.caught { opacity: 1; }
+.fish-icon { width: 48px; height: 20px; image-rendering: pixelated; flex: none; }
+#toast .fish-icon { vertical-align: middle; margin-right: 8px; }
+#catch-list .lit, #catch-list .caught .dim { display: none; }
+#catch-list .caught .lit { display: block; }
+#catch-list .n { margin-left: auto; padding-left: 14px; font: 600 12px/1 Consolas, "Courier New", monospace; }
+
+/* ---------- сообщения ---------- */
+#toast {
+  position: fixed;
+  left: 0;
+  right: 0;
+  top: 14px;
+  width: fit-content;
+  max-width: calc(100% - 24px);
+  margin: 0 auto;
+  padding: 8px 16px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: rgba(40, 22, 12, 0.9);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.4);
+  font-size: 14px;
+  text-align: center;
+  opacity: 0;
+  transform: translateY(-8px);
+  transition: opacity 0.25s ease, transform 0.25s ease;
+  pointer-events: none;
+}
+#toast.show { opacity: 1; transform: none; }
+#toast.good { border-color: rgba(250, 199, 8, 0.7); }
+#toast.bad { border-color: rgba(201, 83, 45, 0.7); }
+
+/* ---------- низ экрана: кнопки действий и подсказка ---------- */
+#dock {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 12px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 0 100px;
+  pointer-events: none;
+}
+#actions { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; }
+#actions button {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 14px;
+  border: 1px solid rgba(244, 227, 193, 0.35);
+  border-radius: 9px;
+  background: rgba(40, 22, 12, 0.9);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.35);
+  color: var(--paper);
+  font: 600 14px/1.2 "Segoe UI", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
+  cursor: pointer;
+  pointer-events: auto;
+}
+#actions button[hidden] { display: none; }
+#actions button:hover { background: rgba(70, 40, 20, 0.95); }
+#actions button.hot {
+  border-color: var(--ink);
+  background: #fac708;
+  color: var(--ink);
+  animation: tug 0.28s ease-in-out infinite alternate;
+}
+#actions button.hot kbd { border-color: rgba(36, 7, 2, 0.6); background: rgba(36, 7, 2, 0.1); }
+@keyframes tug { to { transform: translateY(-3px) scale(1.06); } }
+
+#hint {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 4px 18px;
+  padding: 7px 14px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--wood);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.35);
+  white-space: nowrap;
+  transition: opacity 0.6s ease;
+}
+#hint.quiet { opacity: 0.32; }
+#hint.debug { opacity: 1; font-family: Consolas, "Courier New", monospace; white-space: normal; }
+#hint .for-touch { display: none; }
+@media (hover: none) and (pointer: coarse) {
+  #hint .for-keys, #actions kbd { display: none; }
+  #hint .for-touch { display: inline; }
+}
+
+#zoom {
+  position: fixed;
+  right: 12px;
+  bottom: 12px;
+  display: flex;
+  gap: 6px;
+}
+#zoom button {
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 1px solid rgba(244, 227, 193, 0.3);
+  border-radius: 8px;
+  background: var(--wood);
+  color: var(--paper);
+  font: 600 18px/1 Consolas, "Courier New", monospace;
+  cursor: pointer;
+}
+#zoom button:hover { background: rgba(70, 40, 20, 0.9); }
+#zoom button:disabled { opacity: 0.35; cursor: default; }
+
+/* Узкий экран: улов — одной строкой значков, подсказка уходит после первого шага. */
+@media (max-width: 560px) {
+  #catch { right: 12px; padding: 6px 10px; }
+  #catch-head { display: none; }
+  #catch-list { display: flex; justify-content: space-between; gap: 4px; }
+  #catch-list li { flex-direction: column; gap: 2px; height: auto; }
+  #catch-list .name { display: none; }
+  #catch-list .n { margin: 0; padding: 0; min-height: 12px; }
+  #toast { top: 64px; }
+  #dock { bottom: 54px; padding: 0 12px; }
+  #hint.quiet { display: none; }
+}

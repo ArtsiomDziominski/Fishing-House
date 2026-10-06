@@ -1,0 +1,10 @@
+{
+  "name": "fishing-house",
+  "version": "2.0.0",
+  "description": "Уютная пиксельная игра: домик рыбака у реки, герой ходит по миру с картинки",
+  "private": true,
+  "scripts": {
+    "start": "node tools/serve.js",
+    "build:world": "node tools/build-world.js"
+  }
+}
