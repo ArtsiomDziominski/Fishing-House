@@ -10,7 +10,7 @@
 
 import type { Room } from '@colyseus/sdk';
 import {
-  World, FISH, PACKS, PACK_KINDS, MOVE_EVERY, SPEED, CARRY_SPEED, REACH, seat, nearSeat, standPoint, dist, packInReach, dayHour, dayPart, clockText, skyAt, weatherText,
+  World, FISH, PACKS, PACK_KINDS, MOVE_EVERY, SPEED, CARRY_SPEED, RUN, REACH, seat, nearSeat, standPoint, dist, packInReach, dayHour, dayPart, clockText, skyAt, weatherText,
   type Bag, type Catch, type ClientMessages, type Dir, type PackKind, type PlayerView, type ServerMessages, type Sky, type WeatherKind, type WorldState,
 } from '@fh/shared';
 import { HERO } from './hero.ts';
@@ -47,7 +47,7 @@ export interface GameHandle {
   setWeather(kind: WeatherKind | null, wind: boolean | null): void;   // выставить погоду и ветер (на сервере, у всех); null — по расписанию
 }
 
-interface Hero { x: number; y: number; dir: Dir; sitting: boolean; moving: boolean; anim: number; path: { x: number; y: number }[] | null; then: 'sit' | 'pick' | 'wear' | null; stuck: number }
+interface Hero { x: number; y: number; dir: Dir; sitting: boolean; moving: boolean; anim: number; path: { x: number; y: number }[] | null; then: 'sit' | 'pick' | 'wear' | null; stuck: number; run: boolean }
 interface Ghost { x: number; y: number; anim: number; moving: boolean; blink: number; seen: number }
 // pack — вид рюкзака на спине или null, если герой налегке
 interface Drawn { x: number; y: number; dir: Dir; moving: boolean; anim: number; carrying: boolean; pack: PackKind | null; recent: ArrayLike<string>; blink: number }
@@ -79,13 +79,14 @@ export async function startGame(canvas: HTMLCanvasElement, room: Room, ui: GameU
   const sack = makeCanvas(P.w + 3, P.h + 3), sctx = ctx2d(sack);             // клетка рюкзака на земле: справа и снизу место под тень
   const dusk = makeCanvas(W, H), dctx = ctx2d(dusk);                         // слой темноты: цвет неба с дырами там, где горит свет
 
-  const hero: Hero = { x: seat.x, y: seat.y, dir: 'down', sitting: true, moving: false, anim: 0, path: null, then: null, stuck: 0 };
+  const hero: Hero = { x: seat.x, y: seat.y, dir: 'down', sitting: true, moving: false, anim: 0, path: null, then: null, stuck: 0, run: false };
   const bucket = { x: B.baseX, y: B.baseY, carried: false, home: true, blocked: null as number[] | null, pointed: false };
   const pack = { x: P.baseX, y: P.baseY, worn: false, kind: PACKS.DEFAULT, blocked: null as number[] | null };
   let bag: Bag = { counts: {}, best: {}, total: 0, grams: 0, recent: [] };
   let pendingBag: Bag | null = null;                                         // ведро после подсечки — покажем, когда рыба долетит
   const view = { k: 1 };                                                     // k — во сколько раз холст крупнее карты в арт-пикселях
   const keys = new Set<string>();
+  let shift = false, lastDown = { t: -1e9, x: 0, y: 0 };   // Shift зажат; прошлый клик — для двойного
   const ghosts = new Map<string, Ghost>();
   let marker: { x: number; y: number; t: number } | null = null, moved = false, debug = params.has('debug');
   let debugLayer: HTMLCanvasElement | null = null, debugFor = -1, mapRev = 0, pointer: { x: number; y: number } | null = null;   // mapRev растёт, когда предмет ставят или поднимают
@@ -281,11 +282,11 @@ export async function startGame(canvas: HTMLCanvasElement, room: Room, ui: GameU
   function fishAction() {                               // F, пробел: сесть, забросить, подсечь
     if (hero.sitting) send('press'); else if (nearSeatNow()) sitDown();
   }
-  function walkTo(x: number, y: number, then?: 'sit' | 'pick' | 'wear') {
+  function walkTo(x: number, y: number, then?: 'sit' | 'pick' | 'wear', run = false) {
     if (hero.sitting) standUp();
     const path = World.findPath(hero, { x, y });
     if (!path || !path.length) { hero.path = null; marker = null; return; }
-    hero.path = path; hero.then = then || null; hero.stuck = 0;
+    hero.path = path; hero.then = then || null; hero.stuck = 0; hero.run = run;
     const end = path[path.length - 1]!; marker = then ? null : { x: end.x, y: end.y, t: 0 };
     noteMoved();
   }
@@ -383,8 +384,9 @@ export async function startGame(canvas: HTMLCanvasElement, room: Room, ui: GameU
     wx.update(dt, weather); river.update(dt, wx.st.rain);
     if (!ready) return;
     let dx = 0, dy = 0, passed = false;
-    const step = (bucket.carried ? CARRY_SPEED : SPEED) * dt;
     for (const code of keys) { dx += DIRS[code]![0]; dy += DIRS[code]![1]; }
+    const running = shift || (!dx && !dy && hero.run && !!hero.path);   // клавишами бежим с Shift, по клику — с Shift или двойным кликом
+    const pace = running ? RUN : 1, step = (bucket.carried ? CARRY_SPEED : SPEED) * pace * dt;
     if (dx || dy) {                                   // клавиши важнее пути
       if (hero.sitting) standUp();
       hero.path = null; hero.then = null; marker = null; noteMoved();
@@ -405,7 +407,7 @@ export async function startGame(canvas: HTMLCanvasElement, room: Room, ui: GameU
         if (hero.stuck > 0.35) { hero.path = null; marker = null; hero.then = null; }
       }
     }
-    hero.anim = hero.moving ? hero.anim + dt * STEP_FPS : 0;
+    hero.anim = hero.moving ? hero.anim + dt * STEP_FPS * pace : 0;
     if (marker) marker.t += dt;
     fishing.update(dt);
 
@@ -691,6 +693,7 @@ export async function startGame(canvas: HTMLCanvasElement, room: Room, ui: GameU
   const on = <E extends Event>(target: EventTarget, type: string, fn: (ev: E) => void, opts?: AddEventListenerOptions) => { target.addEventListener(type, fn as EventListener, opts); listeners.push([target, type, fn, opts]); };
 
   on<KeyboardEvent>(window, 'keydown', ev => {
+    if (ev.key === 'Shift') shift = true;
     if (ev.ctrlKey || ev.metaKey || ev.altKey) return;
     if ((ev.target as HTMLElement | null)?.closest?.('input, textarea')) return;
     if (DIRS[ev.code]) { keys.add(ev.code); ev.preventDefault(); return; }
@@ -701,18 +704,21 @@ export async function startGame(canvas: HTMLCanvasElement, room: Room, ui: GameU
     else if (ev.code === 'Escape') standUp();
     else if (ev.code === 'F2') { debug = !debug; if (!debug) ui.debug(null); ev.preventDefault(); }
   });
-  on<KeyboardEvent>(window, 'keyup', ev => keys.delete(ev.code));
-  on(window, 'blur', () => keys.clear());
+  on<KeyboardEvent>(window, 'keyup', ev => { keys.delete(ev.code); if (ev.key === 'Shift') shift = false; });
+  on(window, 'blur', () => { keys.clear(); shift = false; });
   on<PointerEvent>(canvas, 'pointerdown', ev => {
     if (ev.button > 0 || !ready) return;
     ev.preventDefault();
     const p = toWorld(ev);
+    const dbl = ev.timeStamp - lastDown.t < 350 && Math.hypot(p.x - lastDown.x, p.y - lastDown.y) <= 12;
+    lastDown = dbl ? { t: -1e9, x: 0, y: 0 } : { t: ev.timeStamp, x: p.x, y: p.y };
+    const run = dbl || ev.shiftKey;                    // двойной клик или клик с Shift — бегом
     if (hero.sitting && (onFishingSpot(p.x, p.y) || inWater(p.x, p.y))) fishAction();   // сидя: клик по рыбаку или воде — рыбалка
     else if (bucket.carried && onHero(p.x, p.y)) putDown();
-    else if (onBucket(p.x, p.y)) { if (canPick()) pickUp(); else walkTo(bucket.x, bucket.y + 5, 'pick'); }
-    else if (onPack(p.x, p.y)) { if (canWear()) putOn(); else walkTo(pack.x, pack.y + 5, 'wear'); }
-    else if (onFishingSpot(p.x, p.y)) { if (nearSeatNow()) sitDown(); else walkTo(seat.x, seat.y, 'sit'); }
-    else walkTo(p.x, p.y);
+    else if (onBucket(p.x, p.y)) { if (canPick()) pickUp(); else walkTo(bucket.x, bucket.y + 5, 'pick', run); }
+    else if (onPack(p.x, p.y)) { if (canWear()) putOn(); else walkTo(pack.x, pack.y + 5, 'wear', run); }
+    else if (onFishingSpot(p.x, p.y)) { if (nearSeatNow()) sitDown(); else walkTo(seat.x, seat.y, 'sit', run); }
+    else walkTo(p.x, p.y, undefined, run);
   });
   on<PointerEvent>(canvas, 'pointermove', ev => { pointer = toWorld(ev); });
   on(canvas, 'contextmenu', ev => ev.preventDefault());

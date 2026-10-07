@@ -5,6 +5,7 @@ import { PACKS, type PackKind } from './packs.ts';
 import { World, type Point } from './world.ts';
 
 export const SPEED = 44, CARRY_SPEED = 38;   // арт-пикселей в секунду: налегке и с ведром
+export const RUN = 1.5;                      // бег (Shift или двойной клик) во столько раз быстрее шага, и с ведром тоже
 export const REACH = 18;                     // с какого расстояния можно взять ведро или рюкзак
 export const NEAR_PIER = 62;                 // ближе этого к месту рыбака ведро считается «рядом» (весь причал и край берега)
 export const PUT_REACH = 24;                 // как далеко от героя можно поставить ведро или положить рюкзак

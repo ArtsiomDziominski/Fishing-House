@@ -11,7 +11,7 @@ import { Room, definePlugins, type Client } from 'colyseus';
 import { UniqueSessionPlugin } from 'colyseus/plugins/unique-session';
 import { z } from 'zod';
 import {
-  World, FISH, ITEMS, DIRS, PACK_KINDS, ITEM_KINDS, WEATHERS, ROOM_SIZE, SPEED, REACH, PUT_REACH, NEAR_PIER, HOOK_GRACE,
+  World, FISH, ITEMS, DIRS, PACK_KINDS, ITEM_KINDS, WEATHERS, ROOM_SIZE, SPEED, RUN, REACH, PUT_REACH, NEAR_PIER, HOOK_GRACE,
   createFishing, addToBag, nearSeat, bucketNearSeat, standPoint, startState, packInReach, dist, seat,
   type Bag, type Fishing, type FishingEvent, type Item, type ItemKind, type ServerMessages, type WorldState,
 } from '@fh/shared';
@@ -25,7 +25,7 @@ const PATCH = 100;                  // мс между рассылками со
 const AUTOSAVE = 60_000;            // мс между сохранениями места героя в базу
 const RECONNECT = 20;               // секунд ждём игрока, у которого оборвалась связь
 const SLACK = 4;                    // арт-пикселей прощаем на округления и рывки сети
-const BUDGET_MAX = 26;              // запас хода копится, пока сообщения идут пачкой, но не больше этого
+const BUDGET_MAX = 26 * RUN;        // запас хода копится, пока сообщения идут пачкой, но не больше этого
 
 interface Session {
   pid: string;
@@ -293,7 +293,7 @@ export class PierRoom extends Room<{ state: PierState; client: Client<{ auth: Au
   private tick(dt: number) {
     for (const s of this.sessions.values()) {
       s.fishing.update(dt);
-      s.budget = Math.min(BUDGET_MAX, s.budget + SPEED * 1.25 * dt);
+      s.budget = Math.min(BUDGET_MAX, s.budget + SPEED * RUN * 1.25 * dt);
     }
   }
 
