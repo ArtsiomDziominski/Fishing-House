@@ -2,7 +2,7 @@
 
 import { z } from 'zod';
 
-export const NAME_MIN = 3, NAME_MAX = 20, PASSWORD_MIN = 8, PASSWORD_MAX = 128;
+export const NAME_MIN = 3, NAME_MAX = 20, PASSWORD_MIN = 6, PASSWORD_MAX = 128;
 export const NAME_RE = /^[\p{L}\p{N}_-]+$/u;
 
 export const nameSchema = z.string().trim()

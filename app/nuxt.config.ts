@@ -31,5 +31,6 @@ export default defineNuxtConfig({
     '/play': { ssr: false },              // игра живёт только в браузере: canvas и WebSocket
   },
   build: { transpile: ['@fh/shared'] },   // общий код лежит исходниками TypeScript
+  nitro: { externals: { inline: [(id: string) => /node_modules[\\/]nuxt[\\/]dist[\\/]/.test(id)] } },
   typescript: { strict: true },
 });
