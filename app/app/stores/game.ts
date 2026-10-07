@@ -20,8 +20,6 @@ export const useGameStore = defineStore('game', {
     toast: { text: '', tone: '' as Tone, fishId: null as string | null, show: false, seq: 0 },
     quietHint: false,
     debug: null as string | null,
-    canZoomIn: true,
-    canZoomOut: true,
     online: [] as { pid: string; name: string }[],
   }),
   actions: {
@@ -41,7 +39,6 @@ export const useGameStore = defineStore('game', {
         actions: a => { this.actions = a; },
         moved: () => { this.quietHint = true; },
         debug: text => { this.debug = text; },
-        zoom: (canIn, canOut) => { this.canZoomIn = canIn; this.canZoomOut = canOut; },
         online: list => { this.online = list; },
       };
     },

@@ -74,7 +74,7 @@ const overlay = computed(() => {
   <div class="play">
     <img class="backdrop" :src="'/assets/world.png?v=' + World.rev" :style="{ '--dark': game.sky.dark }" alt="" aria-hidden="true">
     <main class="stage">
-      <canvas ref="canvas" width="240" height="320" aria-label="Домик рыбака у реки" />
+      <canvas ref="canvas" width="569" height="320" aria-label="Домик рыбака у реки" />
     </main>
 
     <GameCatch />
@@ -82,10 +82,6 @@ const overlay = computed(() => {
     <GameDock @bucket="handle?.bucketAction()" @pack="handle?.packAction()" @fish="handle?.fishAction()" @stand="handle?.standUp()" />
     <GamePack @pick="handle?.setPack($event)" />
     <GameOnline @clock="handle?.setClock($event)" @weather="setWeather" />
-    <div class="zoom" aria-label="Масштаб">
-      <button type="button" title="Мельче (−)" :disabled="!game.canZoomOut" @click="handle?.zoom(-1); ($event.currentTarget as HTMLElement).blur()">−</button>
-      <button type="button" title="Крупнее (+)" :disabled="!game.canZoomIn" @click="handle?.zoom(1); ($event.currentTarget as HTMLElement).blur()">+</button>
-    </div>
 
     <div v-if="overlay" class="overlay" :class="{ soft: game.status === 'reconnecting' || game.status === 'connecting' }">
       <div class="panel box">
@@ -104,23 +100,12 @@ const overlay = computed(() => {
 /* фон вокруг холста темнеет вместе с игрой: --dark — насколько сейчас темно, 0..1 */
 .backdrop { filter: blur(26px) brightness(calc(0.42 - 0.26 * var(--dark, 0))) saturate(1.15); transition: filter 3s linear; }
 .stage { position: fixed; inset: 0; display: grid; place-items: center; }
+/* холст всегда 16:9; движок рисует его целым множителем чуть крупнее, а браузер плавно ужимает до размера окна */
 canvas {
   display: block;
-  image-rendering: pixelated;
-  image-rendering: crisp-edges;
   cursor: pointer;
   box-shadow: 0 0 0 2px rgba(20, 8, 4, 0.9), 0 18px 60px rgba(0, 0, 0, 0.6);
 }
-.zoom { position: fixed; right: 12px; bottom: 12px; display: flex; gap: 6px; }
-.zoom button {
-  width: 32px; height: 32px; padding: 0;
-  border: 1px solid rgba(244, 227, 193, 0.3); border-radius: 8px;
-  background: var(--wood); color: var(--paper);
-  font: 600 18px/1 var(--mono);
-  cursor: pointer;
-}
-.zoom button:hover { background: var(--wood-hover); }
-.zoom button:disabled { opacity: 0.35; cursor: default; }
 .overlay { position: fixed; inset: 0; display: grid; place-items: center; padding: 16px; background: rgba(8, 4, 2, 0.6); }
 .overlay.soft { background: rgba(8, 4, 2, 0.25); pointer-events: none; }
 .box { padding: 22px 26px; max-width: 380px; text-align: center; display: grid; gap: 12px; }

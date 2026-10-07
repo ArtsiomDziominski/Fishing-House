@@ -16,7 +16,9 @@ export interface BucketState { x: number; y: number; carried: boolean; home: boo
 // Рюкзак: на спине (worn) или лежит в точке x, y; kind — какой из рюкзаков игрок выбрал.
 export interface PackState { x: number; y: number; worn: boolean; kind: PackKind }
 // Что игрок оставил в мире, когда вышел: хранится в базе и приходит ему при входе.
-export interface WorldState { x: number; y: number; dir: Dir; sitting: boolean; bucket: BucketState; pack: PackState }
+// picX — где стояла картинка-образец на карте (World.pic.x), когда записывались координаты. Карту расширяют,
+// картинка сдвигается вправо — по этому числу сохранённые места переносятся на новую карту (см. cleanWorld).
+export interface WorldState { x: number; y: number; dir: Dir; sitting: boolean; bucket: BucketState; pack: PackState; picX: number }
 
 export const dist = (a: Point, b: Point) => Math.hypot(a.x - b.x, a.y - b.y);
 export const seat = World.seat;
@@ -30,5 +32,5 @@ export const startPack = (): PackState => ({ x: World.pack.baseX, y: World.pack.
 
 // Так игра начинается у нового игрока: рыбак сидит на причале, ведро и рюкзак — у дома, кадр как на картинке.
 export function startState(): WorldState {
-  return { x: seat.x, y: seat.y, dir: 'down', sitting: true, bucket: { x: World.bucket.baseX, y: World.bucket.baseY, carried: false, home: true }, pack: startPack() };
+  return { x: seat.x, y: seat.y, dir: 'down', sitting: true, bucket: { x: World.bucket.baseX, y: World.bucket.baseY, carried: false, home: true }, pack: startPack(), picX: World.pic.x };
 }

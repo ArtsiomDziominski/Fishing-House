@@ -35,7 +35,7 @@ function press(ev: MouseEvent, what: 'bucket' | 'pack' | 'fish' | 'stand') {
 .dock {
   position: fixed; left: 0; right: 0; bottom: 12px;
   display: flex; flex-direction: column; align-items: center; gap: 8px;
-  padding: 0 140px;   /* по бокам — выбор рюкзака и кнопки масштаба */
+  padding: 0 140px;   /* слева — выбор рюкзака; справа столько же, чтобы кнопки стояли по центру */
   pointer-events: none;
   font-size: 13px;
 }

@@ -129,7 +129,8 @@ await until('рюкзак снова на спине', () => !!seen()?.wearing);
 check(self === null, 'рюкзак надет снова, без поправок от сервера');
 
 await walk({ x: seat.x, y: seat.y });
-room.send('sit', { put: { x: 96, y: 241 } });
+const bucketSpot = { x: seat.x + 26, y: seat.y - 13 };   // место на настиле рядом с рыбаком
+room.send('sit', { put: bucketSpot });
 await sleep(200);
 room.send('press');
 await until('заброс', () => fish.some(f => f.e === 'cast'));
@@ -154,7 +155,7 @@ again.onMessage('fish', () => {});
 again.onMessage('clock', () => {});
 again.onMessage('weather', () => {});
 await until('себя после входа', () => !!self);
-check(self!.sitting && !self!.bucket.home && self!.bucket.x === 96, 'после перезахода герой на причале, ведро там, где поставили');
+check(self!.sitting && !self!.bucket.home && self!.bucket.x === bucketSpot.x, 'после перезахода герой на причале, ведро там, где поставили');
 check(self!.pack.worn && self!.pack.kind === 'sailor', 'рюкзак после перезахода на спине, тот же морской');
 check(bag!.total === 1, 'ведро после перезахода с той же рыбой');
 await again.leave();

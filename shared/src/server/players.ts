@@ -67,14 +67,19 @@ export async function loadBag(db: Db, pid: string): Promise<Bag> {
 
 // Сохранённое место героя, ведра и рюкзака; что не так — исправляем, чтобы игрок не застрял в стене.
 // У тех, кто играл до появления рюкзаков, рюкзака в записи нет — он ждёт на своём месте у дома.
-function cleanWorld(w: WorldState | null): WorldState | null {
+// Места записаны при том положении картинки на карте, которое лежит в picX (в старых записях его нет: карта тогда
+// была одной картинкой). Если карту с тех пор расширили, всё сдвигается вместе с картинкой.
+export function cleanWorld(w: WorldState | null): WorldState | null {
   if (!w || typeof w.x !== 'number' || typeof w.y !== 'number' || !w.bucket) return null;
-  const p = World.nearestWalkable(w.x, w.y) || { x: World.seat.x, y: World.seat.y };
-  const b = w.bucket, k: Partial<WorldState['pack']> = w.pack || startPack();
+  const dx = World.pic.x - (typeof w.picX === 'number' ? w.picX : 0);
+  const moved = (x: number | undefined, home: number) => (Math.round(x!) ? Math.round(x!) + dx : home);
+  const p = World.nearestWalkable(w.x + dx, w.y) || { x: World.seat.x, y: World.seat.y };
+  const b = w.bucket, k = w.pack as Partial<WorldState['pack']> | undefined;
   return {
     x: p.x, y: p.y, dir: DIRS.includes(w.dir) ? w.dir : 'down', sitting: !!w.sitting,
-    bucket: { x: Math.round(b.x) || World.bucket.baseX, y: Math.round(b.y) || World.bucket.baseY, carried: !!b.carried && !w.sitting, home: !!b.home },
-    pack: { x: Math.round(k.x!) || World.pack.baseX, y: Math.round(k.y!) || World.pack.baseY, worn: !!k.worn, kind: PACKS.isKind(k.kind) ? k.kind : PACKS.DEFAULT },
+    bucket: { x: moved(b.x, World.bucket.baseX), y: Math.round(b.y) || World.bucket.baseY, carried: !!b.carried && !w.sitting, home: !!b.home },
+    pack: k ? { x: moved(k.x, World.pack.baseX), y: Math.round(k.y!) || World.pack.baseY, worn: !!k.worn, kind: PACKS.isKind(k.kind) ? k.kind : PACKS.DEFAULT } : startPack(),
+    picX: World.pic.x,
   };
 }
 

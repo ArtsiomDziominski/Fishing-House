@@ -1,5 +1,6 @@
 // Собирает мир из картинки-образца (art/reference.webp):
-//   app/public/assets/world.png   — карта 240×320 без рыбака (причал под ним дорисован) и без дыма над трубой (его рисует игра)
+//   app/public/assets/world.png   — карта 569×320 (16:9): в середине картинка без рыбака (причал под ним дорисован) и без дыма над трубой
+//                                   (его рисует игра), по бокам — лес и луг с дорогой, их дорисовывает tools/world-sides.mjs
 //   app/public/assets/fisher.png  — сидящий рыбак с удочкой, вырезанный с картинки пиксель в пиксель
 //   app/public/assets/line.png    — его леска со всплеском (пока он не рыбачит, рисуется как на картинке)
 //   app/public/assets/bucket.png, bucket-carry.png — ведро у дома: стоит на земле и в руке, ручкой вверх
@@ -18,6 +19,7 @@ import { createHash } from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import SHAPES from './world-shapes.mjs';
+import { widen, curveOf } from './world-sides.mjs';
 import { HERO } from '../app/app/game/hero.ts';
 import { PACKS, PACK_KINDS } from '../shared/src/packs.ts';
 
@@ -26,7 +28,8 @@ try { sharp = (await import('sharp')).default; } catch (e) { console.error('Ну
 
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 const ASSETS = path.join(ROOT, 'app', 'public', 'assets');
-const W = 240, H = 320;
+const W = 240, H = 320;                                             // картинка-образец в арт-пикселях
+const SIDE = SHAPES.sides.left, MW = SIDE + W + SHAPES.sides.right;                 // карта шире картинки: та стоит в середине, по бокам лес и луг
 const debugDir = process.argv.includes('--debug') ? process.argv[process.argv.indexOf('--debug') + 1] : null;
 
 const lum = c => 0.299 * c[0] + 0.587 * c[1] + 0.114 * c[2];
@@ -379,6 +382,17 @@ function glowAround(m) {
 }
 
 // ---------- 4. Разметка → растры ----------
+// Разметка задана в координатах картинки (левее неё x < 0, правее — x >= 240), растры — в координатах карты:
+// картинка стоит на карте со сдвигом SIDE.
+const toMap = s => (s.rect ? { ...s, rect: [s.rect[0] + SIDE, s.rect[1], s.rect[2] + SIDE, s.rect[3]] } : { ...s, poly: s.poly.map(([x, y]) => [x + SIDE, y]) });
+// Луг справа от картинки: ходить можно от опушки до изгороди над рекой.
+function meadowWalk() {
+  const { meadow } = SHAPES.sides, top = curveOf(meadow.top), bottom = curveOf(meadow.bottom);
+  const end = W + SHAPES.sides.right - 11;                                      // до края карты не доходим: герой должен оставаться в кадре целиком
+  const xs = []; for (let x = W - 8; x < end; x += 4) xs.push(x); xs.push(end);
+  return [...xs.map(x => [x, top(x) + 4]), ...[...xs].reverse().map(x => [x, bottom(x) - 6])];
+}
+const HEDGE_BASE = Math.round(Math.max(...SHAPES.sides.river.right.top.map(p => p[1]))) + 8;   // строка, на которой «стоит» изгородь над рекой
 function inPoly(pts, x, y) {
   let inside = false;
   for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) {
@@ -390,17 +404,19 @@ function inPoly(pts, x, y) {
 function fillShape(shape, fn) {
   if (shape.rect) { const [x0, y0, x1, y1] = shape.rect; for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) fn(x, y); return; }
   const xs = shape.poly.map(p => p[0]), ys = shape.poly.map(p => p[1]);
-  const x0 = Math.max(0, Math.floor(Math.min(...xs))), x1 = Math.min(W - 1, Math.ceil(Math.max(...xs)));
+  const x0 = Math.max(0, Math.floor(Math.min(...xs))), x1 = Math.min(MW - 1, Math.ceil(Math.max(...xs)));
   const y0 = Math.max(0, Math.floor(Math.min(...ys))), y1 = Math.min(H - 1, Math.ceil(Math.max(...ys)));
   for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) if (inPoly(shape.poly, x + 0.5, y + 0.5)) fn(x, y);
 }
-function bake(world) {
-  const at = (x, y) => { const i = (y * W + x) * 3; return [world[i], world[i + 1], world[i + 2]]; };
+function bake(map, hedge) {                                         // map — карта MW×H (RGB), hedge — маска листвы изгороди над рекой
+  const W = MW;                                                    // здесь всё в координатах карты
+  const at = (x, y) => { const i = (y * W + x) * 3; return [map[i], map[i + 1], map[i + 2]]; };
+  const onMap = p => [p[0] + SIDE, p[1]];
   const walk = new Uint8Array(W * H);
-  for (const poly of SHAPES.walk) fillShape({ poly }, (x, y) => { walk[y * W + x] = 1; });
-  for (const s of SHAPES.solids) fillShape(s, (x, y) => { walk[y * W + x] = 0; });
+  for (const poly of [...SHAPES.walk, meadowWalk()]) fillShape(toMap({ poly }), (x, y) => { walk[y * W + x] = 1; });
+  for (const s of SHAPES.solids) fillShape(toMap(s), (x, y) => { walk[y * W + x] = 0; });
   {                                                                // оставить только то, куда можно дойти от причала
-    const reach = new Uint8Array(W * H), st = [SHAPES.points.seat.slice()];
+    const reach = new Uint8Array(W * H), st = [onMap(SHAPES.points.seat)];
     while (st.length) {
       const [x, y] = st.pop(); if (x < 0 || y < 0 || x >= W || y >= H) continue;
       const i = y * W + x; if (reach[i] || !walk[i]) continue; reach[i] = 1; st.push([x + 1, y], [x - 1, y], [x, y + 1], [x, y - 1]);
@@ -420,7 +436,7 @@ function bake(world) {
     }
     near = nx;
   }
-  const grass = new Uint8Array(W * H), st = SHAPES.points.grassSeeds.map(p => p.slice());
+  const grass = new Uint8Array(W * H), st = SHAPES.points.grassSeeds.map(onMap);
   while (st.length) {
     const [x, y] = st.pop(); if (x < 0 || y < 0 || x >= W || y >= H) continue;
     const i = y * W + x; if (grass[i] || !near[i] || !isGrass(at(x, y))) continue;
@@ -428,25 +444,28 @@ function bake(world) {
   }
 
   const depth = new Uint16Array(W * H);
-  for (const o of SHAPES.occluders) fillShape(o, (x, y) => {
+  for (const o of SHAPES.occluders.map(toMap)) fillShape(o, (x, y) => {
     const i = y * W + x, c = at(x, y);
     if (o.carve === 'green' && isGreen(c)) return;
     if (o.carve === 'grass' && (grass[i] || (near[i] && isTan(c)))) return;
     if (o.base > depth[i]) depth[i] = o.base;
   });
+  // изгородь дорисована сборкой, и её листья известны точно: зайдя в них, герой скрывается за изгородью
+  for (let i = 0; i < W * H; i++) if (hedge[i] && HEDGE_BASE > depth[i]) depth[i] = HEDGE_BASE;
   return { walk, depth, grass };
 }
 // Места для бликов на воде: [x, y, длина, фаза] — только там, где вокруг чистая вода.
-function sparkles(world) {
-  const at = (x, y) => { const i = (y * W + x) * 3; return [world[i], world[i + 1], world[i + 2]]; };
+function sparkles(map) {                                            // map — карта MW×H (RGB)
+  const W = MW;
+  const at = (x, y) => { const i = (y * W + x) * 3; return [map[i], map[i + 1], map[i + 2]]; };
   const water = (x, y) => { if (x < 0 || y < 0 || x >= W || y >= H) return false; const c = at(x, y), l = lum(c); return c[2] > c[0] + 45 && c[2] > c[1] + 8 && l > 55 && l < 125; };
   const out = [];
-  for (let y = 222; y < H - 2; y++) for (let x = 2; x < W - 6; x++) {
-    if (hash(x, y, 11) > 0.035) continue;
-    const len = 2 + Math.floor(hash(x, y, 12) * 3);
+  for (let y = 200; y < H - 2; y++) for (let x = 2; x < W - 6; x++) {
+    if (hash(x - SIDE, y, 11) > 0.035) continue;
+    const len = 2 + Math.floor(hash(x - SIDE, y, 12) * 3);
     let ok = true;
     for (let dy = -2; dy <= 2 && ok; dy++) for (let dx = -2; dx <= len + 1; dx++) if (!water(x + dx, y + dy)) { ok = false; break; }
-    if (ok && !out.some(s => Math.abs(s[0] - x) < 9 && Math.abs(s[1] - y) < 4)) out.push([x, y, len, Math.round(hash(x, y, 13) * 100) / 100]);
+    if (ok && !out.some(s => Math.abs(s[0] - x) < 9 && Math.abs(s[1] - y) < 4)) out.push([x, y, len, Math.round(hash(x - SIDE, y, 13) * 100) / 100]);
   }
   return out;
 }
@@ -467,8 +486,9 @@ function rle(arr) {                                                  // [зна�
   repaintPack(world, sack);
   repaintSmoke(world);
   const lamps = lightMask(src), lampsOff = repaintLights(world, lamps);
+  const { buf: map, hedge } = widen(world, W, H, SHAPES.sides);      // картинка в середине, по бокам лес и луг с дорогой
   fs.mkdirSync(ASSETS, { recursive: true });
-  await sharp(world, { raw: { width: W, height: H, channels: 3 } }).png({ compressionLevel: 9 }).toFile(path.join(ASSETS, 'world.png'));
+  await sharp(map, { raw: { width: MW, height: H, channels: 3 } }).png({ compressionLevel: 9 }).toFile(path.join(ASSETS, 'world.png'));
 
   // Вырезка с картинки: пиксели под маской на прозрачном фоне. Возвращает прямоугольник и RGBA.
   const cut = (...masks) => {
@@ -556,38 +576,40 @@ function rle(arr) {                                                  // [зна�
   for (let y = 0; y < 19; y++) for (let x = 0; x < 19; x++) for (let k = 0; k < 4; k++) icon[(y * 19 + x) * 4 + k] = face[(y * HERO.FW + x) * 4 + k];
   await sharp(icon, { raw: { width: 19, height: 19, channels: 4 } }).resize(57, 57, { kernel: 'nearest' }).png().toFile(path.join(ASSETS, 'icon.png'));
 
-  const { walk, depth, grass } = bake(world);
+  const { walk, depth, grass } = bake(map, hedge);
   const tip = (() => { for (let y = 0; y < H; y++) if (mask.line[y * W + 48]) return y; return 239; })();
   // rev — отпечаток картинок: игра дописывает его к их адресам, чтобы после пересборки браузер не показывал старые из кеша
-  const rev = createHash('sha1').update(world).update(fisher.buf).update(line.buf).update(stand.buf).update(carry).update(sheet).update(small).update(lights.buf).update(glow.buf).digest('hex').slice(0, 8);
+  const rev = createHash('sha1').update(map).update(fisher.buf).update(line.buf).update(stand.buf).update(carry).update(sheet).update(small).update(lights.buf).update(glow.buf).digest('hex').slice(0, 8);
+  const box = r => ({ x: r.x + SIDE, y: r.y, w: r.w, h: r.h });    // место вырезки: с картинки — на карту
   const data = {
-    w: W, h: H, rev,
-    fisher: { x: fisher.x, y: fisher.y, w: fisher.w, h: fisher.h },
-    line: { x: line.x, y: line.y, w: line.w, h: line.h },
-    rod: { x: 48, tipY: tip, waterY: SHAPES.points.waterY },         // леска: столбец, кончик удилища, уровень воды
-    seat: { x: SHAPES.points.seat[0], y: SHAPES.points.seat[1], r: SHAPES.points.seatRadius },
-    bucket, pack, smoke: SMOKE,
-    lights: { x: lights.x, y: lights.y, w: lights.w, h: lights.h }, glow: { x: glow.x, y: glow.y, w: glow.w, h: glow.h },
-    sparkles: sparkles(world),
+    w: MW, h: H, rev,
+    pic: { x: SIDE, w: W },                                          // где на карте стоит сама картинка
+    fisher: box(fisher), line: box(line),
+    rod: { x: 48 + SIDE, tipY: tip, waterY: SHAPES.points.waterY },  // леска: столбец, кончик удилища, уровень воды
+    seat: { x: SHAPES.points.seat[0] + SIDE, y: SHAPES.points.seat[1], r: SHAPES.points.seatRadius },
+    bucket: { ...bucket, x: bucket.x + SIDE, baseX: bucket.baseX + SIDE }, pack: { ...pack, baseX: pack.baseX + SIDE },
+    smoke: { x: SMOKE.x + SIDE, y: SMOKE.y },
+    lights: box(lights), glow: box(glow),
+    sparkles: sparkles(map),
     walk: rle(walk), depth: rle(depth),
   };
   const js = '// Сгенерировано tools/build-world.mjs из tools/world-shapes.mjs — руками не править.\n' +
-    '// walk и depth — растры 240×320 парами [значение, длина]: проходимость и строка-опора предмета в точке.\n' +
-    'export const WORLD_DATA = ' + JSON.stringify(data).replace(/,"(fisher|line|rod|seat|bucket|pack|smoke|lights|sparkles|walk|depth)"/g, ',\n  "$1"').replace('{"w"', '{\n  "w"').replace(/\}$/, '\n}') + ';\n';
+    `// walk и depth — растры ${MW}×${H} парами [значение, длина]: проходимость и строка-опора предмета в точке.\n` +
+    'export const WORLD_DATA = ' + JSON.stringify(data).replace(/,"(pic|fisher|line|rod|seat|bucket|pack|smoke|lights|sparkles|walk|depth)"/g, ',\n  "$1"').replace('{"w"', '{\n  "w"').replace(/\}$/, '\n}') + ';\n';
   fs.writeFileSync(path.join(ROOT, 'shared', 'src', 'world-data.ts'), js);
 
   const count = a => a.reduce((s, v) => s + (v ? 1 : 0), 0);
-  console.log(`world.png ${W}x${H}; fisher.png ${fisher.w}x${fisher.h} @ ${fisher.x},${fisher.y}; line.png ${line.w}x${line.h}; bucket.png ${stand.w}x${stand.h} @ ${stand.x},${stand.y}, опора ${bucket.baseX},${bucket.baseY}, тень ${shadowPx.length} px; bucket-carry.png ${cw}x${ch}; проходимо ${count(walk)} px; за предметами ${count(depth)} px; pack.png ${pw * kinds}x${ph}, pack-ground.png ${sw * kinds}x${sh}, опора ${pack.baseX},${pack.baseY}, тень ${sackShadow.length} px; lights.png ${lights.w}x${lights.h} @ ${lights.x},${lights.y}, glow.png ${glow.w}x${glow.h} @ ${glow.x},${glow.y}, стёкол ${count(lamps.glass)} px; бликов ${data.sparkles.length}; world-data.ts ${js.length} байт`);
+  console.log(`world.png ${MW}x${H} (картинка ${W}x${H} со сдвигом ${SIDE}); fisher.png ${fisher.w}x${fisher.h} @ ${fisher.x},${fisher.y}; line.png ${line.w}x${line.h}; bucket.png ${stand.w}x${stand.h} @ ${stand.x},${stand.y}, опора ${bucket.baseX},${bucket.baseY}, тень ${shadowPx.length} px; bucket-carry.png ${cw}x${ch}; проходимо ${count(walk)} px; за предметами ${count(depth)} px; pack.png ${pw * kinds}x${ph}, pack-ground.png ${sw * kinds}x${sh}, опора ${pack.baseX},${pack.baseY}, тень ${sackShadow.length} px; lights.png ${lights.w}x${lights.h} @ ${lights.x},${lights.y}, glow.png ${glow.w}x${glow.h} @ ${glow.x},${glow.y}, стёкол ${count(lamps.glass)} px; бликов ${data.sparkles.length}; world-data.ts ${js.length} байт`);
 
   if (debugDir) {                                                    // проверочные картинки: разметка поверх карты
     fs.mkdirSync(debugDir, { recursive: true });
-    const S = 4, tint = (base, col, a) => base.map((v, k) => Math.round(v * (1 - a) + col[k] * a));
+    const S = 3, tint = (base, col, a) => base.map((v, k) => Math.round(v * (1 - a) + col[k] * a));
     const pal = [[255, 0, 0], [0, 200, 255], [255, 0, 255], [255, 255, 0], [0, 255, 120], [255, 140, 0], [140, 90, 255]];
     const levels = [...new Set(depth)].filter(v => v).sort((a, b) => a - b);
     const mk = async (name, fn) => {
-      const b = Buffer.alloc(W * H * 3);
-      for (let i = 0; i < W * H; i++) { const c = fn(i, [world[i * 3], world[i * 3 + 1], world[i * 3 + 2]]); b[i * 3] = c[0]; b[i * 3 + 1] = c[1]; b[i * 3 + 2] = c[2]; }
-      await sharp(b, { raw: { width: W, height: H, channels: 3 } }).resize(W * S, H * S, { kernel: 'nearest' }).png().toFile(path.join(debugDir, name));
+      const b = Buffer.alloc(MW * H * 3);
+      for (let i = 0; i < MW * H; i++) { const c = fn(i, [map[i * 3], map[i * 3 + 1], map[i * 3 + 2]]); b[i * 3] = c[0]; b[i * 3 + 1] = c[1]; b[i * 3 + 2] = c[2]; }
+      await sharp(b, { raw: { width: MW, height: H, channels: 3 } }).resize(MW * S, H * S, { kernel: 'nearest' }).png().toFile(path.join(debugDir, name));
     };
     await mk('dbg_walk.png', (i, c) => (walk[i] ? tint(c, [255, 255, 255], 0.55) : c));
     await mk('dbg_depth.png', (i, c) => (depth[i] ? tint(c, pal[levels.indexOf(depth[i]) % pal.length], 0.6) : c));

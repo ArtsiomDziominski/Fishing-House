@@ -1,6 +1,6 @@
 // Игра в браузере: рыбак ходит по миру с картинки, носит ведро и рюкзак и ловит рыбу с края причала — вместе с другими игроками.
-// Кадр собирается в буфере 240×320 («арт-пиксели») и выводится на экран целым множителем,
-// поэтому пиксели остаются ровными при любом размере окна.
+// Мир — карта 569×320 «арт-пикселей», ровно 16:9. Она вся в кадре: экран стоит на месте, ходит только герой.
+// Кадр вписан в окно браузера целиком и на экране 16:9 занимает его весь.
 //
 // Сеть: свой герой ходит сразу (без ожидания сервера), шаги уходят на сервер раз в MOVE_EVERY.
 // Сервер присылает «self», если с чем-то не согласен, — герой встаёт туда, где его видит сервер.
@@ -36,12 +36,11 @@ export interface GameUI {
   actions(a: Actions): void;
   moved(): void;                                        // первый шаг — подсказку можно приглушить
   debug(text: string | null): void;                     // строка отладки вместо подсказки; null — убрать
-  zoom(canIn: boolean, canOut: boolean): void;
   online(players: { pid: string; name: string }[]): void;
 }
 
 export interface GameHandle {
-  bucketAction(): void; packAction(): void; setPack(kind: PackKind): void; fishAction(): void; standUp(): void; zoom(step: number): void; destroy(): void;
+  bucketAction(): void; packAction(): void; setPack(kind: PackKind): void; fishAction(): void; standUp(): void; destroy(): void;
   setClock(hour: number | null): void;                  // перевести часы причала на этот час (на сервере, у всех); null — настоящее время
   setWeather(kind: WeatherKind | null, wind: boolean | null): void;   // выставить погоду и ветер (на сервере, у всех); null — по расписанию
 }
@@ -83,7 +82,7 @@ export async function startGame(canvas: HTMLCanvasElement, room: Room, ui: GameU
   const pack = { x: P.baseX, y: P.baseY, worn: false, kind: PACKS.DEFAULT, blocked: null as number[] | null };
   let bag: Bag = { counts: {}, best: {}, total: 0, grams: 0, recent: [] };
   let pendingBag: Bag | null = null;                                         // ведро после подсечки — покажем, когда рыба долетит
-  const view = { k: 1, zoom: 0, w: W, h: H, camX: 0, camY: 0 };
+  const view = { k: 1 };                                                     // k — во сколько раз холст крупнее карты в арт-пикселях
   const keys = new Set<string>();
   const ghosts = new Map<string, Ghost>();
   let marker: { x: number; y: number; t: number } | null = null, moved = false, debug = params.has('debug');
@@ -147,25 +146,18 @@ export async function startGame(canvas: HTMLCanvasElement, room: Room, ui: GameU
   { const px = ctx2d(pailBody); px.drawImage(img.bucket, 0, 0); for (const [dx, dy] of B.shadow) px.clearRect(dx!, dy!, 1, 1); }
   const wx = createWeatherView(img.world);                                   // дождь, ветер, пасмурный свет
 
-  // ---------- размер и камера ----------
+  // ---------- размер ----------
+  // Карта — это и есть кадр: она 16:9 и вписывается в окно целиком. На экране 16:9 она занимает его весь, на любом
+  // другом — и на вертикальном телефоне тоже — по краям остаются поля. Холст рисуется целым множителем (ближайшим
+  // сверху к нужному размеру), а до точного размера его ужимает браузер: кадр встаёт в окно без щелей, пиксели ровные.
   function layout() {
     const dpr = window.devicePixelRatio || 1;
-    const aw = Math.max(1, Math.floor(window.innerWidth * dpr)), ah = Math.max(1, Math.floor(window.innerHeight * dpr));
-    const auto = Math.max(1, Math.floor(Math.min(aw / W, ah / H) + 0.35));   // крупнейший целый множитель, при котором мир почти весь в окне
-    view.k = clamp(auto + view.zoom, 1, Math.max(auto, 12));
-    view.zoom = view.k - auto;
-    view.w = Math.min(W, Math.floor(aw / view.k));
-    view.h = Math.min(H, Math.floor(ah / view.k));
-    canvas.width = view.w * view.k; canvas.height = view.h * view.k;
-    canvas.style.width = canvas.width / dpr + 'px'; canvas.style.height = canvas.height / dpr + 'px';
+    const width = Math.max(1, Math.min(window.innerWidth, window.innerHeight * 16 / 9)), height = width * 9 / 16;
+    view.k = Math.max(1, Math.ceil(height * dpr / H - 0.01));
+    canvas.width = W * view.k; canvas.height = H * view.k;
+    canvas.style.width = width + 'px'; canvas.style.height = height + 'px';
     ctx.imageSmoothingEnabled = false;
-    ui.zoom(view.k < Math.max(auto, 12), view.k > 1);
-    const t = cameraTarget(); view.camX = t.x; view.camY = t.y;
   }
-  function cameraTarget() {
-    return { x: clamp(hero.x - view.w / 2, 0, W - view.w), y: clamp(hero.y - FH / 2 - view.h / 2, 0, H - view.h) };
-  }
-  function zoom(step: number) { view.zoom += step; layout(); }
 
   // ---------- ведро ----------
   const canPick = () => !hero.sitting && !bucket.carried && dist(hero, bucket) <= REACH;
@@ -202,7 +194,10 @@ export async function startGame(canvas: HTMLCanvasElement, room: Room, ui: GameU
     return false;
   }
   function spotBySeat() {                                // садясь рыбачить с ведром в руке, герой ставит его рядом
-    for (const [x, y] of [[96, 241], [101, 244], [92, 238], [106, 242], [111, 244], [100, 236], [114, 240]] as const) if (fits(x, y)) return { x, y };
+    for (const [dx, dy] of [[26, -13], [31, -10], [22, -16], [36, -12], [41, -10], [30, -18], [44, -14]] as const) {   // места на настиле справа от рыбака
+      const x = seat.x + dx, y = seat.y + dy;
+      if (fits(x, y)) return { x, y };
+    }
     return null;
   }
   function bucketAction() {
@@ -252,7 +247,9 @@ export async function startGame(canvas: HTMLCanvasElement, room: Room, ui: GameU
   const onBucket = (x: number, y: number) => !bucket.carried && x >= bucket.x - 9 && x <= bucket.x + 9 && y >= bucket.y - 19 && y <= bucket.y + 2;
   const onPack = (x: number, y: number) => !pack.worn && x >= pack.x - 7 && x <= pack.x + 7 && y >= pack.y - 12 && y <= pack.y + 2;
   const onHero = (x: number, y: number) => Math.abs(x - hero.x) <= 10 && y <= hero.y + 2 && y >= hero.y - FH;
-  const inWater = (x: number, y: number) => !World.canWalk(x, y) && y >= (x < 60 ? 226 : x < 132 ? 232 : 250);   // река и причал с его сваями
+  // Река и причал с его сваями: всё непроходимое ниже линии берега. Линия снята с картинки; по бокам от неё берег свой.
+  const bankY = (px: number) => (px < 0 ? 205 : px < 60 ? 226 : px < 132 ? 232 : px < World.pic.w ? 250 : 244);
+  const inWater = (x: number, y: number) => !World.canWalk(x, y) && y >= bankY(x - World.pic.x);
 
   function standUp() {
     if (!hero.sitting) return;
@@ -410,9 +407,6 @@ export async function startGame(canvas: HTMLCanvasElement, room: Room, ui: GameU
     sendIn -= dt;
     if (sendIn <= 0) flushMove();
     clockIn -= dt; flushClock();
-
-    const tgt = cameraTarget(), ease = 1 - Math.exp(-dt * 7);
-    view.camX += (tgt.x - view.camX) * ease; view.camY += (tgt.y - view.camY) * ease;
     refreshActions(); refreshSky();
   }
   function refreshActions() {
@@ -614,13 +608,13 @@ export async function startGame(canvas: HTMLCanvasElement, room: Room, ui: GameU
   }
 
   // Имена над чужими героями — уже на экранном холсте, чтобы текст был чётким при любом масштабе.
-  function drawNames(cx: number, cy: number) {
+  function drawNames() {
     const all = players(); if (!all) return;
     const dpr = window.devicePixelRatio || 1, size = Math.round(clamp(view.k * 3, 11 * dpr, 15 * dpr));
     ctx.font = `600 ${size}px "Segoe UI", system-ui, sans-serif`; ctx.textAlign = 'center'; ctx.textBaseline = 'bottom';
     ctx.lineJoin = 'round'; ctx.lineWidth = Math.max(2, size / 4);
     const label = (text: string, x: number, y: number) => {
-      const sx = (x - cx) * view.k, sy = (y - cy) * view.k;
+      const sx = x * view.k, sy = y * view.k;
       if (sx < -80 || sy < 0 || sx > canvas.width + 80 || sy > canvas.height + 20) return;
       ctx.strokeStyle = 'rgba(36, 7, 2, 0.85)'; ctx.strokeText(text, sx, sy);
       ctx.fillStyle = '#f4e3c1'; ctx.fillText(text, sx, sy);
@@ -677,18 +671,14 @@ export async function startGame(canvas: HTMLCanvasElement, room: Room, ui: GameU
     if (hero.sitting) drawBite(fctx, fishing.st, head);
     drawMarker(); drawPrompts(t);
     if (debug) drawDebug();
-    const cx = Math.round(clamp(view.camX, 0, W - view.w)), cy = Math.round(clamp(view.camY, 0, H - view.h));
-    ctx.drawImage(frame, cx, cy, view.w, view.h, 0, 0, canvas.width, canvas.height);
-    drawNames(cx, cy);
+    ctx.drawImage(frame, 0, 0, canvas.width, canvas.height);
+    drawNames();
   }
 
   // ---------- управление ----------
   function toWorld(ev: PointerEvent) {
     const r = canvas.getBoundingClientRect();
-    return {
-      x: Math.floor(clamp(view.camX, 0, W - view.w) + (ev.clientX - r.left) / r.width * view.w),
-      y: Math.floor(clamp(view.camY, 0, H - view.h) + (ev.clientY - r.top) / r.height * view.h),
-    };
+    return { x: Math.floor((ev.clientX - r.left) / r.width * W), y: Math.floor((ev.clientY - r.top) / r.height * H) };
   }
   const listeners: [EventTarget, string, (ev: any) => void, AddEventListenerOptions?][] = [];
   const on = <E extends Event>(target: EventTarget, type: string, fn: (ev: E) => void, opts?: AddEventListenerOptions) => { target.addEventListener(type, fn as EventListener, opts); listeners.push([target, type, fn, opts]); };
@@ -702,8 +692,6 @@ export async function startGame(canvas: HTMLCanvasElement, room: Room, ui: GameU
     else if (ev.code === 'KeyE') bucketAction();
     else if (ev.code === 'KeyQ') packAction();
     else if (ev.code === 'Escape') standUp();
-    else if (ev.code === 'Equal' || ev.code === 'NumpadAdd') zoom(1);
-    else if (ev.code === 'Minus' || ev.code === 'NumpadSubtract') zoom(-1);
     else if (ev.code === 'F2') { debug = !debug; if (!debug) ui.debug(null); ev.preventDefault(); }
   });
   on<KeyboardEvent>(window, 'keyup', ev => keys.delete(ev.code));
@@ -720,12 +708,6 @@ export async function startGame(canvas: HTMLCanvasElement, room: Room, ui: GameU
     else walkTo(p.x, p.y);
   });
   on<PointerEvent>(canvas, 'pointermove', ev => { pointer = toWorld(ev); });
-  let wheelAt = 0;
-  on<WheelEvent>(canvas, 'wheel', ev => {
-    ev.preventDefault();
-    if (ev.timeStamp - wheelAt < 160 || !ev.deltaY) return;
-    wheelAt = ev.timeStamp; zoom(ev.deltaY < 0 ? 1 : -1);
-  }, { passive: false });
   on(canvas, 'contextmenu', ev => ev.preventDefault());
   on(window, 'resize', layout);
 
@@ -743,12 +725,12 @@ export async function startGame(canvas: HTMLCanvasElement, room: Room, ui: GameU
   raf = requestAnimationFrame(tick);
 
   // для отладки из консоли; step(dt, n) прокручивает игру вручную
-  (window as any).FH_GAME = { hero, bucket, pack, view, keys, ghosts, fishing, room, sitDown, standUp, walkTo, zoom, pickUp, putDown, putOn, takeOff, setPack, fishAction, bucketAction, packAction,
+  (window as any).FH_GAME = { hero, bucket, pack, view, keys, ghosts, fishing, room, sitDown, standUp, walkTo, pickUp, putDown, putOn, takeOff, setPack, fishAction, bucketAction, packAction,
     step: (dt: number, n = 1) => { for (let i = 0; i < n; i++) update(dt); render(performance.now() / 1000); },
     hourNow, setClock, setWeather, wx, setHour: (hour: number | null) => { fixedHour = hour ?? NaN; } };   // setHour(22) останавливает время на этом часе, setHour(null) — пускает снова
 
   return {
-    bucketAction, packAction, setPack, fishAction, standUp, zoom, setClock, setWeather,
+    bucketAction, packAction, setPack, fishAction, standUp, setClock, setWeather,
     destroy() {
       alive = false; cancelAnimationFrame(raf);
       for (const [t, type, fn, opts] of listeners) t.removeEventListener(type, fn, opts);
