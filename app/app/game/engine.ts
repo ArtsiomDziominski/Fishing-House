@@ -14,7 +14,7 @@ import {
   type Bag, type Catch, type ClientMessages, type Dir, type PackKind, type PlayerView, type ServerMessages, type Sky, type WeatherKind, type WorldState,
 } from '@fh/shared';
 import { HERO } from './hero.ts';
-import { createFishingView, drawBite, drawFishing, type FishArt } from './fishing-view.ts';
+import { createFishingView, drawBite, drawFishing, createRod, rodAngle, type FishArt } from './fishing-view.ts';
 import { createRiverView } from './river-view.ts';
 import { createWeatherView, HAZE } from './weather-view.ts';
 
@@ -121,6 +121,7 @@ export async function startGame(canvas: HTMLCanvasElement, room: Room, ui: GameU
   await Promise.all((Object.keys(files) as (keyof typeof img)[]).map(k => loadImage('/assets/' + files[k] + '?v=' + World.rev).then(im => { img[k] = im; })));
   const rigs = {} as Record<Dir, { arm: HTMLCanvasElement; x: number; y: number; bucket: [number, number] }>;
   const fishArt: Record<string, FishArt & { tail: [string, string] }> = {};
+  const rodArt = createRod(img.fisher);
   for (const dir of ['down', 'up', 'left', 'right'] as const) {
     const rig = HERO.carryRig(dir); rigs[dir] = { arm: fromPixels(rig), x: rig.x, y: rig.y, bucket: rig.bucket };
   }
@@ -663,7 +664,7 @@ export async function startGame(canvas: HTMLCanvasElement, room: Room, ui: GameU
       if (!p.wearing) queue.push({ y: p.py - 0.5, draw: () => drawPack({ x: p.px, y: p.py, kind: packKind(p.pack) }) });
     });
     if (someoneSits) queue.push({ y: seat.y, draw: () => {
-      fctx.drawImage(img.fisher, fisher.x, fisher.y);
+      rodArt.draw(fctx, fisher.x, fisher.y, hero.sitting ? rodAngle(fishing.st) : 0);   // при подсечке удочка поднимается
       if (seatPack) { const a = packArt[seatPack]; fctx.drawImage(a.seat, fisher.x + a.seatX, fisher.y + a.seatY); }
     } });
     queue.sort((a, b) => a.y - b.y);
@@ -673,7 +674,6 @@ export async function startGame(canvas: HTMLCanvasElement, room: Room, ui: GameU
       x: rod.x, tipY: rod.tipY, waterY: rod.waterY, head,
       bucket: bucket.carried ? null : { x: bucket.x, y: bucket.y - B.bodyH + 4 },
     }, { line: { img: img.line, x: World.line.x, y: World.line.y }, fish: fishArt });
-    else if (someoneSits) fctx.drawImage(img.line, World.line.x, World.line.y);   // чужая удочка — леска в воде, как на картинке
     wx.draw(fctx);                                     // дождь, брызги, порывы ветра, листья — поверх мира и героев
     drawNight(frameTint(sky), sky.lights, wx.haze() * Math.max(0, 1 - sky.dark * 1.6));   // ночью дымка не нужна: она бы высветлила темноту
     // всё, что ниже, — подсказки: они не темнеют

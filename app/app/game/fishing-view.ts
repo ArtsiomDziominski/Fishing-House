@@ -52,6 +52,68 @@ function ripple(ctx: Ctx, x: number, y: number, r: number, alpha: number) {
   ctx.globalAlpha = 1;
 }
 
+// ---------- удочка ----------
+// Удилище нарисовано прямо на fisher.png. Для подсечки оно отделяется от рыбака и поворачивается вокруг рук вверх.
+// В пикселях fisher.png. Удилище — прямоугольник x 0..19, y 13..25, кроме угла справа сверху (x > 15, y < 20): там лицо.
+const ROD = { pivotX: 18, pivotY: 24, tipX: 1, tipY: 14, minY: 13, maxX: 19, maxY: 25, faceX: 15, faceY: 20 };
+const LIFT = 0.6, PAD = 14;                                                       // подъём (рад, ~35°) и запас холста под поднятое удилище
+
+// Угол удочки: при подсечке — резкий рывок вверх, удочка держится, пока рыба идёт по леске, и плавно опускается, пока рыба летит в ведро.
+export function rodAngle(st: ViewState): number {
+  if (st.phase === 'pull') { const k = Math.min(1, st.t / (TIME.pull * 0.25)); return LIFT * (1 - (1 - k) * (1 - k)); }
+  if (st.phase === 'fly') { const k = Math.min(1, st.t / (TIME.fly * 0.7)); return LIFT * (1 - k * k * (3 - 2 * k)); }
+  return 0;
+}
+// Кончик удочки на карте; geo.x, geo.tipY — кончик в покое.
+function rodTip(x: number, tipY: number, a: number) {
+  const px = x + ROD.pivotX - ROD.tipX, py = tipY + ROD.pivotY - ROD.tipY, vx = ROD.tipX - ROD.pivotX, vy = ROD.tipY - ROD.pivotY;
+  return { x: Math.round(px + vx * Math.cos(a) - vy * Math.sin(a)), y: Math.round(py + vx * Math.sin(a) + vy * Math.cos(a)) };
+}
+// Сидящий рыбак: тело отдельно, удилище отдельно; повёрнутые кадры удилища кешируются.
+export function createRod(fisher: HTMLImageElement) {
+  const w = fisher.width, h = fisher.height;
+  const canvas = (cw: number, ch: number) => { const c = document.createElement('canvas'); c.width = cw; c.height = ch; return c; };
+  const body = canvas(w, h), bctx = body.getContext('2d')!;
+  bctx.drawImage(fisher, 0, 0);
+  const all = bctx.getImageData(0, 0, w, h), rod = new Uint8ClampedArray(all.data.length);
+  for (let y = ROD.minY; y <= ROD.maxY; y++) for (let x = 0; x <= ROD.maxX; x++) {
+    if (x > ROD.faceX && y < ROD.faceY) continue;
+    const i = (y * w + x) * 4;
+    for (let c = 0; c < 4; c++) { rod[i + c] = all.data[i + c]!; all.data[i + c] = 0; }
+  }
+  bctx.putImageData(all, 0, 0);
+  const cache = new Map<number, HTMLCanvasElement>();
+  function turned(a: number) {                    // поворот без сглаживания: каждый пиксель берём из ближайшего пикселя исходника
+    let c = cache.get(a);
+    if (c) return c;
+    c = canvas(w + PAD * 2, h + PAD * 2); const cx = c.getContext('2d')!, out = cx.createImageData(c.width, c.height);
+    const cos = Math.cos(a), sin = Math.sin(a);
+    for (let y = 0; y < c.height; y++) for (let x = 0; x < c.width; x++) {
+      const vx = x - PAD + 0.5 - ROD.pivotX, vy = y - PAD + 0.5 - ROD.pivotY;
+      const sx = Math.floor(ROD.pivotX + vx * cos + vy * sin), sy = Math.floor(ROD.pivotY - vx * sin + vy * cos);
+      if (sx < 0 || sy < 0 || sx >= w || sy >= h) continue;
+      const i = (sy * w + sx) * 4, o = (y * c.width + x) * 4;
+      if (!rod[i + 3]) continue;
+      for (let k = 0; k < 4; k++) out.data[o + k] = rod[i + k]!;
+    }
+    cx.putImageData(out, 0, 0); cache.set(a, c);
+    return c;
+  }
+  return {
+    draw(ctx: Ctx, x: number, y: number, a: number) {
+      if (a <= 0) { ctx.drawImage(fisher, x, y); return; }
+      ctx.drawImage(body, x, y);
+      ctx.drawImage(turned(Math.round(a / 0.03) * 0.03), x - PAD, y - PAD);
+    },
+  };
+}
+// Леска из точки в точку, по пикселю.
+function seg(ctx: Ctx, x0: number, y0: number, x1: number, y1: number) {
+  const n = Math.max(Math.abs(x1 - x0), Math.abs(y1 - y0));
+  ctx.fillStyle = LINE;
+  for (let i = 0; i <= n; i++) ctx.fillRect(Math.round(x0 + (x1 - x0) * i / (n || 1)), Math.round(y0 + (y1 - y0) * i / (n || 1)), 1, 1);
+}
+
 export interface FishArt { side: HTMLCanvasElement; sideFlip: HTMLCanvasElement; up: HTMLCanvasElement }
 export interface Geo { x: number; tipY: number; waterY: number; head: { x: number; y: number }; bucket: { x: number; y: number } | null }
 export interface Art { line: { img: HTMLImageElement; x: number; y: number }; fish: Record<string, FishArt> }
@@ -67,7 +129,7 @@ export function drawBite(ctx: Ctx, st: ViewState, head: { x: number; y: number }
 export function drawFishing(ctx: Ctx, st: ViewState, time: number, geo: Geo, art: Art) {
   const { x, tipY, waterY } = geo, phase = st.phase;
   if (phase === 'off') return;
-  if (phase === 'rest') { ctx.drawImage(art.line.img, art.line.x, art.line.y); return; }
+  if (phase === 'rest') return;                   // сидит и ещё не забросил — лески в воде нет
   const line = (y0: number, y1: number) => { ctx.fillStyle = LINE; ctx.fillRect(x, y0, 1, Math.max(0, y1 - y0)); };
   const float = (dy: number) => stampMap(ctx, FLOAT, FLOAT_COL, x - 1, waterY - 3 + dy, waterY + 1);
   const splash = () => {                         // всплеск с картинки — нижняя часть её лески
@@ -91,15 +153,15 @@ export function drawFishing(ctx: Ctx, st: ViewState, time: number, geo: Geo, art
     line(tipY + 1, waterY - 1 + jerk); float(2 + jerk);
     if (jerk) splash(); else ripple(ctx, x, waterY + 1, 3, 1);
   } else if (phase === 'pull' && st.fish) {
-    const k = Math.min(1, st.t / TIME.pull), e = 1 - (1 - k) * (1 - k);
-    const s = art.fish[st.fish.id]!.up, fy = Math.round(waterY - 2 - (waterY - tipY - 10) * e);
-    line(tipY + 1, fy);
-    ctx.drawImage(s, x - (s.width >> 1), fy);
+    const k = Math.min(1, st.t / TIME.pull), e = 1 - (1 - k) * (1 - k), tip = rodTip(x, tipY, rodAngle(st));   // удочка подсекла и тянет рыбу
+    const s = art.fish[st.fish.id]!.up, fy = Math.round(waterY - 2 - (waterY - tip.y - 10) * e), fx = Math.round(x + (tip.x - x) * e);
+    seg(ctx, tip.x, tip.y + 1, fx, fy);
+    ctx.drawImage(s, fx - (s.width >> 1), fy);
     if (k < 0.5) splash();
     ripple(ctx, x, waterY + 1, Math.floor(k * 5), 1 - k);
   } else if (phase === 'fly' && st.fish && geo.bucket) {
     const k = Math.min(1, st.t / TIME.fly);
-    const ax = x, ay = tipY + 8, bx = geo.bucket.x, by = geo.bucket.y, mx = (ax + bx) / 2, my = Math.min(ay, by) - 30;
+    const top = rodTip(x, tipY, LIFT), ax = top.x, ay = top.y + 8, bx = geo.bucket.x, by = geo.bucket.y, mx = (ax + bx) / 2, my = Math.min(ay, by) - 30;
     const px = (1 - k) * (1 - k) * ax + 2 * (1 - k) * k * mx + k * k * bx, py = (1 - k) * (1 - k) * ay + 2 * (1 - k) * k * my + k * k * by;
     const f = art.fish[st.fish.id]!, s = bx >= ax ? f.sideFlip : f.side;   // головой по ходу
     ctx.drawImage(s, Math.round(px - s.width / 2), Math.round(py - s.height / 2));
