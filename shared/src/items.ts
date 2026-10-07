@@ -1,5 +1,5 @@
-// Вещи в рюкзаке: удочки, лодки, сети и мелочь для рыбалки. Каждая занимает прямоугольник клеток в сетке рюкзака:
-// мелочь — одну клетку, сачок — две, удочка, лодка и большие сети — четыре. Вещь можно повернуть на четверть
+// Вещи в рюкзаке: удочки, сети, топор и мелочь для рыбалки. Каждая занимает прямоугольник клеток в сетке рюкзака:
+// мелочь — одну клетку, сачок и топор — две, удочка и большие сети — четыре. Вещь можно повернуть на четверть
 // оборота — ширина и высота меняются местами. Сколько клеток в рюкзаке, знает его вид (PACKS.grid).
 // Где что лежит, решает и хранит сервер; клиент только просит переложить и по тем же правилам заранее подсвечивает,
 // куда вещь встанет. Картинки — в app/app/game/items-art.ts.
@@ -10,12 +10,12 @@ import type { Point } from './world.ts';
 
 export const ITEM_KINDS = [
   'rod-willow', 'rod-bamboo', 'rod-tele', 'rod-carbon', 'rod-gold',
-  'boat-raft', 'boat-rubber', 'boat-row', 'boat-canoe', 'boat-motor',
   'net-scoop', 'net-cast', 'net-seine',
+  'axe',
   'worms', 'floats',
 ] as const;
 export type ItemKind = typeof ITEM_KINDS[number];
-export type ItemGroup = 'rod' | 'boat' | 'net' | 'tackle';
+export type ItemGroup = 'rod' | 'net' | 'tool' | 'tackle';
 
 // Вещь в рюкзаке: id — её номер в базе, x и y — левая верхняя клетка, rot — повёрнута на четверть оборота.
 export interface Item { id: number; kind: ItemKind; x: number; y: number; rot: boolean }
@@ -34,14 +34,10 @@ export const ITEMS = (() => {
     'rod-tele': { name: 'Телескопическая удочка', group: 'rod', w: 4, h: 1, text: 'Складывается в три колена, с катушкой.' },
     'rod-carbon': { name: 'Карбоновая удочка', group: 'rod', w: 4, h: 1, text: 'Чёрная и упругая, с блесной.' },
     'rod-gold': { name: 'Золотая удочка', group: 'rod', w: 4, h: 1, text: 'Говорят, на неё клюёт сама золотая рыбка.' },
-    'boat-raft': { name: 'Плот', group: 'boat', w: 2, h: 2, text: 'Четыре бревна, верёвка и флажок.' },
-    'boat-rubber': { name: 'Надувная лодка', group: 'boat', w: 2, h: 2, text: 'Сдувается и не тонет.' },
-    'boat-row': { name: 'Вёсельная лодка', group: 'boat', w: 2, h: 2, text: 'Деревянная, на одного рыбака.' },
-    'boat-canoe': { name: 'Каноэ', group: 'boat', w: 2, h: 2, text: 'Узкое и быстрое, гребут одним веслом.' },
-    'boat-motor': { name: 'Моторная лодка', group: 'boat', w: 2, h: 2, text: 'С мотором и ветровым стеклом.' },
     'net-scoop': { name: 'Сачок', group: 'net', w: 2, h: 1, text: 'Подхватить рыбу у самой воды.' },
     'net-cast': { name: 'Сеть-накидка', group: 'net', w: 2, h: 2, text: 'Бросают кругом, по краю грузила.' },
     'net-seine': { name: 'Невод', group: 'net', w: 4, h: 1, text: 'Длинная сеть с поплавками и грузилами.' },
+    'axe': { name: 'Топор', group: 'tool', w: 2, h: 1, text: 'Нарубить сучьев и наколоть дров.' },
     'worms': { name: 'Банка червей', group: 'tackle', w: 1, h: 1, text: 'Свежие, с огорода.' },
     'floats': { name: 'Поплавки', group: 'tackle', w: 1, h: 1, text: 'Красный и синий, на запас.' },
   };

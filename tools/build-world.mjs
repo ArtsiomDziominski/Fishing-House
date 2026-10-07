@@ -1,8 +1,9 @@
 // Собирает мир из картинки-образца (art/reference.webp):
-//   app/public/assets/world.png   — карта 640×360 (16:9): в середине у нижнего края картинка без рыбака (причал под ним дорисован)
-//                                   и без дома (на его месте поляна), без лодки, сетей, сумки и грибов; по бокам и сверху — поле
+//   app/public/assets/world.png   — карта 640×360 (16:9): в середине у нижнего края картинка без рыбака (причал под ним дорисован),
+//                                   без дома (его рисует игра отдельной картинкой), без лодки, сетей и сумки; по бокам и сверху — поле
 //                                   с рекой, водой под ней и дорогой (или лес, если field в разметке выключен); всё это дорисовывает
 //                                   tools/world-sides.mjs
+//                                   По бокам и сверху — лес: кроны и заросли, вырезанные с картинки (tools/forest.mjs, список trees)
 //   art/world-1920x1080.png       — та же карта втрое крупнее, пиксель в пиксель: такой её видно на экране 1920×1080
 //   app/public/assets/fisher.png  — сидящий рыбак с удочкой, вырезанный с картинки пиксель в пиксель
 //   app/public/assets/line.png    — его леска со всплеском (пока он не рыбачит, рисуется как на картинке)
@@ -10,8 +11,9 @@
 //   app/public/assets/pack.png    — рюкзак у дома: по кадру на каждую расцветку из shared/src/packs.ts (крупный — для выбора в интерфейсе)
 //   app/public/assets/pack-ground.png — он же вдвое меньше: таким он лежит на земле, под стать герою
 //   art/house/house.png, lights.png, glow.png, house.json — дом, вырезанный с картинки целиком: сам он (свет погашен), его горящие
-//                                   окна с фонарём, ореол вокруг них и где что лежит. Сейчас дома на карте нет — это запас на будущее
-//   app/public/assets/lights.png, glow.png — те же свет и ореол для игры; только когда дом стоит на карте (house.onMap в разметке)
+//                                   окна с фонарём, ореол вокруг них и где что лежит
+//   app/public/assets/house.png, lights.png, glow.png — они же для игры: дом отдельной картинкой (house.sprite в разметке)
+//                                   или запечённый в карту (house.onMap) — свет и ореол нужны в обоих случаях
 //   app/public/assets/icon.png    — значок вкладки: лицо героя из app/app/game/hero.ts
 //   shared/src/world-data.ts      — проходимость и «глубина» предметов из tools/world-shapes.mjs
 //
@@ -25,6 +27,8 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import SHAPES from './world-shapes.mjs';
 import { widen, curveOf } from './world-sides.mjs';
+import { treeSprite, TREE_KINDS } from './trees.mjs';
+import { forestKit, FOREST_KINDS } from './forest.mjs';
 import { HERO } from '../app/app/game/hero.ts';
 import { PACKS, PACK_KINDS } from '../shared/src/packs.ts';
 
@@ -38,6 +42,7 @@ const SIDE = SHAPES.sides.left, MW = SIDE + W + SHAPES.sides.right;             
 const TOP = SHAPES.sides.top || 0, MH = TOP + H;                    // и выше: над картинкой ещё TOP строк
 const FIELD = SHAPES.field || null;                                 // поле вместо леса
 const HOUSE = SHAPES.house.onMap;                                   // стоит ли дом на карте; если нет — на его месте поляна
+const SPRITE = !HOUSE && !!SHAPES.house.sprite;                     // дом рисует игра отдельной картинкой ровно там, где он на картинке
 const debugDir = process.argv.includes('--debug') ? process.argv[process.argv.indexOf('--debug') + 1] : null;
 
 const lum = c => 0.299 * c[0] + 0.587 * c[1] + 0.114 * c[2];
@@ -447,8 +452,10 @@ function houseMask(d) {                                              // d — к
 }
 // Что перерисовывается, когда дома нет: он сам и трава у его подножия, на которой лежат его тени (apron в разметке).
 // Выше опушки дыра на два пикселя шире силуэта: по краю крыши остаётся кайма сглаживания, лес её закроет.
+// Если дом рисует игра (house.sprite), перерисовывается только он сам: его тени на траве и кромка крыши остаются как на картинке.
 function houseHole(body) {
   const hole = Uint8Array.from(body), edge = curveOf(SHAPES.glade.edge);
+  if (SPRITE) return hole;
   for (let k = 0; k < 2; k++) {
     const src = Uint8Array.from(hole);
     for (let y = 1; y < H - 1; y++) for (let x = 1; x < W - 1; x++) {
@@ -576,7 +583,71 @@ function fillShape(shape, fn) {
   const y0 = Math.max(0, Math.floor(Math.min(...ys))), y1 = Math.min(MH - 1, Math.ceil(Math.max(...ys)));
   for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) if (inPoly(shape.poly, x + 0.5, y + 0.5)) fn(x, y);
 }
-function bake(map, hedge, field) {                                  // map — карта MW×MH (RGB), hedge — маска листвы изгороди над рекой, field — трава поля
+// Деревья поля (SHAPES.trees, рисунок — tools/trees.mjs, а лесные виды — tools/forest.mjs, они сняты с картинки):
+// сначала земля чащи и тени на траве, потом сами деревья от дальних к ближним.
+// Картинку они почти не трогают: земля чащи на неё не ложится, а у края дерево с бока заходит на неё только листвой —
+// так кроны закрывают шов, а стволы остаются за лесом картинки. Лесное дерево, поставленное там же, где его крона растёт
+// на картинке (home), на ней остаётся таким, как на картинке, а за её краем дорисовывает то, что срезала рамка.
+// Возвращает их список, растр опор (пиксель дерева помнит строку подножия своего ствола) и маску чащи — туда не зайти.
+const TREE_SHADE = hex('3f6931');                                   // тень на траве — тон тени с картинки
+const FLOOR = ['17332e', '162a2a', '18322e', '19382b'].map(hex);    // земля в чаще — тьма между кронами картинки
+function plantTrees(map, field, forestSprite) {
+  const list = SHAPES.trees || [], depth = new Uint16Array(MW * MH), seen = {};
+  const trees = list.map(([kind, x, y]) => {
+    const n = (seen[kind] = (seen[kind] ?? -1) + 1);                // второе дерево того же вида — чуть иной рисунок листвы (лесное — зеркально)
+    const sp = FOREST_KINDS.includes(kind) ? forestSprite(kind, n) : treeSprite(kind, n);
+    const home = !!sp.home && Math.round(x) === sp.home[0] && Math.round(y) === sp.home[1];
+    return { sp, x: Math.round(x) + SIDE, base: Math.round(y) + TOP, home };
+  }).sort((a, b) => a.base - b.base);
+  const onPic = (x, y) => x >= SIDE && x < SIDE + W && y >= TOP;   // пиксель карты на картинке
+  // чаща: овалы земли под кронами (block у лесных видов), сомкнутые так, чтобы между рядами не осталось тропинок
+  let thicket = new Uint8Array(MW * MH);
+  for (const { sp, x, base } of trees) {
+    if (!sp.block) continue;
+    const [rx, ry, up] = sp.block, cy = base - up;
+    for (let y = Math.floor(cy - ry); y <= cy + ry; y++) for (let x2 = Math.floor(x - rx); x2 <= x + rx; x2++) {
+      const dx = (x2 + 0.5 - x) / rx, dy = (y + 0.5 - cy) / ry;
+      if (x2 >= 0 && y >= 0 && x2 < MW && y < MH && dx * dx + dy * dy <= 1) thicket[y * MW + x2] = 1;
+    }
+  }
+  const grow = (m, on) => {
+    const o = Uint8Array.from(m);
+    for (let y = 0; y < MH; y++) for (let x = 0; x < MW; x++) {
+      const i = y * MW + x; if (!!m[i] === !!on) continue;
+      const n = [[x + 1, y], [x - 1, y], [x, y + 1], [x, y - 1]].map(([u, v]) => (u < 0 || v < 0 || u >= MW || v >= MH) ? !on : !!m[v * MW + u]);
+      if (on ? n.some(Boolean) : !n.every(Boolean)) o[i] = on ? 1 : 0;
+    }
+    return o;
+  };
+  for (let k = 0; k < 8; k++) thicket = grow(thicket, 1);
+  for (let k = 0; k < 8; k++) thicket = grow(thicket, 0);
+  for (let i = 0; i < MW * MH; i++) if (thicket[i] && !onPic(i % MW, (i / MW) | 0)) {
+    const x = i % MW, y = (i / MW) | 0, c = FLOOR[Math.floor(hash(x >> 1, y >> 1, 21) * FLOOR.length)];
+    map[i * 3] = c[0]; map[i * 3 + 1] = c[1]; map[i * 3 + 2] = c[2];
+  }
+  for (const { sp, x, base } of trees) {                            // тень — овал на траве, сдвинутый вправо: свет слева сверху
+    const rx = sp.w * 0.5, ry = Math.max(5, sp.w * 0.16), cx = x + sp.w * 0.12, cy = base - 2;
+    for (let y = Math.floor(cy - ry); y <= cy + ry; y++) for (let x2 = Math.floor(cx - rx); x2 <= cx + rx; x2++) {
+      if (x2 < 0 || y < 0 || x2 >= MW || y >= MH || !field[y * MW + x2] || thicket[y * MW + x2]) continue;
+      const dx = (x2 + 0.5 - cx) / rx, dy = (y + 0.5 - cy) / ry; if (dx * dx + dy * dy > 1) continue;
+      const i = (y * MW + x2) * 3; for (let k = 0; k < 3; k++) map[i + k] = Math.round(map[i + k] * 0.45 + TREE_SHADE[k] * 0.55);
+    }
+  }
+  const pic = Buffer.from(map);                                     // картинка как есть: дерево на своём месте берёт с неё свои пиксели
+  for (const { sp, x, base, home } of trees) {
+    const x0 = x - sp.ax, y0 = base - sp.ay;
+    for (let y = 0; y < sp.h; y++) for (let x2 = 0; x2 < sp.w; x2++) {
+      const o = (y * sp.w + x2) * 4, X = x0 + x2, Y = y0 + y;
+      if (!sp.buf[o + 3] || X < 0 || Y < 0 || X >= MW || Y >= MH) continue;
+      if (onPic(X, Y) && !home && sp.leaf && !sp.leaf[y * sp.w + x2]) continue;
+      const i = Y * MW + X, c = onPic(X, Y) && home ? pic.subarray(i * 3, i * 3 + 3) : sp.buf.subarray(o, o + 3);
+      map[i * 3] = c[0]; map[i * 3 + 1] = c[1]; map[i * 3 + 2] = c[2];
+      depth[i] = base;                                              // деревья идут от дальних к ближним: у пикселя опора верхнего
+    }
+  }
+  return { trees, depth, thicket };
+}
+function bake(map, hedge, field, grove) {                           // map — карта MW×MH (RGB), hedge — маска листвы изгороди над рекой, field — трава поля, grove — деревья
   const W = MW, H = MH;                                            // здесь всё в координатах карты
   const at = (x, y) => { const i = (y * W + x) * 3; return [map[i], map[i + 1], map[i + 2]]; };
   const onMap = p => [p[0] + SIDE, p[1] + TOP];
@@ -593,6 +664,14 @@ function bake(map, hedge, field) {                                  // map — �
     for (let y = HERO.FH + 4; y < H; y++) for (let x = 8; x < W - 11; x++) if (grass[y * W + x]) walk[y * W + x] = 1;
   }
   for (const s of [...SHAPES.solids, ...own(SHAPES.house.solids)]) fillShape(toMap(s), (x, y) => { walk[y * W + x] = 0; });
+  for (let i = 0; i < W * H; i++) if (grove.thicket[i]) walk[i] = 0;   // в чащу леса не зайти
+  for (const { sp, x, base } of grove.trees) {                      // у дерева сквозь не пройти только ствол: овал foot у подножия
+    const [rx, ry] = sp.foot;
+    for (let y = base - ry; y <= base + ry; y++) for (let x2 = x - rx; x2 <= x + rx; x2++) {
+      const dx = (x2 - x) / (rx + 0.5), dy = (y - base) / (ry + 0.5);
+      if (x2 >= 0 && y >= 0 && x2 < W && y < H && dx * dx + dy * dy <= 1) walk[y * W + x2] = 0;
+    }
+  }
   {                                                                // оставить только то, куда можно дойти от причала
     const reach = new Uint8Array(W * H), st = [onMap(SHAPES.points.seat)];
     while (st.length) {
@@ -631,6 +710,7 @@ function bake(map, hedge, field) {                                  // map — �
   });
   // изгородь дорисована сборкой, и её листья известны точно: зайдя в них, герой скрывается за изгородью
   for (let i = 0; i < W * H; i++) if (hedge[i] && HEDGE_BASE > depth[i]) depth[i] = HEDGE_BASE;
+  for (let i = 0; i < W * H; i++) if (grove.depth[i] > depth[i]) depth[i] = grove.depth[i];   // за деревом герой скрывается
   return { walk, depth, grass };
 }
 // Места для бликов на воде: [x, y, длина, фаза] — только там, где вокруг чистая вода.
@@ -669,6 +749,8 @@ function rle(arr) {                                                  // [зна�
   // картинка в середине, по бокам и сверху поле (или лес) и луг с дорогой; если дом убран — на его месте поляна
   const { buf: map, hedge, field } = widen(world, W, H, SHAPES.sides, HOUSE ? null : { hole: houseHole(home), plan: SHAPES.glade }, FIELD);
   clearClutter(map, field);                                         // лодка, сети, ящик, сумка и грибы
+  const forestSprite = forestKit(src, W, H);                        // лесные виды — кроны и кусты, снятые с картинки
+  const grove = plantTrees(map, field, forestSprite);               // деревья на поле и лес вокруг
   fs.mkdirSync(ASSETS, { recursive: true });
   await sharp(map, { raw: { width: MW, height: MH, channels: 3 } }).png({ compressionLevel: 9 }).toFile(path.join(ASSETS, 'world.png'));
   await sharp(map, { raw: { width: MW, height: MH, channels: 3 } }).resize(MW * 3, MH * 3, { kernel: 'nearest' }).png({ compressionLevel: 9 })
@@ -697,7 +779,7 @@ function rle(arr) {                                                  // [зна�
   // свет в доме: всё, что на карте погашено, — таким, как на картинке, и ореол вокруг стёкол
   const lights = cut(lampsOff), glow = glowAround(lamps);
   for (const [name, r] of [['lights.png', lights], ['glow.png', glow]]) {   // игре они нужны, только пока дом стоит на карте
-    if (HOUSE) await save(name, r.w, r.h, r.buf); else fs.rmSync(path.join(ASSETS, name), { force: true });
+    if (HOUSE || SPRITE) await save(name, r.w, r.h, r.buf); else fs.rmSync(path.join(ASSETS, name), { force: true });
   }
   await save('line.png', line.w, line.h, line.buf);
 
@@ -706,6 +788,7 @@ function rle(arr) {                                                  // [зна�
   let foot = [0, 0]; for (let i = 0; i < W * H; i++) if (home[i] && ((i / W) | 0) >= foot[1]) foot = [i % W, (i / W) | 0];   // нижний угол дома
   fs.mkdirSync(houseDir, { recursive: true });
   await saveTo(houseDir, 'house.png', house.w, house.h, house.buf);
+  if (SPRITE) await save('house.png', house.w, house.h, house.buf); else fs.rmSync(path.join(ASSETS, 'house.png'), { force: true });
   await saveTo(houseDir, 'lights.png', lights.w, lights.h, lights.buf);
   await saveTo(houseDir, 'glow.png', glow.w, glow.h, glow.buf);
   fs.writeFileSync(path.join(houseDir, 'house.json'), JSON.stringify({
@@ -774,12 +857,31 @@ function rle(arr) {                                                  // [зна�
     icon: { w: pw, h: ph },                                          // кадр крупного листа pack.png
   };
 
+  // деревья поля по отдельности — в art/trees/: каждый вид и где у него подножие ствола
+  const treeDir = path.join(ROOT, 'art', 'trees'), treeKinds = {};
+  fs.mkdirSync(treeDir, { recursive: true });
+  for (const kind of TREE_KINDS) {
+    const sp = treeSprite(kind);
+    await saveTo(treeDir, `${kind}.png`, sp.w, sp.h, sp.buf);
+    treeKinds[kind] = { name: sp.name, w: sp.w, h: sp.h, ax: sp.ax, ay: sp.ay, foot: sp.foot };
+  }
+  fs.writeFileSync(path.join(treeDir, 'trees.json'), JSON.stringify(treeKinds, null, 2) + '\n');
+  // лесные виды — в art/trees/forest/: вырезанные с картинки кроны на стволах и заросли
+  const forestDir = path.join(treeDir, 'forest'), forestKinds = {};
+  fs.mkdirSync(forestDir, { recursive: true });
+  for (const kind of FOREST_KINDS) {
+    const sp = forestSprite(kind);
+    await saveTo(forestDir, `${kind}.png`, sp.w, sp.h, sp.buf);
+    forestKinds[kind] = { name: sp.name, w: sp.w, h: sp.h, ax: sp.ax, ay: sp.ay, foot: sp.foot, block: sp.block };
+  }
+  fs.writeFileSync(path.join(forestDir, 'forest.json'), JSON.stringify(forestKinds, null, 2) + '\n');
+
   // значок вкладки: голова героя анфас, 19×19 → ×3
   const face = HERO.build().down[0], icon = Buffer.alloc(19 * 19 * 4);
   for (let y = 0; y < 19; y++) for (let x = 0; x < 19; x++) for (let k = 0; k < 4; k++) icon[(y * 19 + x) * 4 + k] = face[(y * HERO.FW + x) * 4 + k];
   await sharp(icon, { raw: { width: 19, height: 19, channels: 4 } }).resize(57, 57, { kernel: 'nearest' }).png().toFile(path.join(ASSETS, 'icon.png'));
 
-  const { walk, depth, grass } = bake(map, hedge, field);
+  const { walk, depth, grass } = bake(map, hedge, field, grove);
   const tip = (() => { for (let y = 0; y < H; y++) if (mask.line[y * W + 48]) return y; return 239; })() + TOP;
   // rev — отпечаток картинок: игра дописывает его к их адресам, чтобы после пересборки браузер не показывал старые из кеша
   const rev = createHash('sha1').update(map).update(fisher.buf).update(line.buf).update(stand.buf).update(carry).update(sheet).update(small).update(lights.buf).update(glow.buf).digest('hex').slice(0, 8);
@@ -805,7 +907,7 @@ function rle(arr) {                                                  // [зна�
   fs.writeFileSync(path.join(ROOT, 'shared', 'src', 'world-data.ts'), js);
 
   const count = a => a.reduce((s, v) => s + (v ? 1 : 0), 0);
-  console.log(`world.png ${MW}x${MH} (картинка ${W}x${H} со сдвигом ${SIDE}, ${TOP}; ${FIELD ? 'поле' : 'лес'}); fisher.png ${fisher.w}x${fisher.h} @ ${fisher.x},${fisher.y}; line.png ${line.w}x${line.h}; bucket.png ${stand.w}x${stand.h} @ ${stand.x},${stand.y}, опора ${bucket.baseX},${bucket.baseY}, тень ${shadowPx.length} px; bucket-carry.png ${cw}x${ch}; проходимо ${count(walk)} px; за предметами ${count(depth)} px; pack.png ${pw * kinds}x${ph}, pack-ground.png ${sw * kinds}x${sh}, опора ${pack.baseX},${pack.baseY}, тень ${sackShadow.length} px; дом ${HOUSE ? 'на карте' : 'убран'}, art/house/house.png ${house.w}x${house.h} @ ${house.x},${house.y} (${count(home)} px); lights.png ${lights.w}x${lights.h} @ ${lights.x},${lights.y}, glow.png ${glow.w}x${glow.h} @ ${glow.x},${glow.y}, стёкол ${count(lamps.glass)} px; бликов ${data.sparkles.length}; world-data.ts ${js.length} байт`);
+  console.log(`world.png ${MW}x${MH} (картинка ${W}x${H} со сдвигом ${SIDE}, ${TOP}; ${FIELD ? 'поле' : 'лес'}); fisher.png ${fisher.w}x${fisher.h} @ ${fisher.x},${fisher.y}; line.png ${line.w}x${line.h}; bucket.png ${stand.w}x${stand.h} @ ${stand.x},${stand.y}, опора ${bucket.baseX},${bucket.baseY}, тень ${shadowPx.length} px; bucket-carry.png ${cw}x${ch}; проходимо ${count(walk)} px; за предметами ${count(depth)} px; pack.png ${pw * kinds}x${ph}, pack-ground.png ${sw * kinds}x${sh}, опора ${pack.baseX},${pack.baseY}, тень ${sackShadow.length} px; дом ${HOUSE ? 'на карте' : 'убран'}, art/house/house.png ${house.w}x${house.h} @ ${house.x},${house.y} (${count(home)} px); lights.png ${lights.w}x${lights.h} @ ${lights.x},${lights.y}, glow.png ${glow.w}x${glow.h} @ ${glow.x},${glow.y}, стёкол ${count(lamps.glass)} px; деревьев ${grove.trees.length}; бликов ${data.sparkles.length}; world-data.ts ${js.length} байт`);
 
   if (debugDir) {                                                    // проверочные картинки: разметка поверх карты
     fs.mkdirSync(debugDir, { recursive: true });

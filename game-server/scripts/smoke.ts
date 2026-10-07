@@ -151,26 +151,26 @@ check(thing(items!.list, 'worms').x === 5 && !items!.note, 'на удочку ч
 if (before.canSet) {
   // в разработке вещи можно положить; две вещи по 4 клетки, и в кожаный рюкзак (4×3) уже не влезть
   items = null;
-  room.send('itemGive', { kind: 'boat-motor' });
-  await until('лодку', () => !!items && items.list.length === kit.length + 1);
+  room.send('itemGive', { kind: 'net-seine' });
+  await until('невод', () => !!items && items.list.length === kit.length + 1);
   room.send('itemGive', { kind: 'net-cast' });
-  await until('сеть', () => !!items && items.list.length === kit.length + 2);
-  const boat = thing(items!.list, 'boat-motor'), net = thing(items!.list, 'net-cast');
-  check(boat.id > 0 && net.id > 0 && ITEMS.fits(ITEMS.grid('sailor'), items!.list, boat.kind, boat.x, boat.y, boat.rot, boat.id), 'моторная лодка и накидка легли на свободные клетки');
+  await until('накидку', () => !!items && items.list.length === kit.length + 2);
+  const seine = thing(items!.list, 'net-seine'), net = thing(items!.list, 'net-cast');
+  check(seine.id > 0 && net.id > 0 && ITEMS.fits(ITEMS.grid('sailor'), items!.list, seine.kind, seine.x, seine.y, seine.rot, seine.id), 'невод и накидка легли на свободные клетки');
   self = null; items = null;
   room.send('packKind', { kind: 'leather' });
   await until('отказ сменить рюкзак', () => !!self && !!items);
   check(items!.note === 'tight' && self!.pack.kind === 'sailor', 'в кожаный рюкзак столько вещей не влезает — остался морской');
-  room.send('itemDrop', { id: boat.id });
+  room.send('itemDrop', { id: seine.id });
   room.send('itemDrop', { id: net.id });
   items = null;
   room.send('itemGive', { kind: 'worms' });
   await until('ещё червей', () => !!items);
-  check(items!.list.length === kit.length + 1 && !items!.list.some(it => it.kind === 'boat-motor'), 'лодка и накидка выброшены, новая банка червей легла на их место');
+  check(items!.list.length === kit.length + 1 && !items!.list.some(it => it.kind === 'net-seine'), 'невод и накидка выброшены, новая банка червей легла на их место');
   room.send('itemDrop', { id: items!.list.at(-1)!.id });
 } else {
   items = null;
-  room.send('itemGive', { kind: 'boat-motor' });
+  room.send('itemGive', { kind: 'net-seine' });
   await sleep(400);
   check(items === null, 'вещи с клиента не кладутся — сервер это сообщение не слушает');
 }

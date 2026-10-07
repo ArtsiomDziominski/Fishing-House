@@ -17,6 +17,11 @@ import { HERO } from './hero.ts';
 import { createFishingView, drawBite, drawFishing, createRod, rodAngle, type FishArt } from './fishing-view.ts';
 import { createRiverView } from './river-view.ts';
 import { createWeatherView, HAZE } from './weather-view.ts';
+import { createBoatsView } from './boats.ts';
+import { createGullView } from './gull.ts';
+import { createWildlifeView } from './wildlife.ts';
+import { createHouseView } from './house.ts';
+import { createPetsView } from './pets.ts';
 
 // open — рюкзак на спине или рядом: в него можно заглянуть (I)
 export interface Actions { bucket: string | null; pack: string | null; fish: string | null; hot: boolean; stand: boolean; open: boolean }
@@ -115,8 +120,8 @@ export async function startGame(canvas: HTMLCanvasElement, room: Room, ui: GameU
   ];
 
   // ---------- картинки ----------
-  const img: Record<'world' | 'fisher' | 'line' | 'bucket' | 'carry' | 'pack' | 'lights' | 'glow', HTMLImageElement> = {} as any;
-  const files: Partial<Record<keyof typeof img, string>> = { world: 'world.png', fisher: 'fisher.png', line: 'line.png', bucket: 'bucket.png', carry: 'bucket-carry.png', pack: 'pack-ground.png' };
+  const img: Record<'world' | 'fisher' | 'line' | 'bucket' | 'carry' | 'pack' | 'house' | 'lights' | 'glow', HTMLImageElement> = {} as any;
+  const files: Partial<Record<keyof typeof img, string>> = { world: 'world.png', fisher: 'fisher.png', line: 'line.png', bucket: 'bucket.png', carry: 'bucket-carry.png', pack: 'pack-ground.png', house: 'house.png' };
   if (World.lights) Object.assign(files, { lights: 'lights.png', glow: 'glow.png' });   // свет в окнах — только пока дом стоит на карте
   await Promise.all((Object.keys(files) as (keyof typeof img)[]).map(k => loadImage('/assets/' + files[k] + '?v=' + World.rev).then(im => { img[k] = im; })));
   const rigs = {} as Record<Dir, { arm: HTMLCanvasElement; x: number; y: number; bucket: [number, number] }>;
@@ -151,6 +156,11 @@ export async function startGame(canvas: HTMLCanvasElement, room: Room, ui: GameU
   const pailBody = makeCanvas(B.w, B.h);                                     // ведро без тени — для любого места, кроме исходного
   { const px = ctx2d(pailBody); px.drawImage(img.bucket, 0, 0); for (const [dx, dy] of B.shadow) px.clearRect(dx!, dy!, 1, 1); }
   const river = createRiverView(img.world);                                  // где на карте вода и как она течёт
+  const boats = createBoatsView(W, H, river.water);                          // лодки у причала; их пиксели — уже не вода
+  const gull = createGullView(W);                                            // чайка над водой и на столбах причала
+  const life = createWildlifeView(W, H, river.water);                        // утки и рыбы на открытой воде, в стороне от лодок
+  const home = createHouseView(img.house, img.world);                        // дом поверх карты: за ним можно спрятаться
+  const pets = createPetsView();                                             // кот и собака бродят по поляне; создаём после дома — он им тоже не по пути
   const wx = createWeatherView(river.water);                                 // дождь, ветер, пасмурный свет
 
   // ---------- размер ----------
@@ -640,13 +650,19 @@ export async function startGame(canvas: HTMLCanvasElement, room: Room, ui: GameU
 
   function render(t: number) {
     const sky = skyAt(hourNow());
-    fctx.drawImage(img.world, 0, 0);
+    fctx.drawImage(img.world, 0, 0); home.draw(fctx);
     if (sky.lights && World.lights) {                  // на карте свет погашен; горящие окна и фонарь — отдельной картинкой поверх
       fctx.globalAlpha = sky.lights; fctx.drawImage(img.lights, World.lights.x, World.lights.y); fctx.globalAlpha = 1;
     }
     river.draw(fctx); drawSparkles(t, 1 - 0.9 * wx.st.clouds); drawSmoke(t, wx.st.wind);
     // кто дальше от зрителя, тот рисуется раньше
     const queue: { y: number; draw: () => void }[] = [];
+    for (const b of boats) queue.push({ y: b.y, draw: () => b.draw(fctx, t) });
+    const bird = gull.at(Date.now() + skew);         // сидящая — в очереди по низу столба, летящая — поверх всех
+    if (bird?.perched) queue.push({ y: bird.base, draw: () => fctx.drawImage(bird.img, bird.x, bird.y) });
+    const wild = life.at(Date.now() + skew, [...(ready ? [hero] : []), ...ghosts.values()]);   // кто подойдёт близко, спугнёт утку
+    for (const w of wild.water) queue.push({ y: w.y, draw: () => w.draw(fctx) });
+    for (const p of pets.at(Date.now() + skew)) queue.push({ y: p.y, draw: () => p.draw(fctx) });   // кот и собака — как все, по лапам
     // Все, кто сидит, — один рыбак с картинки; рюкзак ему рисуем свой, а если сидят только другие — первого из них.
     let someoneSits = hero.sitting, seatPack: PackKind | null = hero.sitting && pack.worn ? pack.kind : null;
     if (ready) {
@@ -669,6 +685,8 @@ export async function startGame(canvas: HTMLCanvasElement, room: Room, ui: GameU
     } });
     queue.sort((a, b) => a.y - b.y);
     for (const q of queue) q.draw();
+    if (bird && !bird.perched) fctx.drawImage(bird.img, bird.x, bird.y);
+    for (const draw of wild.air) draw(fctx);           // летящие утки — тоже поверх всех
     const head = { x: seat.x + 2, y: fisher.y };       // макушка сидящего рыбака
     if (hero.sitting) drawFishing(fctx, fishing.st, t, {
       x: rod.x, tipY: rod.tipY, waterY: rod.waterY, head,

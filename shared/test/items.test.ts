@@ -14,8 +14,8 @@ test('у каждой вещи имя, подпись и размер в одн�
   }
   const groups = (g: string) => ITEM_KINDS.filter(k => ITEMS.info(k).group === g).length;
   assert.equal(groups('rod'), 5);
-  assert.equal(groups('boat'), 5);
   assert.ok(groups('net') >= 2);
+  assert.deepEqual(ITEMS.size('axe', false), { w: 2, h: 1 });
 });
 
 test('рюкзаки от кожаного к ягодному всё просторнее, и в любой влезает удочка', () => {
@@ -49,32 +49,32 @@ test('вещь не встаёт за край и на соседа, а повё
 
 test('свободное место ищется сверху, а если некуда — null', () => {
   const g = ITEMS.grid('leather'), list = starter();
-  assert.deepEqual(ITEMS.spot(g, list, 'boat-row'), null);               // лодке 2×2 в кожаном со стартовым набором тесно
+  assert.deepEqual(ITEMS.spot(g, list, 'net-cast'), null);               // накидке 2×2 в кожаном со стартовым набором тесно
   assert.deepEqual(ITEMS.spot(g, list, 'net-scoop'), { x: 0, y: 2, rot: false });
-  assert.deepEqual(ITEMS.spot(ITEMS.grid('sailor'), list, 'boat-row'), { x: 4, y: 0, rot: false });
+  assert.deepEqual(ITEMS.spot(ITEMS.grid('sailor'), list, 'net-cast'), { x: 4, y: 0, rot: false });
 });
 
 test('в рюкзак поменьше вещи перекладываются, а если не влезают — null', () => {
   const big = ITEMS.grid('berry'), list: Item[] = [
-    { id: 1, kind: 'boat-motor', x: 4, y: 4, rot: false },
+    { id: 1, kind: 'net-cast', x: 4, y: 4, rot: false },
     { id: 2, kind: 'rod-gold', x: 0, y: 5, rot: false },
     { id: 3, kind: 'worms', x: 5, y: 0, rot: false },
   ];
   for (const it of list) assert.ok(ITEMS.fits(big, list, it.kind, it.x, it.y, it.rot, it.id));
   const small = ITEMS.grid('leather'), packed = ITEMS.repack(small, list)!;
-  assert.ok(packed, 'лодка, удочка и черви влезают в 4×3');
+  assert.ok(packed, 'накидка, удочка и черви влезают в 4×3');
   assert.equal(packed.length, 3);
   for (const it of packed) assert.ok(ITEMS.fits(small, packed, it.kind, it.x, it.y, it.rot, it.id), `${it.kind} ${it.x},${it.y}`);
-  const more = [...list, { id: 4, kind: 'boat-raft', x: 0, y: 0, rot: false } as Item];
+  const more = [...list, { id: 4, kind: 'net-cast', x: 0, y: 0, rot: false } as Item];
   assert.equal(ITEMS.repack(small, more), null);
 });
 
 test('вещи, вылезшие за край, ищут новое место, а кому некуда — пропадают из списка, но не из базы', () => {
   const g = ITEMS.grid('leather'), list: Item[] = [
     { id: 1, kind: 'worms', x: 5, y: 5, rot: false },
-    { id: 2, kind: 'boat-row', x: 0, y: 0, rot: false },
-    { id: 3, kind: 'boat-raft', x: 0, y: 0, rot: false },
-    { id: 4, kind: 'boat-canoe', x: 2, y: 2, rot: false },
+    { id: 2, kind: 'net-cast', x: 0, y: 0, rot: false },
+    { id: 3, kind: 'net-cast', x: 0, y: 0, rot: false },
+    { id: 4, kind: 'net-cast', x: 2, y: 2, rot: false },
   ];
   const { list: shown, moved } = ITEMS.settle(g, list);
   assert.deepEqual(shown.map(it => it.id).sort(), [1, 2, 3]);

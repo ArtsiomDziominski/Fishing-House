@@ -3,6 +3,7 @@
 // Один экземпляр на процесс: клиент ставит в него своё ведро как препятствие, сервер карту не меняет.
 
 import { WORLD_DATA as DATA } from './world-data.ts';
+import { HOUSE } from './house.ts';
 
 export interface Point { x: number; y: number }
 export interface Box extends Point { w: number; h: number }
@@ -16,6 +17,25 @@ function unpack<T extends Uint8Array | Uint16Array>(runs: number[], out: T): T {
 }
 const walk = unpack(DATA.walk, new Uint8Array(W * H));
 const depth = unpack(DATA.depth, new Uint16Array(W * H));
+
+// Дом стоит на карте отдельным предметом (shared/src/house.ts): его контур вычеркнут из проходимости.
+const onMap = (x: number, y: number): Point => ({ x: x + DATA.pic.x, y: y + DATA.pic.y });
+{
+  const poly = HOUSE.outline.map(([x, y]) => onMap(x, y));
+  const inside = (x: number, y: number) => {
+    let c = false;
+    for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+      const a = poly[i]!, b = poly[j]!;
+      if ((a.y > y) !== (b.y > y) && x < (b.x - a.x) * (y - a.y) / (b.y - a.y) + a.x) c = !c;
+    }
+    return c;
+  };
+  const xs = poly.map(p => p.x), ys = poly.map(p => p.y);
+  for (let y = Math.max(0, Math.floor(Math.min(...ys))); y <= Math.min(H - 1, Math.ceil(Math.max(...ys))); y++)
+    for (let x = Math.max(0, Math.floor(Math.min(...xs))); x <= Math.min(W - 1, Math.ceil(Math.max(...xs))); x++)
+      if (inside(x + 0.5, y + 0.5)) walk[y * W + x] = 0;
+}
+const box = ([x, y, w, h]: readonly [number, number, number, number]): Box => ({ ...onMap(x, y), w, h });
 
 function canWalk(x: number, y: number): boolean {
   x = Math.round(x); y = Math.round(y);
@@ -124,6 +144,11 @@ function findPath(from: Point, to: Point): Point[] | null {
 export const World = {
   W, H, rev: DATA.rev, pic: DATA.pic, walk, depth, canWalk, depthAt, nearestWalkable, findPath, block, unblock,
   fisher: DATA.fisher, line: DATA.line, rod: DATA.rod, seat: DATA.seat, bucket: DATA.bucket, pack: DATA.pack, sparkles: DATA.sparkles as [number, number, number, number][],
-  // Дом: устье трубы, горящие окна и ореол вокруг них. Пока дома на карте нет (house.onMap в tools/world-shapes.mjs) — null.
-  smoke: DATA.smoke as Point | null, lights: DATA.lights as Box | null, glow: DATA.glow as Box | null,
+  // Дом — отдельная картинка поверх карты (house.png), где он стоит: левый верх и размер.
+  house: box([...HOUSE.at, ...HOUSE.size]),
+  // Дом: устье трубы, горящие окна и ореол вокруг них. Если сборка запекла дом в карту (house.onMap в tools/world-shapes.mjs),
+  // они берутся из world-data.ts, иначе — у дома, стоящего поверх карты.
+  smoke: (DATA.smoke as Point | null) ?? onMap(...HOUSE.smoke) as Point | null,
+  lights: (DATA.lights as Box | null) ?? box(HOUSE.lights) as Box | null,
+  glow: (DATA.glow as Box | null) ?? box(HOUSE.glow) as Box | null,
 };

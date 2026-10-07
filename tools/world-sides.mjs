@@ -1,5 +1,5 @@
 // Дорисовывает карту по бокам от картинки-образца: слева лес, справа луг с дорогой. С полем (field в world-shapes.mjs)
-// вместо леса всюду трава — и по бокам, и на картинке выше поляны, и в полосе над картинкой.
+// вместо леса всюду трава — по бокам и в полосе над картинкой, а если у поля есть граница edge — и на картинке выше поляны.
 // Река идёт через всю карту; ниже неё с полем — вода до нижнего края, с лесом — кусты. Вправо от поляны уходит дорога с
 // плоскими камнями. План боков (берега, дорога, границы луга) — sides в world-shapes.mjs.
 // Тем же способом зарастает место дома, когда он убран с карты: поляна и опушка за ней (план — glade там же).
@@ -387,12 +387,14 @@ export function widen(pic, pw, h, plan, glade = null, field = null) {
   if (glade) { const keep = seed; seed = 0x91ade5; clearing(glade); seed = keep; }   // у поляны своё зерно: бока от неё не зависят
 
   // ---------- поле на картинке: всё выше границы field.edge ----------
-  // Граница чуть волнится, чтобы стык с травой картинки не читался прямой линией.
+  // Граница чуть волнится, чтобы стык с травой картинки не читался прямой линией. Без границы картинка остаётся как есть.
   if (field) {
-    const edge = curveOf(field.edge);
-    open = (x, y) => y < edge(x) + 2.5 * (soft(x, 0, 6, 1, 71) - 0.5);
-    for (let y = 0; y < h; y++) for (let x = 0; x < pw; x++) if (open(x, y)) put(x, y, grassAt(x, y), 0, false, true);
-    open = null;
+    if (field.edge) {
+      const edge = curveOf(field.edge);
+      open = (x, y) => y < edge(x) + 2.5 * (soft(x, 0, 6, 1, 71) - 0.5);
+      for (let y = 0; y < h; y++) for (let x = 0; x < pw; x++) if (open(x, y)) put(x, y, grassAt(x, y), 0, false, true);
+      open = null;
+    }
     // кусты: зелёное внутри field.bushes становится травой; вода, камни и всё деревянное остаются
     const inBush = (x, y) => (field.bushes || []).some(p => inPoly(p, x + 0.5, y + 0.5));
     const pix = (x, y) => { const i = at(x, y) * 3; return [out[i], out[i + 1], out[i + 2]]; };
@@ -445,14 +447,14 @@ export function widen(pic, pw, h, plan, glade = null, field = null) {
       }
     }
   }
-  // Камень, срезанный краем картинки: недостающий бок — зеркально от края, по эллипсу, с тёмным контуром.
-  function mendStone({ at: ex, dir, rows: [y0, y1], width }) {
+  // Камень (или куст — leaves), срезанный краем картинки: недостающий бок — зеркально от края, по эллипсу, с тёмным контуром.
+  function mendStone({ at: ex, dir, rows: [y0, y1], width, leaves = false }) {
     const pix = (x, y) => { const i = at(x, y) * 3; return [out[i], out[i + 1], out[i + 2]]; };
-    const stone = c => !(c[1] > c[0] + 4) && !isWater(c);           // не трава и не вода
+    const stone = leaves ? (c => !isWater(c)) : (c => !(c[1] > c[0] + 4) && !isWater(c));   // камень — не трава и не вода
     let a = -1, b = -1;
     for (let y = y0; y <= y1; y++) if (stone(pix(ex, y))) { if (a < 0) a = y; b = y; }
     if (a < 0) return;
-    const mid = (a + b) / 2, half = (b - a) / 2 + 0.5, cap = new Map(), ink = hex('1c1210');
+    const mid = (a + b) / 2, half = (b - a) / 2 + 0.5, cap = new Map(), ink = leaves ? C.outline : hex('1c1210');
     for (let y = a; y <= b; y++) {
       const t = (y - mid) / half, w = Math.round(width * Math.sqrt(Math.max(0, 1 - t * t)));
       for (let k = 1; k <= w; k++) cap.set(`${ex + dir * k},${y}`, pix(ex - dir * (k - 1), y));
