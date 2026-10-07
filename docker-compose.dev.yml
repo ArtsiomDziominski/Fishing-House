@@ -1,0 +1,20 @@
+# Для разработки: только база и Redis на localhost. Сайт и игровой сервер запускает `npm run dev`.
+#   npm run db:up      — поднять
+#   docker compose -f docker-compose.dev.yml down   — остановить (данные остаются в томе)
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: fishing
+      POSTGRES_PASSWORD: fishing
+      POSTGRES_DB: fishing
+    ports: ["5432:5432"]
+    volumes:
+      - pgdata-dev:/var/lib/postgresql/data
+
+  redis:
+    image: redis:7-alpine
+    ports: ["6379:6379"]
+
+volumes:
+  pgdata-dev:

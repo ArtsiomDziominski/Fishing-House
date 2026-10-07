@@ -1,0 +1,23 @@
+{
+  "name": "@fh/app",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Сайт и API на Nuxt: меню, вход, регистрация, профили, игра в /play",
+  "scripts": {
+    "dev": "nuxt dev --dotenv ../.env",
+    "build": "nuxt build",
+    "preview": "node --env-file-if-exists=../.env .output/server/index.mjs",
+    "postinstall": "nuxt prepare",
+    "typecheck": "nuxt typecheck"
+  },
+  "dependencies": {
+    "@colyseus/sdk": "^0.18.5",
+    "@pinia/nuxt": "^1.0.2",
+    "nuxt": "^4.6.0",
+    "nuxt-auth-utils": "^0.5.30",
+    "pinia": "^4.0.3",
+    "vue": "^3.5.43",
+    "zod": "^4.6.5"
+  }
+}

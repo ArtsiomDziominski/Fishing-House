@@ -1,0 +1,96 @@
+# Весь стек на одном VPS: docker compose up -d --build
+# Перед запуском заполни .env (см. .env.example, раздел «Продакшен»): DOMAIN, POSTGRES_PASSWORD, NUXT_SESSION_PASSWORD, GAME_SECRET.
+#
+#   браузер ─https─▶ caddy ─┬─ /game/1/… ─▶ game-1 ┐
+#                           ├─ /game/2/… ─▶ game-2 ├─ redis (кто где, какие комнаты)
+#                           ├─ /game/…   ─▶ game-1 или game-2 (матчмейкинг)
+#                           └─ остальное ─▶ app (Nuxt: страницы и API)
+#                  app, game-1, game-2 ─▶ db (Postgres)
+#
+# Ещё процесс игрового сервера: скопируй game-2 в game-3 (PUBLIC_ADDRESS …/game/3) и добавь его в Caddyfile.
+
+x-game: &game
+  build: { context: ., target: game }
+  image: fishing-house-game
+  restart: unless-stopped
+  environment: &game-env
+    DATABASE_URL: postgres://fishing:${POSTGRES_PASSWORD:?задай POSTGRES_PASSWORD в .env}@db:5432/fishing
+    REDIS_URL: redis://redis:6379
+    GAME_SECRET: ${GAME_SECRET:?задай GAME_SECRET в .env}
+  depends_on:
+    db: { condition: service_healthy }
+    redis: { condition: service_started }
+    migrate: { condition: service_completed_successfully }
+
+services:
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports: ["80:80", "443:443", "443:443/udp"]
+    environment:
+      DOMAIN: ${DOMAIN:?задай DOMAIN в .env}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on: [app, game-1, game-2]
+
+  app:
+    build: { context: ., target: app }
+    image: fishing-house-app
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgres://fishing:${POSTGRES_PASSWORD}@db:5432/fishing
+      NUXT_SESSION_PASSWORD: ${NUXT_SESSION_PASSWORD:?задай NUXT_SESSION_PASSWORD в .env}
+      GAME_SECRET: ${GAME_SECRET}
+      NUXT_PUBLIC_GAME_URL: /game
+    depends_on:
+      db: { condition: service_healthy }
+      migrate: { condition: service_completed_successfully }
+
+  game-1:
+    <<: *game
+    environment:
+      <<: *game-env
+      PUBLIC_ADDRESS: ${DOMAIN}/game/1
+
+  game-2:
+    <<: *game
+    environment:
+      <<: *game-env
+      PUBLIC_ADDRESS: ${DOMAIN}/game/2
+
+  # Применяет миграции и выходит; сайт и игровые серверы ждут его.
+  migrate:
+    image: fishing-house-game
+    build: { context: ., target: game }
+    command: ["node", "dist/migrate.mjs"]
+    environment:
+      DATABASE_URL: postgres://fishing:${POSTGRES_PASSWORD}@db:5432/fishing
+    depends_on:
+      db: { condition: service_healthy }
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--save", "", "--appendonly", "no"]   # там только живые комнаты — хранить на диске нечего
+
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: fishing
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: fishing
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U fishing -d fishing"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+volumes:
+  pgdata:
+  caddy_data:
+  caddy_config:

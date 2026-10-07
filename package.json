@@ -1,10 +1,34 @@
 {
   "name": "fishing-house",
-  "version": "2.0.0",
-  "description": "Уютная пиксельная игра: домик рыбака у реки, герой ходит по миру с картинки",
+  "version": "3.0.0",
+  "description": "Уютная пиксельная онлайн-игра: домик рыбака у реки, общий мир, вход и сохранение прогресса",
   "private": true,
+  "type": "module",
+  "workspaces": [
+    "shared",
+    "app",
+    "game-server"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
   "scripts": {
-    "start": "node tools/serve.js",
-    "build:world": "node tools/build-world.js"
+    "dev": "concurrently -k -n app,game -c yellow,cyan \"npm run dev -w app\" \"npm run dev -w game-server\"",
+    "build": "npm run build -w app && npm run build -w game-server",
+    "typecheck": "npm run typecheck -w shared && npm run typecheck -w game-server && npm run typecheck -w app",
+    "test": "npm test -w shared",
+    "db:up": "docker compose -f docker-compose.dev.yml up -d",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate": "npm run migrate -w shared",
+    "build:world": "tsx tools/build-world.mjs"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.5",
+    "concurrently": "^10.0.5",
+    "drizzle-kit": "^0.31.11",
+    "esbuild": "^0.28.2",
+    "tsx": "^4.23.15",
+    "typescript": "~5.9.3",
+    "vue-tsc": "^3.3.12"
   }
 }
