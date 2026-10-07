@@ -4,16 +4,25 @@ import { cleanWorld } from '../src/server/players.ts';
 import { startPack, startState, type WorldState } from '../src/rules.ts';
 import { World } from '../src/world.ts';
 
-const SHIFT = World.pic.x;   // на столько картинка сдвинута вправо на нынешней карте
+const SHIFT = World.pic.x, DROP = World.pic.y;   // на столько картинка сдвинута вправо и вниз на нынешней карте
 
-test('запись времён, когда карта была одной картинкой, переносится на широкую карту', () => {
-  // рыбак сидит на причале, ведро стоит на настиле, рюкзак лежит во дворе — всё в координатах картинки, без picX
+test('запись времён, когда карта была одной картинкой, переносится на большую карту', () => {
+  // рыбак сидит на причале, ведро стоит на настиле, рюкзак лежит во дворе — всё в координатах картинки, без picX и picY
   const old = { x: 70, y: 254, dir: 'down', sitting: true, bucket: { x: 96, y: 241, carried: false, home: false }, pack: { x: 110, y: 243, worn: false, kind: 'sailor' } } as unknown as WorldState;
   const now = cleanWorld(old)!;
   assert.equal(now.picX, SHIFT);
+  assert.equal(now.picY, DROP);
   assert.deepEqual([now.x, now.y], [World.seat.x, World.seat.y]);
-  assert.deepEqual(now.bucket, { x: 96 + SHIFT, y: 241, carried: false, home: false });
-  assert.deepEqual(now.pack, { x: 110 + SHIFT, y: 243, worn: false, kind: 'sailor' });
+  assert.deepEqual(now.bucket, { x: 96 + SHIFT, y: 241 + DROP, carried: false, home: false });
+  assert.deepEqual(now.pack, { x: 110 + SHIFT, y: 243 + DROP, worn: false, kind: 'sailor' });
+});
+
+test('запись широкой карты без picY опускается вместе с картинкой', () => {
+  const old = { ...startState(), x: 70 + SHIFT, y: 254, bucket: { x: 96 + SHIFT, y: 241, carried: false, home: false }, picX: SHIFT } as Partial<WorldState>;
+  delete old.picY;
+  const now = cleanWorld(old as WorldState)!;
+  assert.deepEqual([now.x, now.y], [World.seat.x, World.seat.y]);
+  assert.deepEqual(now.bucket, { x: 96 + SHIFT, y: 241 + DROP, carried: false, home: false });
 });
 
 test('запись нынешней карты остаётся как есть, сколько её ни проверяй', () => {
@@ -35,7 +44,7 @@ test('в старой записи без рюкзака он ждёт у дом
 });
 
 test('герой из непроходимого места встаёт на ближайшее проходимое', () => {
-  const lost = { ...startState(), x: 5, y: 5, sitting: false };   // глубоко в лесу слева
+  const lost = { ...startState(), x: 5, y: 5, sitting: false };   // в левом верхнем углу: там герой не помещается в кадр
   const now = cleanWorld(lost)!;
   assert.ok(World.canWalk(now.x, now.y));
 });

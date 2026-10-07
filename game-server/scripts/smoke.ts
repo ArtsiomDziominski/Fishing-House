@@ -1,11 +1,11 @@
 // Проверка игрового сервера целиком: бот заводит игрока в базе, входит по билету, идёт за ведром и рюкзаком,
-// несёт их к причалу, садится и ловит рыбу; заодно проверяет, что телепорт сервер не принимает.
+// перекладывает вещи в рюкзаке, несёт всё к причалу, садится и ловит рыбу; заодно проверяет, что телепорт сервер не принимает.
 //
 //   npm run smoke -w game-server            (нужны запущенные база и игровой сервер, .env с DATABASE_URL и GAME_SECRET)
 //   GAME_URL=http://localhost:2567 npm run smoke -w game-server
 
 import { Client, type Room } from '@colyseus/sdk';
-import { World, ROOM, DAY_LENGTH, WEATHERS, dayHour, weatherText, seat, standPoint, type Bag, type PlayerView, type ServerMessages, type WorldState } from '@fh/shared';
+import { World, ITEMS, ROOM, DAY_LENGTH, WEATHERS, dayHour, weatherText, seat, standPoint, type Bag, type Item, type PlayerView, type ServerMessages, type WorldState } from '@fh/shared';
 import { createDb, createAccount, issueTicket, getProfile } from '@fh/shared/server';
 
 const url = process.env.GAME_URL || 'http://localhost:2567';
@@ -23,6 +23,8 @@ const fish: ServerMessages['fish'][] = [];
 room.onMessage('self', (m: WorldState) => { self = m; });
 room.onMessage('bag', (m: Bag) => { bag = m; });
 room.onMessage('fish', (m: ServerMessages['fish']) => { fish.push(m); });
+let items: ServerMessages['items'] | null = null;
+room.onMessage('items', (m: ServerMessages['items']) => { items = m; });
 let clock: (ServerMessages['clock'] & { skew: number }) | null = null;   // skew — на сколько часы причала впереди наших
 room.onMessage('clock', (m: ServerMessages['clock']) => { clock = { ...m, skew: m.now - Date.now() }; });
 let weather: ServerMessages['weather'] | null = null;
@@ -36,6 +38,10 @@ const until = async (what: string, ok: () => boolean, ms = 15000) => {
 const check = (cond: unknown, what: string) => { if (!cond) throw new Error('не так: ' + what); console.log('  ✓', what); };
 
 await until('себя и ведро', () => !!self && !!bag);
+await until('вещи в рюкзаке', () => !!items);
+const kit = items!.list;
+check(kit.length === ITEMS.STARTER.length && ITEMS.STARTER.every(st => kit.some(it => it.kind === st.kind && it.x === st.x && it.y === st.y)), 'новому игроку в рюкзак положен стартовый набор');
+const thing = (list: Item[], kind: string) => list.find(it => it.kind === kind)!;
 await until('часы причала', () => !!clock);
 check(Math.abs(clock!.skew) < DAY_LENGTH * 1000 + 60_000, 'сервер прислал часы причала — по ним у всех одно время суток');
 await until('погоду', () => !!weather);
@@ -99,6 +105,10 @@ self = null;
 room.send('packOn');
 await until('отказ надеть рюкзак', () => !!self);
 check(!self!.pack.worn, 'издалека рюкзак не надеть');
+items = null;
+room.send('itemMove', { id: thing(kit, 'worms').id, x: 0, y: 2, rot: false });
+await until('отказ переложить издалека', () => !!items);
+check(items!.note === 'far' && thing(items!.list, 'worms').y === 1, 'издалека вещи в рюкзаке не переложить');
 
 self = null;
 await walk({ x: World.bucket.baseX, y: World.bucket.baseY + 6 });
@@ -128,6 +138,43 @@ room.send('packOn');
 await until('рюкзак снова на спине', () => !!seen()?.wearing);
 check(self === null, 'рюкзак надет снова, без поправок от сервера');
 
+// вещи в морском рюкзаке (6×5): переложить, повернуть, не положить на соседа
+const worms = thing(kit, 'worms'), scoop = thing(kit, 'net-scoop');
+items = null;
+room.send('itemMove', { id: worms.id, x: 5, y: 4, rot: false });
+room.send('itemMove', { id: scoop.id, x: 5, y: 0, rot: true });
+await sleep(300);
+check(items === null, 'черви переложены в угол, сачок повёрнут стоймя — сервер согласен молча');
+room.send('itemMove', { id: worms.id, x: 1, y: 0, rot: false });   // там удочка
+await until('отказ положить на удочку', () => !!items);
+check(thing(items!.list, 'worms').x === 5 && !items!.note, 'на удочку червей не положить — сервер прислал, как всё лежит');
+if (before.canSet) {
+  // в разработке вещи можно положить; две вещи по 4 клетки, и в кожаный рюкзак (4×3) уже не влезть
+  items = null;
+  room.send('itemGive', { kind: 'boat-motor' });
+  await until('лодку', () => !!items && items.list.length === kit.length + 1);
+  room.send('itemGive', { kind: 'net-cast' });
+  await until('сеть', () => !!items && items.list.length === kit.length + 2);
+  const boat = thing(items!.list, 'boat-motor'), net = thing(items!.list, 'net-cast');
+  check(boat.id > 0 && net.id > 0 && ITEMS.fits(ITEMS.grid('sailor'), items!.list, boat.kind, boat.x, boat.y, boat.rot, boat.id), 'моторная лодка и накидка легли на свободные клетки');
+  self = null; items = null;
+  room.send('packKind', { kind: 'leather' });
+  await until('отказ сменить рюкзак', () => !!self && !!items);
+  check(items!.note === 'tight' && self!.pack.kind === 'sailor', 'в кожаный рюкзак столько вещей не влезает — остался морской');
+  room.send('itemDrop', { id: boat.id });
+  room.send('itemDrop', { id: net.id });
+  items = null;
+  room.send('itemGive', { kind: 'worms' });
+  await until('ещё червей', () => !!items);
+  check(items!.list.length === kit.length + 1 && !items!.list.some(it => it.kind === 'boat-motor'), 'лодка и накидка выброшены, новая банка червей легла на их место');
+  room.send('itemDrop', { id: items!.list.at(-1)!.id });
+} else {
+  items = null;
+  room.send('itemGive', { kind: 'boat-motor' });
+  await sleep(400);
+  check(items === null, 'вещи с клиента не кладутся — сервер это сообщение не слушает');
+}
+
 await walk({ x: seat.x, y: seat.y });
 const bucketSpot = { x: seat.x + 26, y: seat.y - 13 };   // место на настиле рядом с рыбаком
 room.send('sit', { put: bucketSpot });
@@ -154,10 +201,14 @@ again.onMessage('bag', (m: Bag) => { bag = m; });
 again.onMessage('fish', () => {});
 again.onMessage('clock', () => {});
 again.onMessage('weather', () => {});
+again.onMessage('items', (m: ServerMessages['items']) => { items = m; });
+items = null;
 await until('себя после входа', () => !!self);
 check(self!.sitting && !self!.bucket.home && self!.bucket.x === bucketSpot.x, 'после перезахода герой на причале, ведро там, где поставили');
 check(self!.pack.worn && self!.pack.kind === 'sailor', 'рюкзак после перезахода на спине, тот же морской');
 check(bag!.total === 1, 'ведро после перезахода с той же рыбой');
+await until('вещи после входа', () => !!items);
+check(items!.list.length === kit.length && thing(items!.list, 'worms').x === 5 && thing(items!.list, 'net-scoop').rot, 'вещи после перезахода лежат там, куда их переложили, стартовый набор не задвоился');
 await again.leave();
 await db.close();
 console.log('всё работает');

@@ -2,7 +2,7 @@
      входим в комнату-причал на игровом сервере и запускаем движок на холсте. -->
 <script setup lang="ts">
 import { Client, type Room } from '@colyseus/sdk';
-import { ROOM, World, type WeatherKind } from '@fh/shared';
+import { ROOM, World, type ClientMessages, type ItemKind, type ServerMessages, type WeatherKind } from '@fh/shared';
 import { startGame, type GameHandle } from '~/game/engine';
 
 definePageMeta({ layout: false, middleware: 'auth' });
@@ -22,6 +22,17 @@ function endpoint() {
 
 function setWeather(kind: WeatherKind | null, wind: boolean | null) { handle?.setWeather(kind, wind); }
 
+// Вещи в рюкзаке: окно рюкзака просит, сервер решает и, если не согласен, присылает «items» с причиной.
+const send = <K extends keyof ClientMessages>(type: K, msg: ClientMessages[K]) => room?.send(type, msg);
+const ITEM_NOTES: Record<NonNullable<ServerMessages['items']['note']>, string> = {
+  far: 'Рюкзак далеко — подойди к нему',
+  full: 'В рюкзаке нет места',
+  tight: 'Вещи в этот рюкзак не влезут — сначала выложи лишнее',
+};
+function moveItem(id: number, x: number, y: number, rot: boolean) { send('itemMove', { id, x, y, rot }); }
+function dropItem(id: number) { send('itemDrop', { id }); }
+function giveItem(kind: ItemKind) { send('itemGive', { kind }); }
+
 function stop() {
   handle?.destroy(); handle = null;
   const r = room; room = null;
@@ -38,6 +49,10 @@ async function connect() {
     const r = await new Client(endpoint()).joinOrCreate(ROOM, { ticket });
     room = r;
     game.roomId = r.roomId;
+    r.onMessage('items', (m: ServerMessages['items']) => {
+      game.items = m.list;
+      if (m.note) game.showToast(ITEM_NOTES[m.note], 'bad');
+    });
     r.onDrop(() => { game.status = 'reconnecting'; });
     r.onReconnect(() => { game.status = 'online'; });
     r.onLeave((_code, reason) => {
@@ -79,9 +94,10 @@ const overlay = computed(() => {
 
     <GameCatch />
     <GameToast />
-    <GameDock @bucket="handle?.bucketAction()" @pack="handle?.packAction()" @fish="handle?.fishAction()" @stand="handle?.standUp()" />
+    <GameDock @bucket="handle?.bucketAction()" @pack="handle?.packAction()" @fish="handle?.fishAction()" @stand="handle?.standUp()" @open="game.togglePack()" />
     <GamePack @pick="handle?.setPack($event)" />
     <GameOnline @clock="handle?.setClock($event)" @weather="setWeather" />
+    <GameBackpack @move="moveItem" @drop="dropItem" @give="giveItem" />
 
     <div v-if="overlay" class="overlay" :class="{ soft: game.status === 'reconnecting' || game.status === 'connecting' }">
       <div class="panel box">

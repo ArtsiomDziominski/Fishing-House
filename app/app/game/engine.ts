@@ -10,7 +10,7 @@
 
 import type { Room } from '@colyseus/sdk';
 import {
-  World, FISH, PACKS, PACK_KINDS, MOVE_EVERY, SPEED, CARRY_SPEED, REACH, seat, nearSeat, standPoint, dist, dayHour, dayPart, clockText, skyAt, weatherText,
+  World, FISH, PACKS, PACK_KINDS, MOVE_EVERY, SPEED, CARRY_SPEED, REACH, seat, nearSeat, standPoint, dist, packInReach, dayHour, dayPart, clockText, skyAt, weatherText,
   type Bag, type Catch, type ClientMessages, type Dir, type PackKind, type PlayerView, type ServerMessages, type Sky, type WeatherKind, type WorldState,
 } from '@fh/shared';
 import { HERO } from './hero.ts';
@@ -18,7 +18,8 @@ import { createFishingView, drawBite, drawFishing, type FishArt } from './fishin
 import { createRiverView } from './river-view.ts';
 import { createWeatherView, HAZE } from './weather-view.ts';
 
-export interface Actions { bucket: string | null; pack: string | null; fish: string | null; hot: boolean; stand: boolean }
+// open — рюкзак на спине или рядом: в него можно заглянуть (I)
+export interface Actions { bucket: string | null; pack: string | null; fish: string | null; hot: boolean; stand: boolean; open: boolean }
 // Время суток для интерфейса: подпись часов, насколько темно (0..1), минута игровых суток,
 // разрешает ли сервер переводить часы и выставлять погоду (разработка), переведены ли часы сейчас;
 // weather — погода словами, fixKind и fixWind — что из погоды выставлено вручную (null — идёт по расписанию).
@@ -99,7 +100,8 @@ export async function startGame(canvas: HTMLCanvasElement, room: Room, ui: GameU
 
   // Сервер шлёт «self» и ведро сразу при входе — пока грузятся картинки, складываем сообщения в очередь.
   // Часы и погода в очередь не идут: у часов важно, в какой момент они пришли, а погоде картинки не нужны.
-  type Queued = Exclude<keyof ServerMessages, 'clock' | 'weather'>;
+  // Вещи в рюкзаке движок не рисует — их принимает страница игры и показывает окно рюкзака.
+  type Queued = Exclude<keyof ServerMessages, 'clock' | 'weather' | 'items'>;
   type Inbox = { [K in Queued]: [K, ServerMessages[K]] }[Queued];
   let inbox: Inbox[] | null = [];
   const receive = (m: Inbox) => { if (inbox) inbox.push(m); else handle(m); };
@@ -252,7 +254,7 @@ export async function startGame(canvas: HTMLCanvasElement, room: Room, ui: GameU
   const onHero = (x: number, y: number) => Math.abs(x - hero.x) <= 10 && y <= hero.y + 2 && y >= hero.y - FH;
   // Река и причал с его сваями: всё непроходимое ниже линии берега. Линия снята с картинки; по бокам от неё берег свой.
   const bankY = (px: number) => (px < 0 ? 205 : px < 60 ? 226 : px < 132 ? 232 : px < World.pic.w ? 250 : 244);
-  const inWater = (x: number, y: number) => !World.canWalk(x, y) && y >= bankY(x - World.pic.x);
+  const inWater = (x: number, y: number) => !World.canWalk(x, y) && y >= bankY(x - World.pic.x) + World.pic.y;
 
   function standUp() {
     if (!hero.sitting) return;
@@ -422,6 +424,7 @@ export async function startGame(canvas: HTMLCanvasElement, room: Room, ui: GameU
         : nearSeatNow() ? 'Сесть рыбачить' : null,
       hot: hero.sitting && ph === 'bite',
       stand: hero.sitting,
+      open: packInReach(hero, pack),
     };
     const key = JSON.stringify(a); if (key === actionsKey) return; actionsKey = key;
     ui.actions(a);

@@ -1,12 +1,12 @@
-<!-- Низ экрана: кнопки действий (то же, что E, Q, F и Esc) и подсказка по управлению. -->
+<!-- Низ экрана: кнопки действий (то же, что E, Q, I, F и Esc) и подсказка по управлению. -->
 <script setup lang="ts">
-const emit = defineEmits<{ bucket: []; pack: []; fish: []; stand: [] }>();
+const emit = defineEmits<{ bucket: []; pack: []; open: []; fish: []; stand: [] }>();
 const game = useGameStore();
 
 // после клика снимаем фокус с кнопки, иначе пробел и Enter будут нажимать её, а не подсекать
-function press(ev: MouseEvent, what: 'bucket' | 'pack' | 'fish' | 'stand') {
+function press(ev: MouseEvent, what: 'bucket' | 'pack' | 'open' | 'fish' | 'stand') {
   (ev.currentTarget as HTMLElement).blur();
-  if (what === 'bucket') emit('bucket'); else if (what === 'pack') emit('pack'); else if (what === 'fish') emit('fish'); else emit('stand');
+  if (what === 'bucket') emit('bucket'); else if (what === 'pack') emit('pack'); else if (what === 'open') emit('open'); else if (what === 'fish') emit('fish'); else emit('stand');
 }
 </script>
 
@@ -15,6 +15,7 @@ function press(ev: MouseEvent, what: 'bucket' | 'pack' | 'fish' | 'stand') {
     <div class="actions">
       <button v-if="game.actions.bucket" type="button" @click="press($event, 'bucket')"><kbd>E</kbd><span>{{ game.actions.bucket }}</span></button>
       <button v-if="game.actions.pack" type="button" @click="press($event, 'pack')"><kbd>Q</kbd><span>{{ game.actions.pack }}</span></button>
+      <button v-if="game.actions.open" type="button" @click="press($event, 'open')"><kbd>I</kbd><span>{{ game.packOpen ? 'Закрыть рюкзак' : 'Открыть рюкзак' }}</span></button>
       <button v-if="game.actions.fish" type="button" :class="{ hot: game.actions.hot }" @click="press($event, 'fish')"><kbd>F</kbd><span>{{ game.actions.fish }}</span></button>
       <button v-if="game.actions.stand" type="button" @click="press($event, 'stand')"><kbd>Esc</kbd><span>Встать</span></button>
     </div>
@@ -24,6 +25,7 @@ function press(ev: MouseEvent, what: 'bucket' | 'pack' | 'fish' | 'stand') {
       <span class="for-keys"><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> или клик — идти</span>
       <span class="for-keys"><kbd>E</kbd> — взять или поставить ведро</span>
       <span class="for-keys"><kbd>Q</kbd> — надеть или снять рюкзак</span>
+      <span class="for-keys"><kbd>I</kbd> — заглянуть в рюкзак</span>
       <span class="for-keys"><kbd>F</kbd> или пробел — рыбачить</span>
       <span class="for-touch">Коснись места — рыбак пойдёт туда</span>
       <span class="for-touch">Ведро, рюкзак и рыбалка — кнопками внизу</span>

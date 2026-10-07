@@ -1,17 +1,17 @@
-// Погода на причале: ясно, пасмурно или дождь, и отдельно — дует ли ветер (он бывает в любую погоду).
+// Погода на причале: ясно, пасмурно, дождь или туман, и отдельно — дует ли ветер (он бывает в любую погоду).
 // Погоду ведёт сервер и сообщает её игрокам, клиент только рисует. Расписание считается от времени,
 // поэтому у всех процессов игрового сервера погода одна.
 
-export const WEATHERS = ['clear', 'cloudy', 'rain'] as const;
+export const WEATHERS = ['clear', 'cloudy', 'rain', 'fog'] as const;
 export type WeatherKind = typeof WEATHERS[number];
 export interface Weather { kind: WeatherKind; wind: boolean }
 
-export const WEATHER_NAMES: Record<WeatherKind, string> = { clear: 'Ясно', cloudy: 'Пасмурно', rain: 'Дождь' };
+export const WEATHER_NAMES: Record<WeatherKind, string> = { clear: 'Ясно', cloudy: 'Пасмурно', rain: 'Дождь', fog: 'Туман' };
 // «Дождь, ветер» — подпись для интерфейса.
 export const weatherText = (w: Weather): string => WEATHER_NAMES[w.kind] + (w.wind ? ', ветер' : '');
 
 export const WEATHER_SPAN = 5 * 60;           // секунд настоящего времени держится одна погода
-const SHARES: [WeatherKind, number][] = [['clear', 50], ['cloudy', 28], ['rain', 22]];   // как часто какая погода, в процентах
+const SHARES: [WeatherKind, number][] = [['clear', 44], ['cloudy', 24], ['rain', 18], ['fog', 14]];   // как часто какая погода, в процентах
 const WIND_CHANCE = 0.35;                     // доля отрезков с ветром
 
 // Число 0..1 по номеру отрезка времени: одно и то же у всех, кто спросит.

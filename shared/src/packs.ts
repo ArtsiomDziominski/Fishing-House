@@ -1,4 +1,5 @@
 // Рюкзаки: тот же рюкзак с картинки в нескольких расцветках. Вид выбирает игрок, сервер его хранит и показывает другим.
+// Вместимость — сетка клеток для вещей (shared/src/items.ts): чем ниже вид в PACK_KINDS, тем рюкзак просторнее.
 // Расцветка — поворот оттенка, поэтому все тени оригинала остаются на месте. Ею tools/build-world.mjs красит рюкзак
 // с картинки (assets/pack.png — кадры в порядке PACK_KINDS), а игра — рюкзак на спине героя.
 
@@ -6,12 +7,13 @@ export const PACK_KINDS = ['leather', 'canvas', 'sailor', 'berry'] as const;
 export type PackKind = typeof PACK_KINDS[number];
 
 export const PACKS = (() => {
-  // turn — на сколько градусов повернуть оттенок, sat и lit — во сколько раз насыщеннее и светлее
-  const BY_ID: Record<PackKind, { name: string; turn: number; sat: number; lit: number }> = {
-    leather: { name: 'Кожаный', turn: 0, sat: 1, lit: 1 },          // как на картинке
-    canvas: { name: 'Походный', turn: 62, sat: 0.8, lit: 0.95 },
-    sailor: { name: 'Морской', turn: 182, sat: 0.85, lit: 1.1 },
-    berry: { name: 'Ягодный', turn: -34, sat: 1.05, lit: 1 },
+  // turn — на сколько градусов повернуть оттенок, sat и lit — во сколько раз насыщеннее и светлее;
+  // w и h — сколько клеток для вещей внутри: в ширину и в высоту
+  const BY_ID: Record<PackKind, { name: string; turn: number; sat: number; lit: number; w: number; h: number }> = {
+    leather: { name: 'Кожаный', turn: 0, sat: 1, lit: 1, w: 4, h: 3 },          // как на картинке
+    canvas: { name: 'Походный', turn: 62, sat: 0.8, lit: 0.95, w: 5, h: 4 },
+    sailor: { name: 'Морской', turn: 182, sat: 0.85, lit: 1.1, w: 6, h: 5 },
+    berry: { name: 'Ягодный', turn: -34, sat: 1.05, lit: 1, w: 6, h: 6 },
   };
   const TONES = ['b16f38', '975220', '7a3d20', '642d18', '432115'];   // пять тонов кожи с картинки, от света к тени
   const rgb = (h: string) => [parseInt(h.slice(0, 2), 16), parseInt(h.slice(2, 4), 16), parseInt(h.slice(4, 6), 16)];
@@ -33,5 +35,7 @@ export const PACKS = (() => {
   const tones = (kind: PackKind): number[][] => TONES.map(t => tint(kind, rgb(t)));
   const isKind = (v: unknown): v is PackKind => PACK_KINDS.includes(v as PackKind);
 
-  return { DEFAULT: PACK_KINDS[0] as PackKind, name: (kind: PackKind) => BY_ID[kind].name, tint, tones, isKind };
+  const grid = (kind: PackKind) => ({ w: BY_ID[kind].w, h: BY_ID[kind].h });
+
+  return { DEFAULT: PACK_KINDS[0] as PackKind, name: (kind: PackKind) => BY_ID[kind].name, grid, tint, tones, isKind };
 })();

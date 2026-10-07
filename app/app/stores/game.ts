@@ -1,8 +1,8 @@
-// Всё, что показывает интерфейс вокруг холста игры: ведро, рюкзак, кнопки действий, сообщения, время суток, кто на причале, связь.
+// Всё, что показывает интерфейс вокруг холста игры: ведро, рюкзак и вещи в нём, кнопки действий, сообщения, время суток, кто на причале, связь.
 // Пишет сюда движок (через GameUI), читают компоненты.
 
 import { defineStore } from 'pinia';
-import { PACKS, emptyBag, type Bag, type PackKind } from '@fh/shared';
+import { PACKS, emptyBag, type Bag, type Item, type PackKind } from '@fh/shared';
 import type { Actions, GameUI, SkyInfo, Tone } from '~/game/engine';
 
 export type Status = 'idle' | 'connecting' | 'online' | 'reconnecting' | 'replaced' | 'offline' | 'error';
@@ -14,9 +14,11 @@ export const useGameStore = defineStore('game', {
     roomId: '',
     bag: emptyBag() as Bag,
     pack: PACKS.DEFAULT as PackKind,
+    items: [] as Item[],          // вещи в рюкзаке, как их видит сервер (перекладку окно рюкзака показывает сразу, не дожидаясь его)
+    packOpen: false,              // открыто окно рюкзака
     // время суток и погода: часы, темнота фона, погода словами; можно ли их выставлять (разработка) и что выставлено
     sky: { label: '', dark: 0, minutes: 0, canSet: false, moved: false, weather: '', fixKind: null, fixWind: null } as SkyInfo,
-    actions: { bucket: null, pack: null, fish: null, hot: false, stand: false } as Actions,
+    actions: { bucket: null, pack: null, fish: null, hot: false, stand: false, open: false } as Actions,
     toast: { text: '', tone: '' as Tone, fishId: null as string | null, show: false, seq: 0 },
     quietHint: false,
     debug: null as string | null,
@@ -28,6 +30,12 @@ export const useGameStore = defineStore('game', {
       const seq = this.toast.seq + 1;
       this.toast = { text, tone, fishId, show: true, seq };
       setTimeout(() => { if (this.toast.seq === seq) this.toast.show = false; }, 2600);
+    },
+    // Открыть или закрыть рюкзак (I или кнопка). Заглянуть в него можно, когда он на спине или рядом.
+    togglePack(open?: boolean) {
+      const want = open ?? !this.packOpen;
+      if (want && !this.actions.open) { this.showToast('Рюкзак далеко — подойди к нему', 'bad'); return; }
+      this.packOpen = want;
     },
     // Мост от движка к хранилищу.
     ui(): GameUI {

@@ -2,6 +2,7 @@
 
 import type { Catch } from './fish.ts';
 import type { FishingEvent } from './fishing.ts';
+import type { Item, ItemKind } from './items.ts';
 import type { PackKind } from './packs.ts';
 import type { Dir, WorldState } from './rules.ts';
 import type { Weather, WeatherKind } from './weather.ts';
@@ -35,7 +36,10 @@ export interface ClientMessages {
   press: void;                                // забросить, подсечь — как F или пробел
   packOn: void;                               // надеть рюкзак (он должен лежать рядом)
   packOff: { x: number; y: number };          // снять рюкзак и положить сюда
-  packKind: { kind: PackKind };               // выбрать другой рюкзак
+  packKind: { kind: PackKind };               // выбрать другой рюкзак (вещи должны в него влезть)
+  itemMove: { id: number; x: number; y: number; rot: boolean };   // переложить вещь в рюкзаке; рюкзак на спине или рядом
+  itemDrop: { id: number };                   // выбросить вещь из рюкзака
+  itemGive: { kind: ItemKind };               // положить в рюкзак новую вещь. Только в разработке
   clock: { hour: number | null };             // перевести часы причала на этот час — сразу у всех; null — настоящее время. Только в разработке
   weather: { kind: WeatherKind | null; wind: boolean | null };   // выставить погоду и ветер — сразу у всех; null — по расписанию. Только в разработке
 }
@@ -45,6 +49,10 @@ export interface ServerMessages {
   self: WorldState;                           // где ты на самом деле: при входе и когда сервер не принял ход
   bag: Bag;                                   // ведро целиком: при входе
   fish: FishingEvent & { bag?: Bag };         // рыбалка; к подсечке приложено новое ведро
+  // Вещи в рюкзаке целиком: при входе, когда сервер не принял перекладку и когда вещей стало больше или их разложило
+  // по новому рюкзаку. note — почему не вышло: far — рюкзак далеко, full — новой вещи нет места, tight — вещи не влезут
+  // в выбранный рюкзак (тогда сервер шлёт и «self» со старым рюкзаком).
+  items: { list: Item[]; note?: 'far' | 'full' | 'tight' };
   // Часы причала, мс: по ним у всех одно время суток. Приходят при входе и когда часы перевели.
   // canSet — сервер разрешает их переводить (разработка), moved — сейчас они переведены.
   clock: { now: number; canSet: boolean; moved: boolean };

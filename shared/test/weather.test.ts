@@ -19,9 +19,10 @@ test('бывает всякая погода, и ветер дует в любу
   for (let n = 0; n < N; n++) { const w = weatherAt(T0 + n * SPAN), key = w.kind + (w.wind ? '+ветер' : ''); seen.set(key, (seen.get(key) || 0) + 1); }
   for (const kind of WEATHERS) for (const wind of ['', '+ветер']) assert.ok((seen.get(kind + wind) || 0) > N * 0.03, `редко или никогда: ${kind}${wind}`);
   const share = (kind: string) => ((seen.get(kind) || 0) + (seen.get(kind + '+ветер') || 0)) / N;
-  assert.ok(Math.abs(share('clear') - 0.5) < 0.03, `ясно: ${share('clear')}`);
-  assert.ok(Math.abs(share('cloudy') - 0.28) < 0.03, `пасмурно: ${share('cloudy')}`);
-  assert.ok(Math.abs(share('rain') - 0.22) < 0.03, `дождь: ${share('rain')}`);
+  assert.ok(Math.abs(share('clear') - 0.44) < 0.03, `ясно: ${share('clear')}`);
+  assert.ok(Math.abs(share('cloudy') - 0.24) < 0.03, `пасмурно: ${share('cloudy')}`);
+  assert.ok(Math.abs(share('rain') - 0.18) < 0.03, `дождь: ${share('rain')}`);
+  assert.ok(Math.abs(share('fog') - 0.14) < 0.03, `туман: ${share('fog')}`);
   const windy = [...seen].filter(([k]) => k.endsWith('+ветер')).reduce((s, [, v]) => s + v, 0) / N;
   assert.ok(Math.abs(windy - 0.35) < 0.03, `ветер: ${windy}`);
 });
@@ -36,4 +37,5 @@ test('погода словами', () => {
   assert.equal(weatherText({ kind: 'clear', wind: false }), 'Ясно');
   assert.equal(weatherText({ kind: 'rain', wind: true }), 'Дождь, ветер');
   assert.equal(WEATHER_NAMES.cloudy, 'Пасмурно');
+  assert.equal(weatherText({ kind: 'fog', wind: false }), 'Туман');
 });

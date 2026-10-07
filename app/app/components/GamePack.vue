@@ -1,6 +1,7 @@
-<!-- Слева внизу: какой рюкзак у героя. Клик открывает список — выбрать другой (его увидят и остальные на причале). -->
+<!-- Слева внизу: какой рюкзак у героя. Клик открывает список — выбрать другой (его увидят и остальные на причале).
+     Рюкзаки разной вместимости; в меньший можно перейти, только если вещи в него влезут — тогда они сразу перекладываются. -->
 <script setup lang="ts">
-import { PACKS, PACK_KINDS, World, type PackKind } from '@fh/shared';
+import { ITEMS, PACKS, PACK_KINDS, World, type PackKind } from '@fh/shared';
 
 const emit = defineEmits<{ pick: [kind: PackKind] }>();
 const game = useGameStore();
@@ -12,7 +13,16 @@ const frame = (kind: PackKind) => ({ '--i': PACK_KINDS.indexOf(kind) });
 
 // после клика снимаем фокус с кнопки, иначе пробел и Enter будут нажимать её, а не подсекать
 function toggle(ev: MouseEvent) { (ev.currentTarget as HTMLElement).blur(); open.value = !open.value; }
-function pick(kind: PackKind) { open.value = false; emit('pick', kind); }
+function pick(kind: PackKind) {
+  open.value = false;
+  if (kind === game.pack) return;
+  // раскладываем так же, как сервер, — вещи сразу видны на новых местах; не влезают — рюкзак не меняем
+  const list = ITEMS.repack(PACKS.grid(kind), game.items);
+  if (!list) { game.showToast(`Вещи не влезут в ${PACKS.name(kind).toLowerCase()} рюкзак — сначала выложи лишнее`, 'bad'); return; }
+  game.items = list.sort((a, b) => a.id - b.id);
+  emit('pick', kind);
+}
+const room = (kind: PackKind) => { const g = PACKS.grid(kind); return `${g.w}×${g.h}`; };
 </script>
 
 <template>
@@ -20,7 +30,7 @@ function pick(kind: PackKind) { open.value = false; emit('pick', kind); }
     <ul v-if="open" class="list" aria-label="Рюкзаки">
       <li v-for="kind in PACK_KINDS" :key="kind">
         <button type="button" :class="{ on: kind === game.pack }" :aria-pressed="kind === game.pack" @click="pick(kind)">
-          <i class="pic" :style="frame(kind)" /><span>{{ PACKS.name(kind) }}</span>
+          <i class="pic" :style="frame(kind)" /><span>{{ PACKS.name(kind) }}</span><small :title="`${PACKS.grid(kind).w * PACKS.grid(kind).h} клеток для вещей`">{{ room(kind) }}</small>
         </button>
       </li>
     </ul>
@@ -55,6 +65,7 @@ function pick(kind: PackKind) { open.value = false; emit('pick', kind); }
 }
 .list button { width: 100%; padding: 4px 12px 4px 6px; border-color: transparent; background: none; }
 .list button.on { border-color: var(--coat); }
+.list small { margin-left: auto; padding-left: 12px; font: 600 11px/1 var(--mono); color: var(--paper-dim); }
 @media (max-width: 560px) {
   .chip { --k: 1; padding: 6px; }   /* рядом с кнопками масштаба — того же роста */
   .chip span { display: none; }

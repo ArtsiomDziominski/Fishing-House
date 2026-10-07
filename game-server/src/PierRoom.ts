@@ -4,17 +4,18 @@
 // - ходит клиент сам (так нет задержки), а сервер проверяет каждый шаг: в проходимую ли клетку и не быстрее ли, чем можно;
 //   не принял — шлёт игроку «self», и тот встаёт туда, где сервер его видит;
 // - рыбалку ведёт только сервер: когда клюёт, кто клюнул, успел ли подсечь. Клиент шлёт лишь нажатия;
-// - улов пишется в базу сразу при подсечке, место героя, ведра и рюкзака — при выходе и раз в минуту.
+// - улов пишется в базу сразу при подсечке, место героя, ведра и рюкзака — при выходе и раз в минуту;
+// - вещи в рюкзаке перекладывает тоже сервер: проверяет по ITEMS, что вещь встаёт, и пишет в базу по очереди (writes).
 
 import { Room, definePlugins, type Client } from 'colyseus';
 import { UniqueSessionPlugin } from 'colyseus/plugins/unique-session';
 import { z } from 'zod';
 import {
-  World, FISH, DIRS, PACK_KINDS, WEATHERS, ROOM_SIZE, SPEED, REACH, PUT_REACH, NEAR_PIER, HOOK_GRACE,
-  createFishing, addToBag, nearSeat, bucketNearSeat, standPoint, startState, dist, seat,
-  type Bag, type Fishing, type FishingEvent, type ServerMessages, type WorldState,
+  World, FISH, ITEMS, DIRS, PACK_KINDS, ITEM_KINDS, WEATHERS, ROOM_SIZE, SPEED, REACH, PUT_REACH, NEAR_PIER, HOOK_GRACE,
+  createFishing, addToBag, nearSeat, bucketNearSeat, standPoint, startState, packInReach, dist, seat,
+  type Bag, type Fishing, type FishingEvent, type Item, type ItemKind, type ServerMessages, type WorldState,
 } from '@fh/shared';
-import { verifyTicket, loadPlayer, saveWorld, recordCatch, type Ticket } from '@fh/shared/server';
+import { verifyTicket, loadPlayer, saveWorld, recordCatch, loadItems, addItem, placeItems, dropItem, type Ticket } from '@fh/shared/server';
 import { db } from './db.ts';
 import { Sky } from './sky.ts';
 import { PierState, PlayerState } from './state.ts';
@@ -31,6 +32,9 @@ interface Session {
   name: string;
   world: WorldState;                // где игрок на самом деле — по мнению сервера
   bag: Bag;
+  items: Item[];                    // вещи в рюкзаке — по мнению сервера
+  unsynced: Set<number>;            // вещи, которые при входе пришлось переложить, а в базе они ещё на старом месте
+  writes: Promise<unknown>;         // очередь записей вещей в базу: по одной, в том порядке, в каком игрок их делал
   fishing: Fishing;
   view: PlayerState;                // то, что видят другие
   budget: number;                   // сколько ещё можно пройти, арт-пикселей
@@ -41,6 +45,10 @@ const point = z.object({ x: z.number().finite(), y: z.number().finite() });
 const moveMsg = point.extend({ dir: z.enum(DIRS) });
 const sitMsg = z.object({ put: point.optional() }).optional();
 const packKindMsg = z.object({ kind: z.enum(PACK_KINDS) });
+const cell = z.number().int().min(0).max(63);
+const itemMoveMsg = z.object({ id: z.number().int(), x: cell, y: cell, rot: z.boolean() });
+const itemDropMsg = z.object({ id: z.number().int() });
+const itemGiveMsg = z.object({ kind: z.enum(ITEM_KINDS) });
 const clockMsg = z.object({ hour: z.number().min(0).max(24).nullable() });
 const weatherMsg = z.object({ kind: z.enum(WEATHERS).nullable(), wind: z.boolean().nullable() });
 
@@ -57,6 +65,7 @@ export class PierRoom extends Room<{ state: PierState; client: Client<{ auth: Au
   });
 
   private sessions = new Map<string, Session>();
+  private unsaved = 0;                // счётчик временных (отрицательных) id вещей, ещё не записанных в базу
   private offSky = () => {};          // отписка от часов и погоды причала
 
   onCreate() {
@@ -76,11 +85,10 @@ export class PierRoom extends Room<{ state: PierState; client: Client<{ auth: Au
     this.onMessage('press', client => this.withSession(client, s => { if (s.world.sitting) s.fishing.press(); }));
     this.onMessage('packOn', client => this.packOn(client));
     this.onMessage('packOff', point, (client, m) => this.packOff(client, m.x, m.y));
-    this.onMessage('packKind', packKindMsg, (client, m) => this.withSession(client, s => {
-      if (s.world.pack.kind === m.kind) return;
-      s.world.pack.kind = m.kind; s.dirty = true;
-      this.syncView(s);
-    }));
+    this.onMessage('packKind', packKindMsg, (client, m) => this.packKind(client, m.kind));
+    this.onMessage('itemMove', itemMoveMsg, (client, m) => this.itemMove(client, m.id, m.x, m.y, m.rot));
+    this.onMessage('itemDrop', itemDropMsg, (client, m) => this.itemDrop(client, m.id));
+    this.onMessage('itemGive', itemGiveMsg, (client, m) => { if (Sky.canSet) this.itemGive(client, m.kind); });
   }
 
   // Билет выдаёт сайт после входа (POST /api/game/ticket); без него в комнату не пустит.
@@ -94,10 +102,13 @@ export class PierRoom extends Room<{ state: PierState; client: Client<{ auth: Au
     const saved = await loadPlayer(db, auth.pid);
     if (!saved) throw new Error('Игрок не найден');
     const world = saved.world || startState();
+    // вещи — в сетку нынешнего рюкзака. Кого пришлось переложить, тех в базе не трогаем, пока игрок сам не возьмётся
+    // за рюкзак: вдруг запись мира отстала (вкладку перезагрузили, а прежний вход ещё сохраняется) и разложено всё верно
+    const packed = ITEMS.settle(ITEMS.grid(world.pack.kind), await loadItems(db, auth.pid));
     const view = new PlayerState();
     view.pid = saved.id; view.name = saved.name;
     const s: Session = {
-      pid: saved.id, name: saved.name, world, bag: saved.bag, view, budget: BUDGET_MAX, dirty: false,
+      pid: saved.id, name: saved.name, world, bag: saved.bag, items: packed.list, unsynced: new Set(packed.moved.map(it => it.id)), writes: Promise.resolve(), view, budget: BUDGET_MAX, dirty: false,
       fishing: createFishing({ hasBucket: () => bucketNearSeat(s.world.bucket), emit: ev => this.onFishing(client, s, ev), grace: HOOK_GRACE }),
     };
     if (world.sitting) s.fishing.sit();
@@ -108,6 +119,7 @@ export class PierRoom extends Room<{ state: PierState; client: Client<{ auth: Au
     this.tell(client, 'weather', Sky.weather());
     this.tell(client, 'self', world);
     this.tell(client, 'bag', s.bag);
+    this.tell(client, 'items', { list: s.items });
   }
 
   // Связь оборвалась сама — держим героя на месте, пока клиент переподключается.
@@ -119,7 +131,7 @@ export class PierRoom extends Room<{ state: PierState; client: Client<{ auth: Au
     const s = this.sessions.get(client.sessionId);
     this.sessions.delete(client.sessionId);
     this.state.players.delete(client.sessionId);
-    if (s) await this.save(s, true);
+    if (s) await Promise.all([this.save(s, true), s.writes]);
   }
 
   async onDispose() { this.offSky(); await this.saveAll(true); }
@@ -196,6 +208,75 @@ export class PierRoom extends Room<{ state: PierState; client: Client<{ auth: Au
     if (w.sitting || !w.pack.worn || dist(w, { x, y }) > PUT_REACH || !World.canWalk(x, y)) { this.reject(client, s); return; }
     w.pack = { x: Math.round(x), y: Math.round(y), worn: false, kind: w.pack.kind }; s.dirty = true;
     this.syncView(s);
+  }
+
+  // Другой рюкзак: вещи должны в него влезть. Тесно — оставляем прежний («self») и говорим почему; влезли, но не на
+  // свои места — раскладываем заново и присылаем, где они теперь.
+  private packKind(client: Client, kind: WorldState['pack']['kind']) {
+    const s = this.sessions.get(client.sessionId); if (!s) return;
+    if (s.world.pack.kind === kind) return;
+    const list = ITEMS.repack(ITEMS.grid(kind), s.items);
+    if (!list) { this.reject(client, s); this.tell(client, 'items', { list: s.items, note: 'tight' }); return; }
+    const was = new Map(s.items.map(it => [it.id, it]));
+    const moved = list.filter(it => { const o = was.get(it.id)!; return o.x !== it.x || o.y !== it.y || o.rot !== it.rot; });
+    s.items = list.sort((a, b) => a.id - b.id);
+    if (moved.length) { this.place(s, moved); this.tell(client, 'items', { list: s.items }); }
+    s.world.pack.kind = kind; s.dirty = true;
+    this.syncView(s);
+    void this.save(s, true);           // вид рюкзака — сразу: по нему при следующем входе раскладываются вещи
+  }
+
+  // ---------- вещи в рюкзаке ----------
+
+  // Переложить вещь можно, только заглянув в рюкзак: он на спине или рядом. Не встаёт — присылаем, как всё лежит на самом деле.
+  private itemMove(client: Client, id: number, x: number, y: number, rot: boolean) {
+    const s = this.sessions.get(client.sessionId); if (!s) return;
+    const it = s.items.find(i => i.id === id);
+    if (!it) { this.tell(client, 'items', { list: s.items }); return; }
+    if (!packInReach(s.world, s.world.pack, SLACK)) { this.tell(client, 'items', { list: s.items, note: 'far' }); return; }
+    rot = rot && ITEMS.turns(it.kind);
+    if (!ITEMS.fits(ITEMS.grid(s.world.pack.kind), s.items, it.kind, x, y, rot, it.id)) { this.tell(client, 'items', { list: s.items }); return; }
+    if (it.x === x && it.y === y && it.rot === rot) return;
+    it.x = x; it.y = y; it.rot = rot;
+    this.place(s, [it]);
+  }
+
+  private itemDrop(client: Client, id: number) {
+    const s = this.sessions.get(client.sessionId); if (!s) return;
+    const i = s.items.findIndex(it => it.id === id);
+    if (i < 0) { this.tell(client, 'items', { list: s.items }); return; }
+    if (!packInReach(s.world, s.world.pack, SLACK)) { this.tell(client, 'items', { list: s.items, note: 'far' }); return; }
+    s.items.splice(i, 1);
+    this.write(s, () => dropItem(db, s.pid, id));
+  }
+
+  // Новая вещь — на первое свободное место. Пока строка пишется в базу, место уже занято (id пока отрицательный),
+  // чтобы туда ничего не переложили; номер из базы — и игроку приходит рюкзак целиком.
+  private itemGive(client: Client, kind: ItemKind) {
+    const s = this.sessions.get(client.sessionId); if (!s) return;
+    const at = ITEMS.spot(ITEMS.grid(s.world.pack.kind), s.items, kind);
+    if (!at) { this.tell(client, 'items', { list: s.items, note: 'full' }); return; }
+    const it: Item = { id: -++this.unsaved, kind, ...at };
+    s.items.push(it);
+    this.write(s, async () => {
+      try { it.id = (await addItem(db, s.pid, kind, { x: it.x, y: it.y, rot: it.rot })).id; }
+      catch (err) { s.items = s.items.filter(o => o !== it); throw err; }
+      finally { if (this.sessions.get(client.sessionId) === s) this.tell(client, 'items', { list: s.items }); }
+    });
+  }
+
+  // Записать места этих вещей, а заодно и тех, кого переложили при входе (unsynced): игрок их видел и раз уж взялся
+  // за рюкзак — согласен с тем, как они лежат.
+  private place(s: Session, list: Item[]) {
+    const ids = new Set(list.map(it => it.id));
+    const all = [...list, ...s.items.filter(it => s.unsynced.has(it.id) && !ids.has(it.id))].map(it => ({ ...it }));
+    s.unsynced.clear();
+    this.write(s, () => placeItems(db, s.pid, all));
+  }
+
+  // Записи вещей в базу идут друг за другом: две быстрые перекладки одной вещи не обгонят одна другую.
+  private write(s: Session, op: () => Promise<unknown>) {
+    s.writes = s.writes.then(op).catch(err => console.error(`вещи игрока ${s.pid} не записаны:`, err));
   }
 
   // ---------- рыбалка ----------

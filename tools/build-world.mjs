@@ -1,6 +1,9 @@
 // Собирает мир из картинки-образца (art/reference.webp):
-//   app/public/assets/world.png   — карта 569×320 (16:9): в середине картинка без рыбака (причал под ним дорисован) и без дома
-//                                   (на его месте поляна), по бокам — лес и луг с дорогой; всё это дорисовывает tools/world-sides.mjs
+//   app/public/assets/world.png   — карта 640×360 (16:9): в середине у нижнего края картинка без рыбака (причал под ним дорисован)
+//                                   и без дома (на его месте поляна), без лодки, сетей, сумки и грибов; по бокам и сверху — поле
+//                                   с рекой, водой под ней и дорогой (или лес, если field в разметке выключен); всё это дорисовывает
+//                                   tools/world-sides.mjs
+//   art/world-1920x1080.png       — та же карта втрое крупнее, пиксель в пиксель: такой её видно на экране 1920×1080
 //   app/public/assets/fisher.png  — сидящий рыбак с удочкой, вырезанный с картинки пиксель в пиксель
 //   app/public/assets/line.png    — его леска со всплеском (пока он не рыбачит, рисуется как на картинке)
 //   app/public/assets/bucket.png, bucket-carry.png — ведро у дома: стоит на земле и в руке, ручкой вверх
@@ -32,6 +35,8 @@ const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 const ASSETS = path.join(ROOT, 'app', 'public', 'assets');
 const W = 240, H = 320;                                             // картинка-образец в арт-пикселях
 const SIDE = SHAPES.sides.left, MW = SIDE + W + SHAPES.sides.right;                 // карта шире картинки: та стоит в середине, по бокам лес и луг
+const TOP = SHAPES.sides.top || 0, MH = TOP + H;                    // и выше: над картинкой ещё TOP строк
+const FIELD = SHAPES.field || null;                                 // поле вместо леса
 const HOUSE = SHAPES.house.onMap;                                   // стоит ли дом на карте; если нет — на его месте поляна
 const debugDir = process.argv.includes('--debug') ? process.argv[process.argv.indexOf('--debug') + 1] : null;
 
@@ -120,6 +125,8 @@ function fisherMask(d) {
 // ---------- 3. Что под рыбаком ----------
 // Геометрия снята с картинки: настил — ромб на четырёх сваях, доски идут с наклоном 1:3,
 // слева сзади к нему примыкает треугольный сачок, ручка которого лежит на берегу.
+const deckEdge = y => (y <= 250 ? 60 + (250 - y) * 0.75 : 60 - (y - 250) * 0.83);     // задняя левая кромка настила
+const frontEnd = x => Math.round(260 + (x - 62) * 0.364);                             // последняя строка верха настила у передней левой кромки
 function repaint(d, m) {
   const out = Buffer.from(d);
   const at = (x, y) => { const i = (y * W + x) * 3; return [d[i], d[i + 1], d[i + 2]]; };
@@ -132,8 +139,6 @@ function repaint(d, m) {
     side: hex('6b3629'), sideB: hex('66372a'), dirtA: hex('a5643a'), dirtB: hex('86452e'), dirtC: hex('7a4835'),
     rail: hex('b0957f'), railHi: hex('c8b09a'),
   };
-  const deckEdge = y => (y <= 250 ? 60 + (250 - y) * 0.75 : 60 - (y - 250) * 0.83);     // задняя левая кромка настила
-  const frontEnd = x => Math.round(260 + (x - 62) * 0.364);                             // последняя строка верха настила
   const gaps = [x => 234 - (82 - x) / 3, x => 237 - (82 - x) / 3, x => 244.5 - (82 - x) / 3, x => 252.3 - (81 - x) / 3, x => 262 - (84 - x) / 3];
   const railX = y => 72 - (y - 224) * 0.3;                                              // правая дуга сачка
   const tri = (n, p) => { const q = ((n % (2 * p)) + 2 * p) % (2 * p); return q < p ? q : 2 * p - 1 - q; };
@@ -455,10 +460,99 @@ function houseHole(body) {
   return hole;
 }
 
+// ---------- 3ж. Лишнее у причала и в траве ----------
+// С картинки убраны лодка, сачок, круглая сеть и ящик-ловушка у причала, сумка на настиле и грибы в траве (clutter в разметке).
+// Под ними дорисовывается то, что они закрывали. Настил — вдоль досок: пиксель берёт цвет той же доски там, где она видна;
+// кромки — контуром, у передней правой ещё и боковая доска. Трава и берег — со стороны, как задано в разметке. Вода —
+// светлая, а под настилом, сваями и берегом — в тени, как вокруг.
+const FRONT = { y: x => 256 - (x - 110) * 0.667, face: 5, x0: 93, x1: 121 };         // передняя правая кромка настила: строка контура, боковая доска над ним
+const POSTS = [[49, 248, 56, 273], [85, 262, 92, 286], [123, 232, 130, 257]];         // сваи [x0, верх, x1, низ] со скруглённым верхом — их не трогать и цвет с них не брать
+// Работает уже по готовой карте (map — MW×MH, RGB), но в координатах картинки: дом с неё к этому времени убран, поле
+// дорисовано — трава под грибами берётся с них. field — маска травы поля: место гриба становится полем, по нему можно ходить.
+function clearClutter(map, field) {
+  const px = (x, y) => ((y + TOP) * MW + x + SIDE) * 3;
+  const src = Buffer.from(map);
+  const at = (x, y) => { const i = px(x, y); return [map[i], map[i + 1], map[i + 2]]; };
+  const put = (x, y, c) => { const i = px(x, y); map[i] = c[0]; map[i + 1] = c[1]; map[i + 2] = c[2]; };
+  const C = { outline: hex('140406'), face: ['5c2511', '5e2920', '582b21', '5b2c20', '5a3129', '5a2b23'].map(hex), light: hex('4384a5'), dark: hex('2d567e') };
+  const wet = c => c[2] > c[0] + 45 && c[2] > c[1] + 8;
+  const green = c => c[1] > c[0] + 4 && c[1] > c[2] + 22;
+  const inside = (x, y) => x >= 0 && y >= 0 && x < W && y < H;
+  const post = (x, y) => POSTS.some(([x0, y0, x1, y1]) => { const cut = Math.max(0, 2 - (y - y0)); return y >= y0 && y <= y1 && x >= x0 + cut && x <= x1 - cut; });
+  // настил: верх досок, боковая доска под передней правой кромкой, контуры кромок
+  const edgeY = x => Math.round(FRONT.y(x)), front = x => x >= FRONT.x0 && x <= FRONT.x1;
+  const top = (x, y) => y >= 227 && x > deckEdge(y) + 0.5 && (x < FRONT.x0 ? y <= frontEnd(x) : front(x) && y < edgeY(x) - FRONT.face);
+  const face = (x, y) => front(x) && y >= edgeY(x) - FRONT.face && y < edgeY(x);
+  const rim = (x, y) => (front(x) && y === edgeY(x)) || (y >= 227 && y <= 262 && Math.abs(x - deckEdge(y)) <= 0.5);
+
+  const owner = new Int16Array(W * H).fill(-1);                    // чей это пиксель: номер предмета из разметки
+  SHAPES.clutter.forEach((s, n) => {
+    const mine = [];
+    fillShape(s, (x, y) => { if (inside(x, y) && !post(x, y) && !(s.notGreen && green(at(x, y)))) mine.push([x, y]); });
+    if (s.notGreen) {                                              // гриб: и тёмная кайма вокруг — контур и тень на траве
+      const own = new Set(mine.map(([x, y]) => y * W + x));
+      fillShape(s, (x, y) => {
+        if (!inside(x, y) || own.has(y * W + x) || lum(at(x, y)) > 80) return;
+        if ([[1, 0], [-1, 0], [0, 1], [0, -1]].some(([dx, dy]) => own.has((y + dy) * W + x + dx))) mine.push([x, y]);
+      });
+    }
+    for (const [x, y] of mine) owner[y * W + x] = n;
+  });
+  const free = (x, y) => inside(x, y) && owner[y * W + x] < 0 && !post(x, y);
+
+  // сначала настил и берег — вода потом смотрит на них, чтобы положить тень
+  const water = [];
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+    const n = owner[y * W + x]; if (n < 0) continue;
+    const s = SHAPES.clutter[n];
+    if (rim(x, y)) { put(x, y, C.outline); continue; }
+    if (top(x, y)) {                                               // та же доска дальше или ближе: доски идут на три пикселя вправо — на один вниз
+      let c = null;
+      for (let k = 1; k < 60 && !c; k++) for (const d of [-1, 1]) {
+        const qx = x + 3 * k * d, qy = y + k * d;
+        if (free(qx, qy) && top(qx, qy)) { c = src.subarray(px(qx, qy), px(qx, qy) + 3); break; }
+      }
+      put(x, y, c || C.face[0]); continue;
+    }
+    if (face(x, y)) {                                              // боковая доска: тот же ряд правее, где кромка видна
+      const row = edgeY(x) - y; let c = null;
+      for (let k = 1; k < 40 && !c; k++) { const qx = x + k, qy = edgeY(qx) - row; if (free(qx, qy) && face(qx, qy)) c = at(qx, qy); }
+      put(x, y, c || C.face[Math.floor(hash(x, y, 30) * C.face.length)]); continue;
+    }
+    const line = s.bank && (px => s.bank[0][1] + (s.bank[1][1] - s.bank[0][1]) * (px - s.bank[0][0]) / (s.bank[1][0] - s.bank[0][0]));
+    if (s.shift || (s.along && (!line || y < line(x)))) {         // трава и берег — со стороны
+      let c = null;
+      if (s.shift) for (let m = 1; m < 6 && !c; m++) {
+        const qx = x + s.shift[0] * m, qy = y + s.shift[1] * m;
+        if (free(qx, qy) && !top(qx, qy)) { c = at(qx, qy); if (field && s.notGreen) field[px(x, y) / 3] = 1; }
+      }
+      else for (let k = 1; k < 80 && !c; k++) { const qx = Math.round(x + s.along[0] * k), qy = Math.round(y + s.along[1] * k); if (free(qx, qy) && !top(qx, qy) && !face(qx, qy)) c = at(qx, qy); }
+      if (c) { put(x, y, c); continue; }
+    }
+    water.push([x, y, s.shade || 9]);
+  }
+
+  // вода: светлая, а если в нескольких строках над пикселем не вода (настил, свая, берег) — тень
+  const wetMask = new Uint8Array(W * H); for (const [x, y] of water) wetMask[y * W + x] = 1;
+  const paint = [];
+  for (const [x, y, shade] of water) {
+    let shadow = false;
+    for (let d = 1; d <= shade + (hash(x, 0, 32) < 0.5 ? 1 : 0) && y - d >= 0; d++) {
+      if (wetMask[(y - d) * W + x]) continue;
+      if (!wet(at(x, y - d))) { shadow = true; break; }
+    }
+    paint.push([x, y, shadow ? C.dark : C.light]);
+  }
+  for (const [x, y, c] of paint) put(x, y, c);
+}
+
 // ---------- 4. Разметка → растры ----------
 // Разметка задана в координатах картинки (левее неё x < 0, правее — x >= 240), растры — в координатах карты:
-// картинка стоит на карте со сдвигом SIDE.
-const toMap = s => (s.rect ? { ...s, rect: [s.rect[0] + SIDE, s.rect[1], s.rect[2] + SIDE, s.rect[3]] } : { ...s, poly: s.poly.map(([x, y]) => [x + SIDE, y]) });
+// картинка стоит на карте со сдвигом SIDE вправо и TOP вниз. Строка-опора предмета (base) сдвигается вместе с ним.
+const toMap = s => {
+  const base = s.base === undefined ? {} : { base: s.base + TOP };
+  return s.rect ? { ...s, ...base, rect: [s.rect[0] + SIDE, s.rect[1] + TOP, s.rect[2] + SIDE, s.rect[3] + TOP] } : { ...s, ...base, poly: s.poly.map(([x, y]) => [x + SIDE, y + TOP]) };
+};
 // Луг справа от картинки: ходить можно от опушки до изгороди над рекой.
 function meadowWalk() {
   const { meadow } = SHAPES.sides, top = curveOf(meadow.top), bottom = curveOf(meadow.bottom);
@@ -466,7 +560,7 @@ function meadowWalk() {
   const xs = []; for (let x = W - 8; x < end; x += 4) xs.push(x); xs.push(end);
   return [...xs.map(x => [x, top(x) + 4]), ...[...xs].reverse().map(x => [x, bottom(x) - 6])];
 }
-const HEDGE_BASE = Math.round(Math.max(...SHAPES.sides.river.right.top.map(p => p[1]))) + 8;   // строка, на которой «стоит» изгородь над рекой
+const HEDGE_BASE = Math.round(Math.max(...SHAPES.sides.river.right.top.map(p => p[1]))) + 8 + TOP;   // строка карты, на которой «стоит» изгородь над рекой
 function inPoly(pts, x, y) {
   let inside = false;
   for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) {
@@ -479,17 +573,25 @@ function fillShape(shape, fn) {
   if (shape.rect) { const [x0, y0, x1, y1] = shape.rect; for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) fn(x, y); return; }
   const xs = shape.poly.map(p => p[0]), ys = shape.poly.map(p => p[1]);
   const x0 = Math.max(0, Math.floor(Math.min(...xs))), x1 = Math.min(MW - 1, Math.ceil(Math.max(...xs)));
-  const y0 = Math.max(0, Math.floor(Math.min(...ys))), y1 = Math.min(H - 1, Math.ceil(Math.max(...ys)));
+  const y0 = Math.max(0, Math.floor(Math.min(...ys))), y1 = Math.min(MH - 1, Math.ceil(Math.max(...ys)));
   for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) if (inPoly(shape.poly, x + 0.5, y + 0.5)) fn(x, y);
 }
-function bake(map, hedge) {                                         // map — карта MW×H (RGB), hedge — маска листвы изгороди над рекой
-  const W = MW;                                                    // здесь всё в координатах карты
+function bake(map, hedge, field) {                                  // map — карта MW×MH (RGB), hedge — маска листвы изгороди над рекой, field — трава поля
+  const W = MW, H = MH;                                            // здесь всё в координатах карты
   const at = (x, y) => { const i = (y * W + x) * 3; return [map[i], map[i + 1], map[i + 2]]; };
-  const onMap = p => [p[0] + SIDE, p[1]];
+  const onMap = p => [p[0] + SIDE, p[1] + TOP];
   const walk = new Uint8Array(W * H);
   // двор зависит от того, стоит ли дом: с домом — вокруг него, без дома — вся поляна до опушки
   const yard = HOUSE ? SHAPES.house.yard : SHAPES.glade.yard, own = list => (HOUSE ? list : []);
-  for (const poly of [yard, ...SHAPES.walk, meadowWalk()]) fillShape(toMap({ poly }), (x, y) => { walk[y * W + x] = 1; });
+  for (const poly of [yard, ...SHAPES.walk, meadowWalk(), ...(FIELD ? FIELD.walk || [] : [])]) fillShape(toMap({ poly }), (x, y) => { walk[y * W + x] = 1; });
+  if (field) {                                                     // по полю можно ходить: не вплотную к кустам и так, чтобы герой целиком оставался в кадре
+    let grass = Uint8Array.from(field);
+    for (let k = 0; k < 3; k++) {
+      const src = Uint8Array.from(grass);
+      for (let y = 1; y < H - 1; y++) for (let x = 1; x < W - 1; x++) if (src[y * W + x] && !(src[y * W + x - 1] && src[y * W + x + 1] && src[(y - 1) * W + x] && src[(y + 1) * W + x])) grass[y * W + x] = 0;
+    }
+    for (let y = HERO.FH + 4; y < H; y++) for (let x = 8; x < W - 11; x++) if (grass[y * W + x]) walk[y * W + x] = 1;
+  }
   for (const s of [...SHAPES.solids, ...own(SHAPES.house.solids)]) fillShape(toMap(s), (x, y) => { walk[y * W + x] = 0; });
   {                                                                // оставить только то, куда можно дойти от причала
     const reach = new Uint8Array(W * H), st = [onMap(SHAPES.points.seat)];
@@ -520,7 +622,8 @@ function bake(map, hedge) {                                         // map — �
   }
 
   const depth = new Uint16Array(W * H);
-  for (const o of [...SHAPES.occluders, ...own(SHAPES.house.occluders)].map(toMap)) fillShape(o, (x, y) => {
+  const gone = new Set(FIELD ? FIELD.gone : []);                     // ушли вместе с лесом
+  for (const o of [...SHAPES.occluders.filter(o => !gone.has(o.name)), ...own(SHAPES.house.occluders)].map(toMap)) fillShape(o, (x, y) => {
     const i = y * W + x, c = at(x, y);
     if (o.carve === 'green' && isGreen(c)) return;
     if (o.carve === 'grass' && (grass[i] || (near[i] && isTan(c)))) return;
@@ -531,17 +634,17 @@ function bake(map, hedge) {                                         // map — �
   return { walk, depth, grass };
 }
 // Места для бликов на воде: [x, y, длина, фаза] — только там, где вокруг чистая вода.
-function sparkles(map) {                                            // map — карта MW×H (RGB)
-  const W = MW;
+function sparkles(map) {                                            // map — карта MW×MH (RGB)
+  const W = MW, H = MH;
   const at = (x, y) => { const i = (y * W + x) * 3; return [map[i], map[i + 1], map[i + 2]]; };
   const water = (x, y) => { if (x < 0 || y < 0 || x >= W || y >= H) return false; const c = at(x, y), l = lum(c); return c[2] > c[0] + 45 && c[2] > c[1] + 8 && l > 55 && l < 125; };
   const out = [];
-  for (let y = 200; y < H - 2; y++) for (let x = 2; x < W - 6; x++) {
-    if (hash(x - SIDE, y, 11) > 0.035) continue;
-    const len = 2 + Math.floor(hash(x - SIDE, y, 12) * 3);
+  for (let y = 200 + TOP; y < H - 2; y++) for (let x = 2; x < W - 6; x++) {
+    if (hash(x - SIDE, y - TOP, 11) > 0.035) continue;
+    const len = 2 + Math.floor(hash(x - SIDE, y - TOP, 12) * 3);
     let ok = true;
     for (let dy = -2; dy <= 2 && ok; dy++) for (let dx = -2; dx <= len + 1; dx++) if (!water(x + dx, y + dy)) { ok = false; break; }
-    if (ok && !out.some(s => Math.abs(s[0] - x) < 9 && Math.abs(s[1] - y) < 4)) out.push([x, y, len, Math.round(hash(x - SIDE, y, 13) * 100) / 100]);
+    if (ok && !out.some(s => Math.abs(s[0] - x) < 9 && Math.abs(s[1] - y) < 4)) out.push([x, y, len, Math.round(hash(x - SIDE, y - TOP, 13) * 100) / 100]);
   }
   return out;
 }
@@ -563,10 +666,13 @@ function rle(arr) {                                                  // [зна�
   repaintSmoke(world);
   const lamps = lightMask(src), lampsOff = repaintLights(world, lamps);
   const home = houseMask(world);
-  // картинка в середине, по бокам лес и луг с дорогой; если дом убран — на его месте поляна
-  const { buf: map, hedge } = widen(world, W, H, SHAPES.sides, HOUSE ? null : { hole: houseHole(home), plan: SHAPES.glade });
+  // картинка в середине, по бокам и сверху поле (или лес) и луг с дорогой; если дом убран — на его месте поляна
+  const { buf: map, hedge, field } = widen(world, W, H, SHAPES.sides, HOUSE ? null : { hole: houseHole(home), plan: SHAPES.glade }, FIELD);
+  clearClutter(map, field);                                         // лодка, сети, ящик, сумка и грибы
   fs.mkdirSync(ASSETS, { recursive: true });
-  await sharp(map, { raw: { width: MW, height: H, channels: 3 } }).png({ compressionLevel: 9 }).toFile(path.join(ASSETS, 'world.png'));
+  await sharp(map, { raw: { width: MW, height: MH, channels: 3 } }).png({ compressionLevel: 9 }).toFile(path.join(ASSETS, 'world.png'));
+  await sharp(map, { raw: { width: MW, height: MH, channels: 3 } }).resize(MW * 3, MH * 3, { kernel: 'nearest' }).png({ compressionLevel: 9 })
+    .toFile(path.join(ROOT, 'art', `world-${MW * 3}x${MH * 3}.png`));
 
   // Вырезка с картинки: пиксели под маской на прозрачном фоне. Возвращает прямоугольник и RGBA.
   const cut = (...masks) => cutFrom(src, ...masks);
@@ -673,32 +779,33 @@ function rle(arr) {                                                  // [зна�
   for (let y = 0; y < 19; y++) for (let x = 0; x < 19; x++) for (let k = 0; k < 4; k++) icon[(y * 19 + x) * 4 + k] = face[(y * HERO.FW + x) * 4 + k];
   await sharp(icon, { raw: { width: 19, height: 19, channels: 4 } }).resize(57, 57, { kernel: 'nearest' }).png().toFile(path.join(ASSETS, 'icon.png'));
 
-  const { walk, depth, grass } = bake(map, hedge);
-  const tip = (() => { for (let y = 0; y < H; y++) if (mask.line[y * W + 48]) return y; return 239; })();
+  const { walk, depth, grass } = bake(map, hedge, field);
+  const tip = (() => { for (let y = 0; y < H; y++) if (mask.line[y * W + 48]) return y; return 239; })() + TOP;
   // rev — отпечаток картинок: игра дописывает его к их адресам, чтобы после пересборки браузер не показывал старые из кеша
   const rev = createHash('sha1').update(map).update(fisher.buf).update(line.buf).update(stand.buf).update(carry).update(sheet).update(small).update(lights.buf).update(glow.buf).digest('hex').slice(0, 8);
   const smoke = SHAPES.house.smoke;
-  const box = r => ({ x: r.x + SIDE, y: r.y, w: r.w, h: r.h });    // место вырезки: с картинки — на карту
+  const box = r => ({ x: r.x + SIDE, y: r.y + TOP, w: r.w, h: r.h });   // место вырезки: с картинки — на карту
   const data = {
-    w: MW, h: H, rev,
-    pic: { x: SIDE, w: W },                                          // где на карте стоит сама картинка
+    w: MW, h: MH, rev,
+    pic: { x: SIDE, y: TOP, w: W },                                  // где на карте стоит сама картинка
     fisher: box(fisher), line: box(line),
-    rod: { x: 48 + SIDE, tipY: tip, waterY: SHAPES.points.waterY },  // леска: столбец, кончик удилища, уровень воды
-    seat: { x: SHAPES.points.seat[0] + SIDE, y: SHAPES.points.seat[1], r: SHAPES.points.seatRadius },
-    bucket: { ...bucket, x: bucket.x + SIDE, baseX: bucket.baseX + SIDE }, pack: { ...pack, baseX: pack.baseX + SIDE },
+    rod: { x: 48 + SIDE, tipY: tip, waterY: SHAPES.points.waterY + TOP },   // леска: столбец, кончик удилища, уровень воды
+    seat: { x: SHAPES.points.seat[0] + SIDE, y: SHAPES.points.seat[1] + TOP, r: SHAPES.points.seatRadius },
+    bucket: { ...bucket, x: bucket.x + SIDE, y: bucket.y + TOP, baseX: bucket.baseX + SIDE, baseY: bucket.baseY + TOP },
+    pack: { ...pack, baseX: pack.baseX + SIDE, baseY: pack.baseY + TOP },
     // дым из трубы, горящие окна и ореол вокруг них — пока дом стоит на карте
-    smoke: HOUSE ? { x: smoke[0] + SIDE, y: smoke[1] } : null,
+    smoke: HOUSE ? { x: smoke[0] + SIDE, y: smoke[1] + TOP } : null,
     lights: HOUSE ? box(lights) : null, glow: HOUSE ? box(glow) : null,
     sparkles: sparkles(map),
     walk: rle(walk), depth: rle(depth),
   };
   const js = '// Сгенерировано tools/build-world.mjs из tools/world-shapes.mjs — руками не править.\n' +
-    `// walk и depth — растры ${MW}×${H} парами [значение, длина]: проходимость и строка-опора предмета в точке.\n` +
+    `// walk и depth — растры ${MW}×${MH} парами [значение, длина]: проходимость и строка-опора предмета в точке.\n` +
     'export const WORLD_DATA = ' + JSON.stringify(data).replace(/,"(pic|fisher|line|rod|seat|bucket|pack|smoke|lights|sparkles|walk|depth)"/g, ',\n  "$1"').replace('{"w"', '{\n  "w"').replace(/\}$/, '\n}') + ';\n';
   fs.writeFileSync(path.join(ROOT, 'shared', 'src', 'world-data.ts'), js);
 
   const count = a => a.reduce((s, v) => s + (v ? 1 : 0), 0);
-  console.log(`world.png ${MW}x${H} (картинка ${W}x${H} со сдвигом ${SIDE}); fisher.png ${fisher.w}x${fisher.h} @ ${fisher.x},${fisher.y}; line.png ${line.w}x${line.h}; bucket.png ${stand.w}x${stand.h} @ ${stand.x},${stand.y}, опора ${bucket.baseX},${bucket.baseY}, тень ${shadowPx.length} px; bucket-carry.png ${cw}x${ch}; проходимо ${count(walk)} px; за предметами ${count(depth)} px; pack.png ${pw * kinds}x${ph}, pack-ground.png ${sw * kinds}x${sh}, опора ${pack.baseX},${pack.baseY}, тень ${sackShadow.length} px; дом ${HOUSE ? 'на карте' : 'убран'}, art/house/house.png ${house.w}x${house.h} @ ${house.x},${house.y} (${count(home)} px); lights.png ${lights.w}x${lights.h} @ ${lights.x},${lights.y}, glow.png ${glow.w}x${glow.h} @ ${glow.x},${glow.y}, стёкол ${count(lamps.glass)} px; бликов ${data.sparkles.length}; world-data.ts ${js.length} байт`);
+  console.log(`world.png ${MW}x${MH} (картинка ${W}x${H} со сдвигом ${SIDE}, ${TOP}; ${FIELD ? 'поле' : 'лес'}); fisher.png ${fisher.w}x${fisher.h} @ ${fisher.x},${fisher.y}; line.png ${line.w}x${line.h}; bucket.png ${stand.w}x${stand.h} @ ${stand.x},${stand.y}, опора ${bucket.baseX},${bucket.baseY}, тень ${shadowPx.length} px; bucket-carry.png ${cw}x${ch}; проходимо ${count(walk)} px; за предметами ${count(depth)} px; pack.png ${pw * kinds}x${ph}, pack-ground.png ${sw * kinds}x${sh}, опора ${pack.baseX},${pack.baseY}, тень ${sackShadow.length} px; дом ${HOUSE ? 'на карте' : 'убран'}, art/house/house.png ${house.w}x${house.h} @ ${house.x},${house.y} (${count(home)} px); lights.png ${lights.w}x${lights.h} @ ${lights.x},${lights.y}, glow.png ${glow.w}x${glow.h} @ ${glow.x},${glow.y}, стёкол ${count(lamps.glass)} px; бликов ${data.sparkles.length}; world-data.ts ${js.length} байт`);
 
   if (debugDir) {                                                    // проверочные картинки: разметка поверх карты
     fs.mkdirSync(debugDir, { recursive: true });
@@ -706,9 +813,9 @@ function rle(arr) {                                                  // [зна�
     const pal = [[255, 0, 0], [0, 200, 255], [255, 0, 255], [255, 255, 0], [0, 255, 120], [255, 140, 0], [140, 90, 255]];
     const levels = [...new Set(depth)].filter(v => v).sort((a, b) => a - b);
     const mk = async (name, fn) => {
-      const b = Buffer.alloc(MW * H * 3);
-      for (let i = 0; i < MW * H; i++) { const c = fn(i, [map[i * 3], map[i * 3 + 1], map[i * 3 + 2]]); b[i * 3] = c[0]; b[i * 3 + 1] = c[1]; b[i * 3 + 2] = c[2]; }
-      await sharp(b, { raw: { width: MW, height: H, channels: 3 } }).resize(MW * S, H * S, { kernel: 'nearest' }).png().toFile(path.join(debugDir, name));
+      const b = Buffer.alloc(MW * MH * 3);
+      for (let i = 0; i < MW * MH; i++) { const c = fn(i, [map[i * 3], map[i * 3 + 1], map[i * 3 + 2]]); b[i * 3] = c[0]; b[i * 3 + 1] = c[1]; b[i * 3 + 2] = c[2]; }
+      await sharp(b, { raw: { width: MW, height: MH, channels: 3 } }).resize(MW * S, MH * S, { kernel: 'nearest' }).png().toFile(path.join(debugDir, name));
     };
     await mk('dbg_walk.png', (i, c) => (walk[i] ? tint(c, [255, 255, 255], 0.55) : c));
     await mk('dbg_depth.png', (i, c) => (depth[i] ? tint(c, pal[levels.indexOf(depth[i]) % pal.length], 0.6) : c));
