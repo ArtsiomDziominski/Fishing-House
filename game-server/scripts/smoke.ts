@@ -5,7 +5,7 @@
 //   GAME_URL=http://localhost:2567 npm run smoke -w game-server
 
 import { Client, type Room } from '@colyseus/sdk';
-import { World, ROOM, seat, standPoint, type Bag, type PlayerView, type ServerMessages, type WorldState } from '@fh/shared';
+import { World, ROOM, DAY_LENGTH, dayHour, seat, standPoint, type Bag, type PlayerView, type ServerMessages, type WorldState } from '@fh/shared';
 import { createDb, createAccount, issueTicket, getProfile } from '@fh/shared/server';
 
 const url = process.env.GAME_URL || 'http://localhost:2567';
@@ -23,6 +23,8 @@ const fish: ServerMessages['fish'][] = [];
 room.onMessage('self', (m: WorldState) => { self = m; });
 room.onMessage('bag', (m: Bag) => { bag = m; });
 room.onMessage('fish', (m: ServerMessages['fish']) => { fish.push(m); });
+let clock: (ServerMessages['clock'] & { skew: number }) | null = null;   // skew — на сколько часы причала впереди наших
+room.onMessage('clock', (m: ServerMessages['clock']) => { clock = { ...m, skew: m.now - Date.now() }; });
 
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
 const until = async (what: string, ok: () => boolean, ms = 15000) => {
@@ -32,6 +34,27 @@ const until = async (what: string, ok: () => boolean, ms = 15000) => {
 const check = (cond: unknown, what: string) => { if (!cond) throw new Error('не так: ' + what); console.log('  ✓', what); };
 
 await until('себя и ведро', () => !!self && !!bag);
+await until('часы причала', () => !!clock);
+check(Math.abs(clock!.skew) < DAY_LENGTH * 1000 + 60_000, 'сервер прислал часы причала — по ним у всех одно время суток');
+
+// Часы причала: в разработке сервер переводит их сразу у всех, в продакшене — не слушает. После проверки возвращаем как было.
+const before = clock!;
+if (before.canSet) {
+  clock = null;
+  room.send('clock', { hour: 22 });
+  await until('перевод часов', () => !!clock);
+  check(clock!.moved && Math.abs(dayHour(clock!.now) - 22) < 0.05, 'часы причала переведены на 22:00 — сервер сообщил новое время');
+  clock = null;
+  room.send('clock', { hour: before.moved ? dayHour(Date.now() + before.skew) : null });
+  await until('возврат часов', () => !!clock);
+  const drift = Math.abs(dayHour(Date.now() + clock!.skew) - dayHour(Date.now() + before.skew));   // сдвиг мог смениться на целые сутки — час тот же
+  check(clock!.moved === before.moved && Math.min(drift, 24 - drift) < 0.05, 'часы причала возвращены на прежнее время');
+} else {
+  clock = null;
+  room.send('clock', { hour: 22 });
+  await sleep(400);
+  check(clock === null, 'перевод часов выключен — сервер его не слушает');
+}
 check(self!.sitting && self!.bucket.home, 'новый игрок сидит на причале, ведро у дома');
 check(!self!.pack.worn && self!.pack.x === World.pack.baseX && self!.pack.kind === 'leather', 'кожаный рюкзак лежит у дома');
 
@@ -112,6 +135,7 @@ self = null;
 again.onMessage('self', (m: WorldState) => { self = m; });
 again.onMessage('bag', (m: Bag) => { bag = m; });
 again.onMessage('fish', () => {});
+again.onMessage('clock', () => {});
 await until('себя после входа', () => !!self);
 check(self!.sitting && !self!.bucket.home && self!.bucket.x === 96, 'после перезахода герой на причале, ведро там, где поставили');
 check(self!.pack.worn && self!.pack.kind === 'sailor', 'рюкзак после перезахода на спине, тот же морской');

@@ -70,7 +70,7 @@ const overlay = computed(() => {
 
 <template>
   <div class="play">
-    <img class="backdrop" :src="'/assets/world.png?v=' + World.rev" alt="" aria-hidden="true">
+    <img class="backdrop" :src="'/assets/world.png?v=' + World.rev" :style="{ '--dark': game.sky.dark }" alt="" aria-hidden="true">
     <main class="stage">
       <canvas ref="canvas" width="240" height="320" aria-label="Домик рыбака у реки" />
     </main>
@@ -79,7 +79,7 @@ const overlay = computed(() => {
     <GameToast />
     <GameDock @bucket="handle?.bucketAction()" @pack="handle?.packAction()" @fish="handle?.fishAction()" @stand="handle?.standUp()" />
     <GamePack @pick="handle?.setPack($event)" />
-    <GameOnline />
+    <GameOnline @clock="handle?.setClock($event)" />
     <div class="zoom" aria-label="Масштаб">
       <button type="button" title="Мельче (−)" :disabled="!game.canZoomOut" @click="handle?.zoom(-1); ($event.currentTarget as HTMLElement).blur()">−</button>
       <button type="button" title="Крупнее (+)" :disabled="!game.canZoomIn" @click="handle?.zoom(1); ($event.currentTarget as HTMLElement).blur()">+</button>
@@ -99,6 +99,8 @@ const overlay = computed(() => {
 </template>
 
 <style scoped>
+/* фон вокруг холста темнеет вместе с игрой: --dark — насколько сейчас темно, 0..1 */
+.backdrop { filter: blur(26px) brightness(calc(0.42 - 0.26 * var(--dark, 0))) saturate(1.15); transition: filter 3s linear; }
 .stage { position: fixed; inset: 0; display: grid; place-items: center; }
 canvas {
   display: block;

@@ -1,9 +1,9 @@
-// Всё, что показывает интерфейс вокруг холста игры: ведро, рюкзак, кнопки действий, сообщения, кто на причале, связь.
+// Всё, что показывает интерфейс вокруг холста игры: ведро, рюкзак, кнопки действий, сообщения, время суток, кто на причале, связь.
 // Пишет сюда движок (через GameUI), читают компоненты.
 
 import { defineStore } from 'pinia';
 import { PACKS, emptyBag, type Bag, type PackKind } from '@fh/shared';
-import type { Actions, GameUI, Tone } from '~/game/engine';
+import type { Actions, GameUI, SkyInfo, Tone } from '~/game/engine';
 
 export type Status = 'idle' | 'connecting' | 'online' | 'reconnecting' | 'replaced' | 'offline' | 'error';
 
@@ -14,6 +14,7 @@ export const useGameStore = defineStore('game', {
     roomId: '',
     bag: emptyBag() as Bag,
     pack: PACKS.DEFAULT as PackKind,
+    sky: { label: '', dark: 0, minutes: 0, canSet: false, moved: false } as SkyInfo,   // время суток: часы, темнота фона, можно ли переводить часы
     actions: { bucket: null, pack: null, fish: null, hot: false, stand: false } as Actions,
     toast: { text: '', tone: '' as Tone, fishId: null as string | null, show: false, seq: 0 },
     quietHint: false,
@@ -34,6 +35,7 @@ export const useGameStore = defineStore('game', {
       return {
         bag: bag => { this.bag = bag; },
         pack: kind => { this.pack = kind; },
+        sky: info => { this.sky = info; },
         toast: (text, tone, fishId) => this.showToast(text, tone, fishId),
         actions: a => { this.actions = a; },
         moved: () => { this.quietHint = true; },

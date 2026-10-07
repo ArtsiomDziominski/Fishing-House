@@ -56,6 +56,13 @@ export interface FishArt { side: HTMLCanvasElement; sideFlip: HTMLCanvasElement;
 export interface Geo { x: number; tipY: number; waterY: number; head: { x: number; y: number }; bucket: { x: number; y: number } | null }
 export interface Art { line: { img: HTMLImageElement; x: number; y: number }; fish: Record<string, FishArt> }
 
+// Знак «клюёт!» над героем. Рисуется отдельно от остального и после ночного затемнения: его должно быть видно в любой час.
+export function drawBite(ctx: Ctx, st: ViewState, head: { x: number; y: number }) {
+  if (st.phase !== 'bite') return;
+  const bob = Math.floor(st.t * 8) % 2;
+  stampMap(ctx, BANG, BANG_COL, head.x - 3, head.y - 13 - bob);
+}
+
 // geo: леска (столбец, кончик удилища, вода), макушка сидящего героя, край ведра (или null).
 export function drawFishing(ctx: Ctx, st: ViewState, time: number, geo: Geo, art: Art) {
   const { x, tipY, waterY } = geo, phase = st.phase;
@@ -83,8 +90,6 @@ export function drawFishing(ctx: Ctx, st: ViewState, time: number, geo: Geo, art
     const jerk = Math.floor(st.t * 14) % 2;
     line(tipY + 1, waterY - 1 + jerk); float(2 + jerk);
     if (jerk) splash(); else ripple(ctx, x, waterY + 1, 3, 1);
-    const bob = Math.floor(st.t * 8) % 2;
-    stampMap(ctx, BANG, BANG_COL, geo.head.x - 3, geo.head.y - 13 - bob);
   } else if (phase === 'pull' && st.fish) {
     const k = Math.min(1, st.t / TIME.pull), e = 1 - (1 - k) * (1 - k);
     const s = art.fish[st.fish.id]!.up, fy = Math.round(waterY - 2 - (waterY - tipY - 10) * e);

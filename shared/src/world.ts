@@ -122,5 +122,5 @@ function findPath(from: Point, to: Point): Point[] | null {
 
 export const World = {
   W, H, rev: DATA.rev, walk, depth, canWalk, depthAt, nearestWalkable, findPath, block, unblock,
-  fisher: DATA.fisher, line: DATA.line, rod: DATA.rod, seat: DATA.seat, bucket: DATA.bucket, pack: DATA.pack, smoke: DATA.smoke, sparkles: DATA.sparkles as [number, number, number, number][],
+  fisher: DATA.fisher, line: DATA.line, rod: DATA.rod, seat: DATA.seat, bucket: DATA.bucket, pack: DATA.pack, smoke: DATA.smoke, lights: DATA.lights, glow: DATA.glow, sparkles: DATA.sparkles as [number, number, number, number][],
 };

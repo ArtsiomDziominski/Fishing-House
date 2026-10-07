@@ -5,6 +5,7 @@ export * from './world.ts';
 export * from './fish.ts';
 export * from './fishing.ts';
 export * from './packs.ts';
+export * from './daytime.ts';
 export * from './rules.ts';
 export * from './protocol.ts';
 export * from './account.ts';

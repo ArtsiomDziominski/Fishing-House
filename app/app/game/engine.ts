@@ -6,22 +6,27 @@
 // Сервер присылает «self», если с чем-то не согласен, — герой встаёт туда, где его видит сервер.
 // Рыбалку ведёт сервер: клиент шлёт нажатия и показывает фазы по его событиям.
 // Остальных игроков берём из состояния комнаты и плавно подтягиваем к их последнему месту.
+// Время суток считаем по часам сервера: ночью кадр темнеет, а в окнах дома и в фонаре у двери загорается свет.
 
 import type { Room } from '@colyseus/sdk';
 import {
-  World, FISH, PACKS, PACK_KINDS, MOVE_EVERY, SPEED, CARRY_SPEED, REACH, seat, nearSeat, standPoint, dist,
-  type Bag, type Catch, type ClientMessages, type Dir, type PackKind, type PlayerView, type ServerMessages, type WorldState,
+  World, FISH, PACKS, PACK_KINDS, MOVE_EVERY, SPEED, CARRY_SPEED, REACH, seat, nearSeat, standPoint, dist, dayHour, dayPart, clockText, skyAt,
+  type Bag, type Catch, type ClientMessages, type Dir, type PackKind, type PlayerView, type ServerMessages, type Sky, type WorldState,
 } from '@fh/shared';
 import { HERO } from './hero.ts';
-import { createFishingView, drawFishing, type FishArt } from './fishing-view.ts';
+import { createFishingView, drawBite, drawFishing, type FishArt } from './fishing-view.ts';
 
 export interface Actions { bucket: string | null; pack: string | null; fish: string | null; hot: boolean; stand: boolean }
+// Время суток для интерфейса: подпись часов, насколько темно (0..1), минута игровых суток,
+// разрешает ли сервер переводить часы (разработка) и переведены ли они сейчас.
+export interface SkyInfo { label: string; dark: number; minutes: number; canSet: boolean; moved: boolean }
 export type Tone = '' | 'good' | 'bad';
 
 // Куда движок сообщает о том, что показывает интерфейс вокруг холста (его держит Pinia-хранилище).
 export interface GameUI {
   bag(bag: Bag): void;
   pack(kind: PackKind): void;                           // какой рюкзак у героя сейчас
+  sky(info: SkyInfo): void;                             // время суток: часы и темнота фона
   toast(text: string, tone?: Tone, fishId?: string | null): void;
   actions(a: Actions): void;
   moved(): void;                                        // первый шаг — подсказку можно приглушить
@@ -32,6 +37,7 @@ export interface GameUI {
 
 export interface GameHandle {
   bucketAction(): void; packAction(): void; setPack(kind: PackKind): void; fishAction(): void; standUp(): void; zoom(step: number): void; destroy(): void;
+  setClock(hour: number | null): void;                  // перевести часы причала на этот час (на сервере, у всех); null — настоящее время
 }
 
 interface Hero { x: number; y: number; dir: Dir; sitting: boolean; moving: boolean; anim: number; path: { x: number; y: number }[] | null; then: 'sit' | 'pick' | 'wear' | null; stuck: number }
@@ -64,6 +70,7 @@ export async function startGame(canvas: HTMLCanvasElement, room: Room, ui: GameU
   const TOP = 3;                                                             // запас над ведром под хвосты рыб
   const pail = makeCanvas(B.w, B.h + TOP), pctx = ctx2d(pail);               // клетка ведра на земле
   const sack = makeCanvas(P.w + 3, P.h + 3), sctx = ctx2d(sack);             // клетка рюкзака на земле: справа и снизу место под тень
+  const dusk = makeCanvas(W, H), dctx = ctx2d(dusk);                         // слой темноты: цвет неба с дырами там, где горит свет
 
   const hero: Hero = { x: seat.x, y: seat.y, dir: 'down', sitting: true, moving: false, anim: 0, path: null, then: null, stuck: 0 };
   const bucket = { x: B.baseX, y: B.baseY, carried: false, home: true, blocked: null as number[] | null, pointed: false };
@@ -77,20 +84,28 @@ export async function startGame(canvas: HTMLCanvasElement, room: Room, ui: GameU
   let debugLayer: HTMLCanvasElement | null = null, debugFor = -1, mapRev = 0, pointer: { x: number; y: number } | null = null;   // mapRev растёт, когда предмет ставят или поднимают
   let ready = false, sendIn = 0, lastSent = { x: hero.x, y: hero.y }, frameNo = 0, onlineKey = '', onlineIn = 0, actionsKey = '';
   let raf = 0, last = 0, alive = true;
+  // Время суток: skew — на сколько часы причала (их ведёт сервер) впереди наших, мс; pier — можно ли их переводить
+  // и переведены ли они; fixedHour — час из адреса (?hour=22): время тогда стоит, и только у нас.
+  let skew = 0, pier = { canSet: false, moved: false }, fixedHour = params.has('hour') ? Number(params.get('hour')) : NaN, skyKey = '';
+  // Перевод часов: wantHour — час, который ещё не ушёл на сервер (undefined — слать нечего), clockIn — пауза до следующей отправки.
+  let wantHour: number | null | undefined, clockIn = 0;
 
   // Сервер шлёт «self» и ведро сразу при входе — пока грузятся картинки, складываем сообщения в очередь.
-  type Inbox = { [K in keyof ServerMessages]: [K, ServerMessages[K]] }[keyof ServerMessages];
+  // Часы сервера в очередь не идут: важно, в какой момент они пришли.
+  type Queued = Exclude<keyof ServerMessages, 'clock'>;
+  type Inbox = { [K in Queued]: [K, ServerMessages[K]] }[Queued];
   let inbox: Inbox[] | null = [];
   const receive = (m: Inbox) => { if (inbox) inbox.push(m); else handle(m); };
   const offs = [
     room.onMessage('self', (m: ServerMessages['self']) => receive(['self', m])),
     room.onMessage('bag', (m: ServerMessages['bag']) => receive(['bag', m])),
     room.onMessage('fish', (m: ServerMessages['fish']) => receive(['fish', m])),
+    room.onMessage('clock', (m: ServerMessages['clock']) => { skew = m.now - Date.now(); pier = { canSet: m.canSet, moved: m.moved }; }),
   ];
 
   // ---------- картинки ----------
-  const img: Record<'world' | 'fisher' | 'line' | 'bucket' | 'carry' | 'pack', HTMLImageElement> = {} as any;
-  const files = { world: 'world.png', fisher: 'fisher.png', line: 'line.png', bucket: 'bucket.png', carry: 'bucket-carry.png', pack: 'pack-ground.png' } as const;
+  const img: Record<'world' | 'fisher' | 'line' | 'bucket' | 'carry' | 'pack' | 'lights' | 'glow', HTMLImageElement> = {} as any;
+  const files = { world: 'world.png', fisher: 'fisher.png', line: 'line.png', bucket: 'bucket.png', carry: 'bucket-carry.png', pack: 'pack-ground.png', lights: 'lights.png', glow: 'glow.png' } as const;
   await Promise.all((Object.keys(files) as (keyof typeof files)[]).map(k => loadImage('/assets/' + files[k] + '?v=' + World.rev).then(im => { img[k] = im; })));
   const rigs = {} as Record<Dir, { arm: HTMLCanvasElement; x: number; y: number; bucket: [number, number] }>;
   const fishArt: Record<string, FishArt & { tail: [string, string] }> = {};
@@ -384,10 +399,11 @@ export async function startGame(canvas: HTMLCanvasElement, room: Room, ui: GameU
 
     sendIn -= dt;
     if (sendIn <= 0) flushMove();
+    clockIn -= dt; flushClock();
 
     const tgt = cameraTarget(), ease = 1 - Math.exp(-dt * 7);
     view.camX += (tgt.x - view.camX) * ease; view.camY += (tgt.y - view.camY) * ease;
-    refreshActions();
+    refreshActions(); refreshSky();
   }
   function refreshActions() {
     const ph = fishing.st.phase;
@@ -402,6 +418,23 @@ export async function startGame(canvas: HTMLCanvasElement, room: Room, ui: GameU
     };
     const key = JSON.stringify(a); if (key === actionsKey) return; actionsKey = key;
     ui.actions(a);
+  }
+
+  // ---------- время суток ----------
+  // Час считаем сами, но по часам сервера — так у всех на причале одно время.
+  const hourNow = () => (Number.isFinite(fixedHour) ? fixedHour : dayHour(Date.now() + skew));
+  function refreshSky() {                               // часы в интерфейсе и темнота фона вокруг холста
+    const hour = hourNow(), label = dayPart(hour).name + ' · ' + clockText(hour), dark = Math.round(skyAt(hour).dark * 20) / 20;
+    const key = [label, dark, pier.canSet, pier.moved].join(); if (key === skyKey) return; skyKey = key;
+    ui.sky({ label, dark, minutes: Math.floor(((hour % 24) + 24) % 24 * 6) * 10, ...pier });
+  }
+  // Перевести часы причала: это делает сервер, и время меняется сразу у всех игроков (он разрешает это только в разработке).
+  // Ползунок шлёт часы десятками в секунду, поэтому на сервер уходит последнее значение и не чаще, чем раз в CLOCK_EVERY.
+  const CLOCK_EVERY = 0.1;
+  function setClock(hour: number | null) { fixedHour = NaN; wantHour = hour; flushClock(); }
+  function flushClock() {
+    if (wantHour === undefined || clockIn > 0) return;
+    send('clock', { hour: wantHour }); wantHour = undefined; clockIn = CLOCK_EVERY;
   }
 
   // ---------- отрисовка ----------
@@ -499,6 +532,19 @@ export async function startGame(canvas: HTMLCanvasElement, room: Room, ui: GameU
       fctx.fillStyle = SMOKE.light; for (const [dx, dy, k] of p.lobes) if (p.r * k >= 1.5) disc(p.x + dx - 1, p.y + dy - 1, p.r * k - 1);
     }
   }
+  // Вечер и ночь: слой цвета неба умножается на кадр, а свет из окон и фонаря проедает в нём дыры — возле дома светло.
+  // Сверху тот же ореол кладётся тёплой добавкой. Днём (белое небо, свет погашен) кадр остаётся как есть.
+  const GLOW_ADD = 0.3;                                 // доля тёплой добавки
+  function drawNight(sky: Sky) {
+    if (sky.dark < 0.004 && !sky.lights) return;
+    const g = World.glow;
+    dctx.globalCompositeOperation = 'source-over'; dctx.globalAlpha = 1;
+    dctx.fillStyle = `rgb(${sky.tint.join(',')})`; dctx.fillRect(0, 0, W, H);
+    if (sky.lights) { dctx.globalCompositeOperation = 'destination-out'; dctx.globalAlpha = sky.lights; dctx.drawImage(img.glow, g.x, g.y); }
+    fctx.globalCompositeOperation = 'multiply'; fctx.drawImage(dusk, 0, 0);
+    if (sky.lights) { fctx.globalCompositeOperation = 'lighter'; fctx.globalAlpha = sky.lights * GLOW_ADD; fctx.drawImage(img.glow, g.x, g.y); }
+    fctx.globalCompositeOperation = 'source-over'; fctx.globalAlpha = 1;
+  }
   function drawMarker() {                              // куда идём
     if (!marker) return;
     const p = Math.floor(marker.t * 5) % 2, x = marker.x, y = marker.y;
@@ -565,7 +611,11 @@ export async function startGame(canvas: HTMLCanvasElement, room: Room, ui: GameU
   }
 
   function render(t: number) {
+    const sky = skyAt(hourNow());
     fctx.drawImage(img.world, 0, 0);
+    if (sky.lights) {                                  // на карте свет погашен; горящие окна и фонарь — отдельной картинкой поверх
+      fctx.globalAlpha = sky.lights; fctx.drawImage(img.lights, World.lights.x, World.lights.y); fctx.globalAlpha = 1;
+    }
     drawSparkles(t); drawSmoke(t);
     // кто дальше от зрителя, тот рисуется раньше
     const queue: { y: number; draw: () => void }[] = [];
@@ -591,11 +641,14 @@ export async function startGame(canvas: HTMLCanvasElement, room: Room, ui: GameU
     } });
     queue.sort((a, b) => a.y - b.y);
     for (const q of queue) q.draw();
+    const head = { x: seat.x + 2, y: fisher.y };       // макушка сидящего рыбака
     if (hero.sitting) drawFishing(fctx, fishing.st, t, {
-      x: rod.x, tipY: rod.tipY, waterY: rod.waterY, head: { x: seat.x + 2, y: fisher.y },
+      x: rod.x, tipY: rod.tipY, waterY: rod.waterY, head,
       bucket: bucket.carried ? null : { x: bucket.x, y: bucket.y - B.bodyH + 4 },
     }, { line: { img: img.line, x: World.line.x, y: World.line.y }, fish: fishArt });
     else if (someoneSits) fctx.drawImage(img.line, World.line.x, World.line.y);   // чужая удочка — леска в воде, как на картинке
+    drawNight(sky);                                    // всё, что ниже, — подсказки: они не темнеют
+    if (hero.sitting) drawBite(fctx, fishing.st, head);
     drawMarker(); drawPrompts(t);
     if (debug) drawDebug();
     const cx = Math.round(clamp(view.camX, 0, W - view.w)), cy = Math.round(clamp(view.camY, 0, H - view.h));
@@ -665,10 +718,11 @@ export async function startGame(canvas: HTMLCanvasElement, room: Room, ui: GameU
 
   // для отладки из консоли; step(dt, n) прокручивает игру вручную
   (window as any).FH_GAME = { hero, bucket, pack, view, keys, ghosts, fishing, room, sitDown, standUp, walkTo, zoom, pickUp, putDown, putOn, takeOff, setPack, fishAction, bucketAction, packAction,
-    step: (dt: number, n = 1) => { for (let i = 0; i < n; i++) update(dt); render(performance.now() / 1000); } };
+    step: (dt: number, n = 1) => { for (let i = 0; i < n; i++) update(dt); render(performance.now() / 1000); },
+    hourNow, setClock, setHour: (hour: number | null) => { fixedHour = hour ?? NaN; } };   // setHour(22) останавливает время на этом часе, setHour(null) — пускает снова
 
   return {
-    bucketAction, packAction, setPack, fishAction, standUp, zoom,
+    bucketAction, packAction, setPack, fishAction, standUp, zoom, setClock,
     destroy() {
       alive = false; cancelAnimationFrame(raf);
       for (const [t, type, fn, opts] of listeners) t.removeEventListener(type, fn, opts);

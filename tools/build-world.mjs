@@ -5,6 +5,7 @@
 //   app/public/assets/bucket.png, bucket-carry.png — ведро у дома: стоит на земле и в руке, ручкой вверх
 //   app/public/assets/pack.png    — рюкзак у дома: по кадру на каждую расцветку из shared/src/packs.ts (крупный — для выбора в интерфейсе)
 //   app/public/assets/pack-ground.png — он же вдвое меньше: таким он лежит на земле, под стать герою
+//   app/public/assets/lights.png, glow.png — свет в доме: горящие окна и фонарь, как на картинке (на карте они погашены), и ореол вокруг них
 //   app/public/assets/icon.png    — значок вкладки: лицо героя из app/app/game/hero.ts
 //   shared/src/world-data.ts      — проходимость и «глубина» предметов из tools/world-shapes.mjs
 //
@@ -304,6 +305,79 @@ function repaintSmoke(buf) {
   put(107, 41, C.dark);
 }
 
+// ---------- 3д. Свет в доме ----------
+// На картинке окна и фонарь горят. В игре свет зажигается только ночью, поэтому на карте он погашен:
+// стёкла перекрашены в тёмные, отсвет фонаря со стены убран. Всё перекрашенное уходит в lights.png таким,
+// как на картинке, — ночью игра кладёт эти пиксели обратно. glow.png — ореол вокруг стёкол:
+// им ночью разгоняется темнота и добавляется тёплый свет.
+const GLASS = ['2a3d4f', '344c60', '3f5b70', '4d6c80'].map(hex);     // погашенное стекло, от тени к свету
+const GLOW = hex('ffc878');                                         // цвет света из окон
+function lightMask(d) {
+  const at = (x, y) => { const i = (y * W + x) * 3; return [d[i], d[i + 1], d[i + 2]]; };
+  const lit = c => c[0] > 200 && c[1] > 130 && c[2] < 170 && c[0] - c[2] > 80;   // горящее стекло: ярко-жёлтое и оранжевое
+  const glass = new Uint8Array(W * H), owner = new Uint8Array(W * H);            // owner — номер источника света + 1
+  SHAPES.lights.forEach((s, n) => {
+    const [x0, y0, x1, y1] = s.rect;
+    if (s.whole) {                                                 // фонарь: стекло — всё, что внутри контура
+      for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) if (lum(at(x, y)) > 45) { glass[y * W + x] = 1; owner[y * W + x] = n + 1; }
+      return;
+    }
+    // окно: связные пятна горящих пикселей, в которых есть по-настоящему яркие, — блики на раме и подоконнике так отсеиваются
+    const seen = new Uint8Array(W * H);
+    for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) {
+      if (seen[y * W + x] || !lit(at(x, y))) continue;
+      const spot = [], st = [[x, y]]; let bright = false;
+      while (st.length) {
+        const [px, py] = st.pop(), j = py * W + px;
+        if (px < x0 || px > x1 || py < y0 || py > y1 || seen[j] || !lit(at(px, py))) continue;
+        seen[j] = 1; spot.push(j); if (lum(at(px, py)) > 170) bright = true;
+        st.push([px + 1, py], [px - 1, py], [px, py + 1], [px, py - 1]);
+      }
+      if (bright) for (const j of spot) { glass[j] = 1; owner[j] = n + 1; }
+    }
+  });
+  return { glass, owner };
+}
+// Гасит свет на карте и возвращает маску перекрашенных пикселей.
+function repaintLights(buf, m) {
+  const src = Buffer.from(buf);
+  const at = (x, y) => { const i = (y * W + x) * 3; return [src[i], src[i + 1], src[i + 2]]; };
+  const put = (x, y, c) => { const i = (y * W + x) * 3; buf[i] = c[0]; buf[i + 1] = c[1]; buf[i + 2] = c[2]; };
+  const changed = new Uint8Array(W * H);
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) if (m.glass[y * W + x]) {   // стекло: чем ярче горело, тем светлее отблеск
+    const l = lum(at(x, y));
+    put(x, y, GLASS[l >= 215 ? 3 : l >= 190 ? 2 : l >= 160 ? 1 : 0]); changed[y * W + x] = 1;
+  }
+  for (const s of SHAPES.lights) if (s.wall) {                      // отсвет на стене: делим цвет на то, во сколько раз фонарь его высветлил
+    const { at: [cx, cy], full, fade, box: [x0, y0, x1, y1] } = s.wall, K = [0.5, 0.67, 0.35];   // жёлтого свет добавил больше, чем синего
+    for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) {
+      const i = y * W + x, c = at(x, y);
+      if (m.glass[i] || lum(c) < 50 || c[2] > c[0] - 25) continue;   // не стена: стекло, контуры, серый металл фонаря, синяя рама двери
+      const g = Math.max(0, Math.min(1, 1 - (Math.hypot(x - cx, y - cy) - full) / (fade - full)));
+      if (g > 0) { put(x, y, c.map((v, k) => Math.round(v / (1 + K[k] * g)))); changed[i] = 1; }
+    }
+  }
+  return changed;
+}
+// Ореол: каждому пикселю — самое сильное из свечений стёкол, до которых он достаёт. Возвращает прямоугольник и RGBA.
+function glowAround(m) {
+  const panes = [];
+  for (let i = 0; i < W * H; i++) if (m.glass[i]) panes.push([i % W, (i / W) | 0, SHAPES.lights[m.owner[i] - 1].glow]);
+  const power = new Float32Array(W * H); let x0 = W, y0 = H, x1 = 0, y1 = 0;
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+    let a = 0;
+    for (const [px, py, r] of panes) { const dx = x - px, dy = y - py; if (dx > -r && dx < r && dy > -r && dy < r) a = Math.max(a, 1 - Math.hypot(dx, dy) / r); }
+    if (a <= 0) continue;
+    power[y * W + x] = a; x0 = Math.min(x0, x); x1 = Math.max(x1, x); y0 = Math.min(y0, y); y1 = Math.max(y1, y);
+  }
+  const w = x1 - x0 + 1, h = y1 - y0 + 1, buf = Buffer.alloc(w * h * 4);
+  for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) {
+    const a = power[y * W + x], o = ((y - y0) * w + (x - x0)) * 4;
+    buf[o] = GLOW[0]; buf[o + 1] = GLOW[1]; buf[o + 2] = GLOW[2]; buf[o + 3] = Math.round(255 * a * a * (3 - 2 * a));   // у стекла — в полную силу, к краю плавно гаснет
+  }
+  return { x: x0, y: y0, w, h, buf };
+}
+
 // ---------- 4. Разметка → растры ----------
 function inPoly(pts, x, y) {
   let inside = false;
@@ -392,6 +466,7 @@ function rle(arr) {                                                  // [зна�
   const sack = packMask(src);
   repaintPack(world, sack);
   repaintSmoke(world);
+  const lamps = lightMask(src), lampsOff = repaintLights(world, lamps);
   fs.mkdirSync(ASSETS, { recursive: true });
   await sharp(world, { raw: { width: W, height: H, channels: 3 } }).png({ compressionLevel: 9 }).toFile(path.join(ASSETS, 'world.png'));
 
@@ -412,6 +487,11 @@ function rle(arr) {                                                  // [зна�
   // сидящий рыбак с удочкой и отдельно леска со всплеском — так, как они на картинке
   const fisher = cut(mask.body, mask.rod), line = cut(mask.line);
   await save('fisher.png', fisher.w, fisher.h, fisher.buf);
+
+  // свет в доме: всё, что на карте погашено, — таким, как на картинке, и ореол вокруг стёкол
+  const lights = cut(lampsOff), glow = glowAround(lamps);
+  await save('lights.png', lights.w, lights.h, lights.buf);
+  await save('glow.png', glow.w, glow.h, glow.buf);
   await save('line.png', line.w, line.h, line.buf);
 
   // ведро: стоит (с тенью, как на картинке) и в руке (ручка поднята, без тени)
@@ -479,7 +559,7 @@ function rle(arr) {                                                  // [зна�
   const { walk, depth, grass } = bake(world);
   const tip = (() => { for (let y = 0; y < H; y++) if (mask.line[y * W + 48]) return y; return 239; })();
   // rev — отпечаток картинок: игра дописывает его к их адресам, чтобы после пересборки браузер не показывал старые из кеша
-  const rev = createHash('sha1').update(world).update(fisher.buf).update(line.buf).update(stand.buf).update(carry).update(sheet).update(small).digest('hex').slice(0, 8);
+  const rev = createHash('sha1').update(world).update(fisher.buf).update(line.buf).update(stand.buf).update(carry).update(sheet).update(small).update(lights.buf).update(glow.buf).digest('hex').slice(0, 8);
   const data = {
     w: W, h: H, rev,
     fisher: { x: fisher.x, y: fisher.y, w: fisher.w, h: fisher.h },
@@ -487,16 +567,17 @@ function rle(arr) {                                                  // [зна�
     rod: { x: 48, tipY: tip, waterY: SHAPES.points.waterY },         // леска: столбец, кончик удилища, уровень воды
     seat: { x: SHAPES.points.seat[0], y: SHAPES.points.seat[1], r: SHAPES.points.seatRadius },
     bucket, pack, smoke: SMOKE,
+    lights: { x: lights.x, y: lights.y, w: lights.w, h: lights.h }, glow: { x: glow.x, y: glow.y, w: glow.w, h: glow.h },
     sparkles: sparkles(world),
     walk: rle(walk), depth: rle(depth),
   };
   const js = '// Сгенерировано tools/build-world.mjs из tools/world-shapes.mjs — руками не править.\n' +
     '// walk и depth — растры 240×320 парами [значение, длина]: проходимость и строка-опора предмета в точке.\n' +
-    'export const WORLD_DATA = ' + JSON.stringify(data).replace(/,"(fisher|line|rod|seat|bucket|pack|smoke|sparkles|walk|depth)"/g, ',\n  "$1"').replace('{"w"', '{\n  "w"').replace(/\}$/, '\n}') + ';\n';
+    'export const WORLD_DATA = ' + JSON.stringify(data).replace(/,"(fisher|line|rod|seat|bucket|pack|smoke|lights|sparkles|walk|depth)"/g, ',\n  "$1"').replace('{"w"', '{\n  "w"').replace(/\}$/, '\n}') + ';\n';
   fs.writeFileSync(path.join(ROOT, 'shared', 'src', 'world-data.ts'), js);
 
   const count = a => a.reduce((s, v) => s + (v ? 1 : 0), 0);
-  console.log(`world.png ${W}x${H}; fisher.png ${fisher.w}x${fisher.h} @ ${fisher.x},${fisher.y}; line.png ${line.w}x${line.h}; bucket.png ${stand.w}x${stand.h} @ ${stand.x},${stand.y}, опора ${bucket.baseX},${bucket.baseY}, тень ${shadowPx.length} px; bucket-carry.png ${cw}x${ch}; проходимо ${count(walk)} px; за предметами ${count(depth)} px; pack.png ${pw * kinds}x${ph}, pack-ground.png ${sw * kinds}x${sh}, опора ${pack.baseX},${pack.baseY}, тень ${sackShadow.length} px; бликов ${data.sparkles.length}; world-data.ts ${js.length} байт`);
+  console.log(`world.png ${W}x${H}; fisher.png ${fisher.w}x${fisher.h} @ ${fisher.x},${fisher.y}; line.png ${line.w}x${line.h}; bucket.png ${stand.w}x${stand.h} @ ${stand.x},${stand.y}, опора ${bucket.baseX},${bucket.baseY}, тень ${shadowPx.length} px; bucket-carry.png ${cw}x${ch}; проходимо ${count(walk)} px; за предметами ${count(depth)} px; pack.png ${pw * kinds}x${ph}, pack-ground.png ${sw * kinds}x${sh}, опора ${pack.baseX},${pack.baseY}, тень ${sackShadow.length} px; lights.png ${lights.w}x${lights.h} @ ${lights.x},${lights.y}, glow.png ${glow.w}x${glow.h} @ ${glow.x},${glow.y}, стёкол ${count(lamps.glass)} px; бликов ${data.sparkles.length}; world-data.ts ${js.length} байт`);
 
   if (debugDir) {                                                    // проверочные картинки: разметка поверх карты
     fs.mkdirSync(debugDir, { recursive: true });

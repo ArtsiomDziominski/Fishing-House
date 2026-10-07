@@ -4,6 +4,7 @@
 //   GAME_PORT       порт этого процесса (по умолчанию 2567)
 //   REDIS_URL       пусто — один процесс без Redis
 //   PUBLIC_ADDRESS  как браузер дойдёт до этого процесса, например fishing.example.com/game/1 (за Caddy)
+//   DEV_CLOCK       1 — игрокам можно переводить часы причала (см. clock.ts); по умолчанию — везде, кроме продакшена
 
 import { defineServer, defineRoom, RedisPresence, RedisDriver } from 'colyseus';
 import { ROOM } from '@fh/shared';
