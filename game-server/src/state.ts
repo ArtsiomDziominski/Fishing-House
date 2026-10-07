@@ -14,7 +14,7 @@ export const PlayerState = schema({
   carrying: t.boolean(),      // ведро в руке
   bx: t.int16(),              // где стоит ведро, если не в руке
   by: t.int16(),
-  bucketHome: t.boolean(),    // ведро на своём месте у дома
+  bucketHome: t.boolean(),    // ведро на своём месте с картинки, никем не тронутое
   wearing: t.boolean(),       // рюкзак на спине
   px: t.int16(),              // где лежит рюкзак, если не на спине
   py: t.int16(),

@@ -29,27 +29,8 @@ interface Leaf { x: number; y: number; age: number; life: number; speed: number;
 
 const rnd = ([a, b]: Range) => a + Math.random() * (b - a);
 
-// Где на карте вода: синие пиксели, связанные с рекой у нижнего края. Так в воду не попадают синяя дверь и стёкла окон.
-function findWater(map: CanvasImageSource): Uint8Array {
-  const c = document.createElement('canvas'); c.width = W; c.height = H;
-  const cx = c.getContext('2d', { willReadFrequently: true })!; cx.drawImage(map, 0, 0);
-  const px = cx.getImageData(0, 0, W, H).data, water = new Uint8Array(W * H);
-  const blue = (i: number) => px[i * 4 + 2]! > px[i * 4]! + 30 && px[i * 4 + 2]! > px[i * 4 + 1]! - 10;
-  const stack: number[] = [];
-  for (let i = W * (H - 40); i < W * H; i++) if (blue(i)) stack.push(i);     // река занимает низ карты — отсюда и растём
-  while (stack.length) {
-    const i = stack.pop()!; if (water[i] || !blue(i)) continue;
-    water[i] = 1;
-    const x = i % W;
-    if (x > 0) stack.push(i - 1); if (x < W - 1) stack.push(i + 1);
-    if (i >= W) stack.push(i - W); if (i < W * (H - 1)) stack.push(i + W);
-  }
-  return water;
-}
-
-// map — карта мира (по ней ищется вода).
-export function createWeatherView(map: CanvasImageSource) {
-  const water = findWater(map);
+// water — где на карте вода (её находит river-view.ts): капля там оставляет круги, а не брызги.
+export function createWeatherView(water: Uint8Array) {
   const st = { clouds: 0, rain: 0, wind: 0 };        // сила явлений сейчас, 0..1
   const drops: Drop[] = Array.from({ length: RAIN.drops }, () => ({ x: 0, y: 0, h: 1, len: 1, t: 0, wait: 0, live: false }));
   const splashes: Splash[] = [], gusts: Gust[] = [], leaves: Leaf[] = [];

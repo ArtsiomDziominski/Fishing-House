@@ -15,6 +15,7 @@ import {
 } from '@fh/shared';
 import { HERO } from './hero.ts';
 import { createFishingView, drawBite, drawFishing, type FishArt } from './fishing-view.ts';
+import { createRiverView } from './river-view.ts';
 import { createWeatherView, HAZE } from './weather-view.ts';
 
 export interface Actions { bucket: string | null; pack: string | null; fish: string | null; hot: boolean; stand: boolean }
@@ -112,8 +113,9 @@ export async function startGame(canvas: HTMLCanvasElement, room: Room, ui: GameU
 
   // ---------- картинки ----------
   const img: Record<'world' | 'fisher' | 'line' | 'bucket' | 'carry' | 'pack' | 'lights' | 'glow', HTMLImageElement> = {} as any;
-  const files = { world: 'world.png', fisher: 'fisher.png', line: 'line.png', bucket: 'bucket.png', carry: 'bucket-carry.png', pack: 'pack-ground.png', lights: 'lights.png', glow: 'glow.png' } as const;
-  await Promise.all((Object.keys(files) as (keyof typeof files)[]).map(k => loadImage('/assets/' + files[k] + '?v=' + World.rev).then(im => { img[k] = im; })));
+  const files: Partial<Record<keyof typeof img, string>> = { world: 'world.png', fisher: 'fisher.png', line: 'line.png', bucket: 'bucket.png', carry: 'bucket-carry.png', pack: 'pack-ground.png' };
+  if (World.lights) Object.assign(files, { lights: 'lights.png', glow: 'glow.png' });   // свет в окнах — только пока дом стоит на карте
+  await Promise.all((Object.keys(files) as (keyof typeof img)[]).map(k => loadImage('/assets/' + files[k] + '?v=' + World.rev).then(im => { img[k] = im; })));
   const rigs = {} as Record<Dir, { arm: HTMLCanvasElement; x: number; y: number; bucket: [number, number] }>;
   const fishArt: Record<string, FishArt & { tail: [string, string] }> = {};
   for (const dir of ['down', 'up', 'left', 'right'] as const) {
@@ -144,7 +146,8 @@ export async function startGame(canvas: HTMLCanvasElement, room: Room, ui: GameU
   }
   const pailBody = makeCanvas(B.w, B.h);                                     // ведро без тени — для любого места, кроме исходного
   { const px = ctx2d(pailBody); px.drawImage(img.bucket, 0, 0); for (const [dx, dy] of B.shadow) px.clearRect(dx!, dy!, 1, 1); }
-  const wx = createWeatherView(img.world);                                   // дождь, ветер, пасмурный свет
+  const river = createRiverView(img.world);                                  // где на карте вода и как она течёт
+  const wx = createWeatherView(river.water);                                 // дождь, ветер, пасмурный свет
 
   // ---------- размер ----------
   // Карта — это и есть кадр: она 16:9 и вписывается в окно целиком. На экране 16:9 она занимает его весь, на любом
@@ -334,7 +337,7 @@ export async function startGame(canvas: HTMLCanvasElement, room: Room, ui: GameU
     if (type === 'self') applySelf(m);
     else if (type === 'bag') { bag = m; pendingBag = null; ui.bag(bag); }
     else if (m.e === 'needBucket') {
-      if (bucket.home) { ui.toast('Рыбу некуда класть. Принеси ведро — оно стоит у дома'); bucket.pointed = true; }
+      if (bucket.home) { ui.toast('Рыбу некуда класть. Принеси ведро — оно стоит на поляне'); bucket.pointed = true; }
       else ui.toast('Ведро далеко. Поставь его у причала');
     } else {
       if (m.e === 'early') ui.toast('Рано дёрнул — рыба ушла', 'bad');
@@ -375,7 +378,7 @@ export async function startGame(canvas: HTMLCanvasElement, room: Room, ui: GameU
   const DIRS: Record<string, [number, number]> = { ArrowUp: [0, -1], KeyW: [0, -1], ArrowDown: [0, 1], KeyS: [0, 1], ArrowLeft: [-1, 0], KeyA: [-1, 0], ArrowRight: [1, 0], KeyD: [1, 0] };
   function update(dt: number) {
     updateGhosts(dt);
-    wx.update(dt, weather);
+    wx.update(dt, weather); river.update(dt, wx.st.rain);
     if (!ready) return;
     let dx = 0, dy = 0, passed = false;
     const step = (bucket.carried ? CARRY_SPEED : SPEED) * dt;
@@ -530,12 +533,13 @@ export async function startGame(canvas: HTMLCanvasElement, room: Room, ui: GameU
     for (let j = Math.ceil(-r); j <= r; j++) { const half = Math.floor(Math.sqrt(r * r - j * j)); fctx.fillRect(Math.round(cx2) - half, Math.round(cy2) + j, half * 2 + 1, 1); }
   }
   function drawSmoke(t: number, wind: number) {        // wind — сила ветра, 0..1: дым стелется ниже и улетает дальше
+    const mouth = World.smoke; if (!mouth) return;     // дома на карте нет — нет и трубы
     const puffs: { x: number; y: number; r: number; lobes: [number, number, number][] }[] = [];
     for (let i = 0; i < SMOKE.n; i++) {
       const phase = t / SMOKE.life + i / SMOKE.n, born = Math.floor(phase), u = phase - born, id = born * SMOKE.n + i;
       const rise = u < 0.2 ? u / 0.2 : 1, drift = u < 0.2 ? 0 : (u - 0.2) / 0.8;          // сначала вверх, потом по ветру
-      const x = World.smoke.x + rise * 2 + drift * (40 + noise(id, 1) * 14) * (1 + wind * 0.9) + Math.sin(u * 9 + id) * 1.5;
-      const y = World.smoke.y - rise * 9 - drift * (20 + noise(id, 2) * 10) * (1 - wind * 0.55);
+      const x = mouth.x + rise * 2 + drift * (40 + noise(id, 1) * 14) * (1 + wind * 0.9) + Math.sin(u * 9 + id) * 1.5;
+      const y = mouth.y - rise * 9 - drift * (20 + noise(id, 2) * 10) * (1 - wind * 0.55);
       const r = u < 0.12 ? 1 + u * 20 : u < 0.6 ? 3.4 + (u - 0.12) * 4 : 5.3 * (1 - (u - 0.6) / 0.4);   // растёт, потом тает
       if (r < 0.8) continue;
       const spread = 0.3 + u * 1.1;                                                       // чем дальше от трубы, тем рыхлее клуб
@@ -550,17 +554,17 @@ export async function startGame(canvas: HTMLCanvasElement, room: Room, ui: GameU
   // Вечер и ночь: слой цвета неба умножается на кадр, а свет из окон и фонаря проедает в нём дыры — возле дома светло.
   // Сверху тот же ореол кладётся тёплой добавкой. Днём (белое небо, свет погашен) кадр остаётся как есть.
   const GLOW_ADD = 0.3;                                 // доля тёплой добавки
-  // tint — цвет неба с погодой, lights — горит ли свет в доме (0..1), haze — серая дымка под тучами (0..1).
-  function drawNight(tint: number[], lights: number, haze: number) {
+  // tint — цвет неба с погодой, lit — горит ли свет в доме (0..1), haze — серая дымка под тучами (0..1).
+  function drawNight(tint: number[], lit: number, haze: number) {
+    const g = World.glow, lights = g ? lit : 0;        // без дома светить нечему: ночь тёмная везде
     if (!lights && haze < 0.004 && tint.every(v => v >= 254)) return;
-    const g = World.glow;
     dctx.globalCompositeOperation = 'source-over'; dctx.globalAlpha = 1;
     dctx.fillStyle = `rgb(${tint.join(',')})`; dctx.fillRect(0, 0, W, H);
-    if (lights) { dctx.globalCompositeOperation = 'destination-out'; dctx.globalAlpha = lights; dctx.drawImage(img.glow, g.x, g.y); }
+    if (g && lights) { dctx.globalCompositeOperation = 'destination-out'; dctx.globalAlpha = lights; dctx.drawImage(img.glow, g.x, g.y); }
     fctx.globalCompositeOperation = 'multiply'; fctx.drawImage(dusk, 0, 0);
     fctx.globalCompositeOperation = 'source-over';
     if (haze >= 0.004) { fctx.globalAlpha = haze; fctx.fillStyle = HAZE; fctx.fillRect(0, 0, W, H); }
-    if (lights) { fctx.globalCompositeOperation = 'lighter'; fctx.globalAlpha = lights * GLOW_ADD; fctx.drawImage(img.glow, g.x, g.y); }
+    if (g && lights) { fctx.globalCompositeOperation = 'lighter'; fctx.globalAlpha = lights * GLOW_ADD; fctx.drawImage(img.glow, g.x, g.y); }
     fctx.globalCompositeOperation = 'source-over'; fctx.globalAlpha = 1;
   }
   function drawMarker() {                              // куда идём
@@ -631,10 +635,10 @@ export async function startGame(canvas: HTMLCanvasElement, room: Room, ui: GameU
   function render(t: number) {
     const sky = skyAt(hourNow());
     fctx.drawImage(img.world, 0, 0);
-    if (sky.lights) {                                  // на карте свет погашен; горящие окна и фонарь — отдельной картинкой поверх
+    if (sky.lights && World.lights) {                  // на карте свет погашен; горящие окна и фонарь — отдельной картинкой поверх
       fctx.globalAlpha = sky.lights; fctx.drawImage(img.lights, World.lights.x, World.lights.y); fctx.globalAlpha = 1;
     }
-    drawSparkles(t, 1 - 0.9 * wx.st.clouds); drawSmoke(t, wx.st.wind);
+    river.draw(fctx); drawSparkles(t, 1 - 0.9 * wx.st.clouds); drawSmoke(t, wx.st.wind);
     // кто дальше от зрителя, тот рисуется раньше
     const queue: { y: number; draw: () => void }[] = [];
     // Все, кто сидит, — один рыбак с картинки; рюкзак ему рисуем свой, а если сидят только другие — первого из них.
@@ -727,7 +731,7 @@ export async function startGame(canvas: HTMLCanvasElement, room: Room, ui: GameU
   // для отладки из консоли; step(dt, n) прокручивает игру вручную
   (window as any).FH_GAME = { hero, bucket, pack, view, keys, ghosts, fishing, room, sitDown, standUp, walkTo, pickUp, putDown, putOn, takeOff, setPack, fishAction, bucketAction, packAction,
     step: (dt: number, n = 1) => { for (let i = 0; i < n; i++) update(dt); render(performance.now() / 1000); },
-    hourNow, setClock, setWeather, wx, setHour: (hour: number | null) => { fixedHour = hour ?? NaN; } };   // setHour(22) останавливает время на этом часе, setHour(null) — пускает снова
+    hourNow, setClock, setWeather, wx, river, setHour: (hour: number | null) => { fixedHour = hour ?? NaN; } };   // setHour(22) останавливает время на этом часе, setHour(null) — пускает снова
 
   return {
     bucketAction, packAction, setPack, fishAction, standUp, setClock, setWeather,

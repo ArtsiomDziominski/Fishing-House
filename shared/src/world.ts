@@ -1,10 +1,11 @@
-// Мир: проходимость, «глубина» предметов и поиск пути по карте 240×320.
-// Растры лежат в world-data.ts (собирает tools/build-world.js).
+// Мир: проходимость, «глубина» предметов и поиск пути по карте.
+// Растры и размер карты лежат в world-data.ts (собирает tools/build-world.mjs).
 // Один экземпляр на процесс: клиент ставит в него своё ведро как препятствие, сервер карту не меняет.
 
 import { WORLD_DATA as DATA } from './world-data.ts';
 
 export interface Point { x: number; y: number }
+export interface Box extends Point { w: number; h: number }
 
 const W = DATA.w, H = DATA.h;
 
@@ -122,5 +123,7 @@ function findPath(from: Point, to: Point): Point[] | null {
 
 export const World = {
   W, H, rev: DATA.rev, pic: DATA.pic, walk, depth, canWalk, depthAt, nearestWalkable, findPath, block, unblock,
-  fisher: DATA.fisher, line: DATA.line, rod: DATA.rod, seat: DATA.seat, bucket: DATA.bucket, pack: DATA.pack, smoke: DATA.smoke, lights: DATA.lights, glow: DATA.glow, sparkles: DATA.sparkles as [number, number, number, number][],
+  fisher: DATA.fisher, line: DATA.line, rod: DATA.rod, seat: DATA.seat, bucket: DATA.bucket, pack: DATA.pack, sparkles: DATA.sparkles as [number, number, number, number][],
+  // Дом: устье трубы, горящие окна и ореол вокруг них. Пока дома на карте нет (house.onMap в tools/world-shapes.mjs) — null.
+  smoke: DATA.smoke as Point | null, lights: DATA.lights as Box | null, glow: DATA.glow as Box | null,
 };

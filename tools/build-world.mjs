@@ -1,12 +1,14 @@
 // Собирает мир из картинки-образца (art/reference.webp):
-//   app/public/assets/world.png   — карта 569×320 (16:9): в середине картинка без рыбака (причал под ним дорисован) и без дыма над трубой
-//                                   (его рисует игра), по бокам — лес и луг с дорогой, их дорисовывает tools/world-sides.mjs
+//   app/public/assets/world.png   — карта 569×320 (16:9): в середине картинка без рыбака (причал под ним дорисован) и без дома
+//                                   (на его месте поляна), по бокам — лес и луг с дорогой; всё это дорисовывает tools/world-sides.mjs
 //   app/public/assets/fisher.png  — сидящий рыбак с удочкой, вырезанный с картинки пиксель в пиксель
 //   app/public/assets/line.png    — его леска со всплеском (пока он не рыбачит, рисуется как на картинке)
 //   app/public/assets/bucket.png, bucket-carry.png — ведро у дома: стоит на земле и в руке, ручкой вверх
 //   app/public/assets/pack.png    — рюкзак у дома: по кадру на каждую расцветку из shared/src/packs.ts (крупный — для выбора в интерфейсе)
 //   app/public/assets/pack-ground.png — он же вдвое меньше: таким он лежит на земле, под стать герою
-//   app/public/assets/lights.png, glow.png — свет в доме: горящие окна и фонарь, как на картинке (на карте они погашены), и ореол вокруг них
+//   art/house/house.png, lights.png, glow.png, house.json — дом, вырезанный с картинки целиком: сам он (свет погашен), его горящие
+//                                   окна с фонарём, ореол вокруг них и где что лежит. Сейчас дома на карте нет — это запас на будущее
+//   app/public/assets/lights.png, glow.png — те же свет и ореол для игры; только когда дом стоит на карте (house.onMap в разметке)
 //   app/public/assets/icon.png    — значок вкладки: лицо героя из app/app/game/hero.ts
 //   shared/src/world-data.ts      — проходимость и «глубина» предметов из tools/world-shapes.mjs
 //
@@ -30,6 +32,7 @@ const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 const ASSETS = path.join(ROOT, 'app', 'public', 'assets');
 const W = 240, H = 320;                                             // картинка-образец в арт-пикселях
 const SIDE = SHAPES.sides.left, MW = SIDE + W + SHAPES.sides.right;                 // карта шире картинки: та стоит в середине, по бокам лес и луг
+const HOUSE = SHAPES.house.onMap;                                   // стоит ли дом на карте; если нет — на его месте поляна
 const debugDir = process.argv.includes('--debug') ? process.argv[process.argv.indexOf('--debug') + 1] : null;
 
 const lum = c => 0.299 * c[0] + 0.587 * c[1] + 0.114 * c[2];
@@ -274,7 +277,6 @@ function repaintPack(buf, m) {
 // ---------- 3г. Дым над трубой ----------
 // Дым в игре живой — клубы рисует движок, а нарисованные на картинке стираются: листва за ними
 // затягивается с краёв (каждый пиксель берёт цвет у случайного уже чистого соседа), труба дорисовывается.
-const SMOKE = { x: 108, y: 38 };                                   // устье трубы: отсюда выходят клубы
 function repaintSmoke(buf) {
   const at = (x, y) => { const i = (y * W + x) * 3; return [buf[i], buf[i + 1], buf[i + 2]]; };
   const put = (x, y, c) => { const i = (y * W + x) * 3; buf[i] = c[0]; buf[i + 1] = c[1]; buf[i + 2] = c[2]; };
@@ -319,7 +321,7 @@ function lightMask(d) {
   const at = (x, y) => { const i = (y * W + x) * 3; return [d[i], d[i + 1], d[i + 2]]; };
   const lit = c => c[0] > 200 && c[1] > 130 && c[2] < 170 && c[0] - c[2] > 80;   // горящее стекло: ярко-жёлтое и оранжевое
   const glass = new Uint8Array(W * H), owner = new Uint8Array(W * H);            // owner — номер источника света + 1
-  SHAPES.lights.forEach((s, n) => {
+  SHAPES.house.lights.forEach((s, n) => {
     const [x0, y0, x1, y1] = s.rect;
     if (s.whole) {                                                 // фонарь: стекло — всё, что внутри контура
       for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) if (lum(at(x, y)) > 45) { glass[y * W + x] = 1; owner[y * W + x] = n + 1; }
@@ -351,7 +353,7 @@ function repaintLights(buf, m) {
     const l = lum(at(x, y));
     put(x, y, GLASS[l >= 215 ? 3 : l >= 190 ? 2 : l >= 160 ? 1 : 0]); changed[y * W + x] = 1;
   }
-  for (const s of SHAPES.lights) if (s.wall) {                      // отсвет на стене: делим цвет на то, во сколько раз фонарь его высветлил
+  for (const s of SHAPES.house.lights) if (s.wall) {                      // отсвет на стене: делим цвет на то, во сколько раз фонарь его высветлил
     const { at: [cx, cy], full, fade, box: [x0, y0, x1, y1] } = s.wall, K = [0.5, 0.67, 0.35];   // жёлтого свет добавил больше, чем синего
     for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) {
       const i = y * W + x, c = at(x, y);
@@ -365,7 +367,7 @@ function repaintLights(buf, m) {
 // Ореол: каждому пикселю — самое сильное из свечений стёкол, до которых он достаёт. Возвращает прямоугольник и RGBA.
 function glowAround(m) {
   const panes = [];
-  for (let i = 0; i < W * H; i++) if (m.glass[i]) panes.push([i % W, (i / W) | 0, SHAPES.lights[m.owner[i] - 1].glow]);
+  for (let i = 0; i < W * H; i++) if (m.glass[i]) panes.push([i % W, (i / W) | 0, SHAPES.house.lights[m.owner[i] - 1].glow]);
   const power = new Float32Array(W * H); let x0 = W, y0 = H, x1 = 0, y1 = 0;
   for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
     let a = 0;
@@ -379,6 +381,78 @@ function glowAround(m) {
     buf[o] = GLOW[0]; buf[o + 1] = GLOW[1]; buf[o + 2] = GLOW[2]; buf[o + 3] = Math.round(255 * a * a * (3 - 2 * a));   // у стекла — в полную силу, к краю плавно гаснет
   }
   return { x: x0, y: y0, w, h, buf };
+}
+
+// ---------- 3е. Дом ----------
+// Дом вырезается с картинки целиком — с трубой, бочками, ящиками, поленницей и удочкой у стены. Его силуэт — всё внутри
+// грубого контура из разметки, что не зелень. Стволы за крышей и ветка у бочки того же цвета и стоят вплотную, поэтому
+// снимаются отдельно: от точки из разметки по пикселям до тёмного контура, общего с домом.
+function houseMask(d) {                                              // d — картинка уже без ведра, рюкзака и дыма, свет погашен
+  const at = (x, y) => { const i = (y * W + x) * 3; return [d[i], d[i + 1], d[i + 2]]; };
+  const green = c => c[1] > c[0] + 3 && c[1] >= c[2] - 5, ink = c => lum(c) < 30;
+  const body = new Uint8Array(W * H), near8 = [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [-1, -1], [1, -1], [-1, 1]];
+  fillShape({ poly: SHAPES.house.outline }, (x, y) => { if (!green(at(x, y))) body[y * W + x] = 1; });
+  for (const seed of SHAPES.house.skip) {
+    const st = [seed];
+    while (st.length) {
+      const [x, y] = st.pop(), i = y * W + x;
+      if (x < 0 || y < 0 || x >= W || y >= H || !body[i] || ink(at(x, y))) continue;
+      body[i] = 0; st.push([x + 1, y], [x - 1, y], [x, y + 1], [x, y - 1]);
+    }
+  }
+  {                                                                // контур снятых соседей: тёмные пиксели, возле которых не осталось самого дома
+    const drop = [];
+    for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+      if (!body[y * W + x] || !ink(at(x, y))) continue;
+      let own = false;
+      for (let dy = -2; dy <= 2 && !own; dy++) for (let dx = -2; dx <= 2; dx++) {
+        const nx = x + dx, ny = y + dy;
+        if (nx >= 0 && ny >= 0 && nx < W && ny < H && body[ny * W + nx] && !ink(at(nx, ny))) { own = true; break; }
+      }
+      if (!own) drop.push(y * W + x);
+    }
+    for (const i of drop) body[i] = 0;
+  }
+  for (const s of SHAPES.house.keep) fillShape(s, (x, y) => { body[y * W + x] = 1; });
+  {                                                                // всё, что оказалось внутри силуэта: стальные обручи бочек — тоже «зелень»
+    const outer = new Uint8Array(W * H), st = [];
+    for (let x = 0; x < W; x++) st.push([x, 0], [x, H - 1]);
+    for (let y = 0; y < H; y++) st.push([0, y], [W - 1, y]);
+    while (st.length) {
+      const [x, y] = st.pop(), i = y * W + x;
+      if (x < 0 || y < 0 || x >= W || y >= H || outer[i] || body[i]) continue;
+      outer[i] = 1; st.push([x + 1, y], [x - 1, y], [x, y + 1], [x, y - 1]);
+    }
+    for (let i = 0; i < W * H; i++) if (!outer[i]) body[i] = 1;
+  }
+  {                                                                // оторванные пиксели (блик в кусте и подобное): остаётся самый большой кусок
+    const part = new Int32Array(W * H), sizes = [0];
+    for (let i0 = 0; i0 < W * H; i0++) if (body[i0] && !part[i0]) {
+      const id = sizes.length, st = [i0]; let n = 0; part[i0] = id;
+      while (st.length) {
+        const i = st.pop(), x = i % W, y = (i / W) | 0; n++;
+        for (const [dx, dy] of near8) { const nx = x + dx, ny = y + dy, j = ny * W + nx; if (nx >= 0 && ny >= 0 && nx < W && ny < H && body[j] && !part[j]) { part[j] = id; st.push(j); } }
+      }
+      sizes.push(n);
+    }
+    const main = sizes.indexOf(Math.max(...sizes));
+    for (let i = 0; i < W * H; i++) if (part[i] !== main) body[i] = 0;
+  }
+  return body;
+}
+// Что перерисовывается, когда дома нет: он сам и трава у его подножия, на которой лежат его тени (apron в разметке).
+// Выше опушки дыра на два пикселя шире силуэта: по краю крыши остаётся кайма сглаживания, лес её закроет.
+function houseHole(body) {
+  const hole = Uint8Array.from(body), edge = curveOf(SHAPES.glade.edge);
+  for (let k = 0; k < 2; k++) {
+    const src = Uint8Array.from(hole);
+    for (let y = 1; y < H - 1; y++) for (let x = 1; x < W - 1; x++) {
+      if (src[y * W + x] || y >= edge(x) - 1) continue;
+      for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) if (src[(y + dy) * W + x + dx]) hole[y * W + x] = 1;
+    }
+  }
+  fillShape({ poly: SHAPES.house.apron }, (x, y) => { hole[y * W + x] = 1; });
+  return hole;
 }
 
 // ---------- 4. Разметка → растры ----------
@@ -413,8 +487,10 @@ function bake(map, hedge) {                                         // map — �
   const at = (x, y) => { const i = (y * W + x) * 3; return [map[i], map[i + 1], map[i + 2]]; };
   const onMap = p => [p[0] + SIDE, p[1]];
   const walk = new Uint8Array(W * H);
-  for (const poly of [...SHAPES.walk, meadowWalk()]) fillShape(toMap({ poly }), (x, y) => { walk[y * W + x] = 1; });
-  for (const s of SHAPES.solids) fillShape(toMap(s), (x, y) => { walk[y * W + x] = 0; });
+  // двор зависит от того, стоит ли дом: с домом — вокруг него, без дома — вся поляна до опушки
+  const yard = HOUSE ? SHAPES.house.yard : SHAPES.glade.yard, own = list => (HOUSE ? list : []);
+  for (const poly of [yard, ...SHAPES.walk, meadowWalk()]) fillShape(toMap({ poly }), (x, y) => { walk[y * W + x] = 1; });
+  for (const s of [...SHAPES.solids, ...own(SHAPES.house.solids)]) fillShape(toMap(s), (x, y) => { walk[y * W + x] = 0; });
   {                                                                // оставить только то, куда можно дойти от причала
     const reach = new Uint8Array(W * H), st = [onMap(SHAPES.points.seat)];
     while (st.length) {
@@ -444,7 +520,7 @@ function bake(map, hedge) {                                         // map — �
   }
 
   const depth = new Uint16Array(W * H);
-  for (const o of SHAPES.occluders.map(toMap)) fillShape(o, (x, y) => {
+  for (const o of [...SHAPES.occluders, ...own(SHAPES.house.occluders)].map(toMap)) fillShape(o, (x, y) => {
     const i = y * W + x, c = at(x, y);
     if (o.carve === 'green' && isGreen(c)) return;
     if (o.carve === 'grass' && (grass[i] || (near[i] && isTan(c)))) return;
@@ -486,12 +562,15 @@ function rle(arr) {                                                  // [зна�
   repaintPack(world, sack);
   repaintSmoke(world);
   const lamps = lightMask(src), lampsOff = repaintLights(world, lamps);
-  const { buf: map, hedge } = widen(world, W, H, SHAPES.sides);      // картинка в середине, по бокам лес и луг с дорогой
+  const home = houseMask(world);
+  // картинка в середине, по бокам лес и луг с дорогой; если дом убран — на его месте поляна
+  const { buf: map, hedge } = widen(world, W, H, SHAPES.sides, HOUSE ? null : { hole: houseHole(home), plan: SHAPES.glade });
   fs.mkdirSync(ASSETS, { recursive: true });
   await sharp(map, { raw: { width: MW, height: H, channels: 3 } }).png({ compressionLevel: 9 }).toFile(path.join(ASSETS, 'world.png'));
 
   // Вырезка с картинки: пиксели под маской на прозрачном фоне. Возвращает прямоугольник и RGBA.
-  const cut = (...masks) => {
+  const cut = (...masks) => cutFrom(src, ...masks);
+  const cutFrom = (src, ...masks) => {
     let x0 = W, y0 = H, x1 = 0, y1 = 0;
     const on = i => masks.some(m => m[i]);
     for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) if (on(y * W + x)) { x0 = Math.min(x0, x); x1 = Math.max(x1, x); y0 = Math.min(y0, y); y1 = Math.max(y1, y); }
@@ -502,7 +581,8 @@ function rle(arr) {                                                  // [зна�
     }
     return { x: x0, y: y0, w, h, buf };
   };
-  const save = (name, w, h, buf) => sharp(buf, { raw: { width: w, height: h, channels: 4 } }).png({ compressionLevel: 9 }).toFile(path.join(ASSETS, name));
+  const saveTo = (dir, name, w, h, buf) => sharp(buf, { raw: { width: w, height: h, channels: 4 } }).png({ compressionLevel: 9 }).toFile(path.join(dir, name));
+  const save = (name, w, h, buf) => saveTo(ASSETS, name, w, h, buf);
 
   // сидящий рыбак с удочкой и отдельно леска со всплеском — так, как они на картинке
   const fisher = cut(mask.body, mask.rod), line = cut(mask.line);
@@ -510,9 +590,26 @@ function rle(arr) {                                                  // [зна�
 
   // свет в доме: всё, что на карте погашено, — таким, как на картинке, и ореол вокруг стёкол
   const lights = cut(lampsOff), glow = glowAround(lamps);
-  await save('lights.png', lights.w, lights.h, lights.buf);
-  await save('glow.png', glow.w, glow.h, glow.buf);
+  for (const [name, r] of [['lights.png', lights], ['glow.png', glow]]) {   // игре они нужны, только пока дом стоит на карте
+    if (HOUSE) await save(name, r.w, r.h, r.buf); else fs.rmSync(path.join(ASSETS, name), { force: true });
+  }
   await save('line.png', line.w, line.h, line.buf);
+
+  // дом на будущее: сам он, его свет и ореол, а в house.json — где что лежит (от левого верхнего угла house.png)
+  const house = cutFrom(world, home), houseDir = path.join(ROOT, 'art', 'house'), from = r => [r.x - house.x, r.y - house.y];
+  let foot = [0, 0]; for (let i = 0; i < W * H; i++) if (home[i] && ((i / W) | 0) >= foot[1]) foot = [i % W, (i / W) | 0];   // нижний угол дома
+  fs.mkdirSync(houseDir, { recursive: true });
+  await saveTo(houseDir, 'house.png', house.w, house.h, house.buf);
+  await saveTo(houseDir, 'lights.png', lights.w, lights.h, lights.buf);
+  await saveTo(houseDir, 'glow.png', glow.w, glow.h, glow.buf);
+  fs.writeFileSync(path.join(houseDir, 'house.json'), JSON.stringify({
+    about: 'Дом рыбака, вырезанный с картинки-образца (tools/build-world.mjs). Точки и места — в пикселях от левого верхнего угла house.png.',
+    size: [house.w, house.h],
+    at: [house.x, house.y],                                           // где он стоял на картинке-образце 240×320
+    foot: from({ x: foot[0], y: foot[1] }),                           // нижний угол — точка опоры
+    smoke: from({ x: SHAPES.house.smoke[0], y: SHAPES.house.smoke[1] }),   // устье трубы: отсюда идёт дым
+    lights: from(lights), glow: from(glow),                           // куда класть lights.png (горящие окна и фонарь) и glow.png (ореол)
+  }, null, 2) + '\n');
 
   // ведро: стоит (с тенью, как на картинке) и в руке (ручка поднята, без тени)
   const stand = cut(pail.body, pail.shadow), bodyOnly = cut(pail.body);
@@ -580,6 +677,7 @@ function rle(arr) {                                                  // [зна�
   const tip = (() => { for (let y = 0; y < H; y++) if (mask.line[y * W + 48]) return y; return 239; })();
   // rev — отпечаток картинок: игра дописывает его к их адресам, чтобы после пересборки браузер не показывал старые из кеша
   const rev = createHash('sha1').update(map).update(fisher.buf).update(line.buf).update(stand.buf).update(carry).update(sheet).update(small).update(lights.buf).update(glow.buf).digest('hex').slice(0, 8);
+  const smoke = SHAPES.house.smoke;
   const box = r => ({ x: r.x + SIDE, y: r.y, w: r.w, h: r.h });    // место вырезки: с картинки — на карту
   const data = {
     w: MW, h: H, rev,
@@ -588,8 +686,9 @@ function rle(arr) {                                                  // [зна�
     rod: { x: 48 + SIDE, tipY: tip, waterY: SHAPES.points.waterY },  // леска: столбец, кончик удилища, уровень воды
     seat: { x: SHAPES.points.seat[0] + SIDE, y: SHAPES.points.seat[1], r: SHAPES.points.seatRadius },
     bucket: { ...bucket, x: bucket.x + SIDE, baseX: bucket.baseX + SIDE }, pack: { ...pack, baseX: pack.baseX + SIDE },
-    smoke: { x: SMOKE.x + SIDE, y: SMOKE.y },
-    lights: box(lights), glow: box(glow),
+    // дым из трубы, горящие окна и ореол вокруг них — пока дом стоит на карте
+    smoke: HOUSE ? { x: smoke[0] + SIDE, y: smoke[1] } : null,
+    lights: HOUSE ? box(lights) : null, glow: HOUSE ? box(glow) : null,
     sparkles: sparkles(map),
     walk: rle(walk), depth: rle(depth),
   };
@@ -599,7 +698,7 @@ function rle(arr) {                                                  // [зна�
   fs.writeFileSync(path.join(ROOT, 'shared', 'src', 'world-data.ts'), js);
 
   const count = a => a.reduce((s, v) => s + (v ? 1 : 0), 0);
-  console.log(`world.png ${MW}x${H} (картинка ${W}x${H} со сдвигом ${SIDE}); fisher.png ${fisher.w}x${fisher.h} @ ${fisher.x},${fisher.y}; line.png ${line.w}x${line.h}; bucket.png ${stand.w}x${stand.h} @ ${stand.x},${stand.y}, опора ${bucket.baseX},${bucket.baseY}, тень ${shadowPx.length} px; bucket-carry.png ${cw}x${ch}; проходимо ${count(walk)} px; за предметами ${count(depth)} px; pack.png ${pw * kinds}x${ph}, pack-ground.png ${sw * kinds}x${sh}, опора ${pack.baseX},${pack.baseY}, тень ${sackShadow.length} px; lights.png ${lights.w}x${lights.h} @ ${lights.x},${lights.y}, glow.png ${glow.w}x${glow.h} @ ${glow.x},${glow.y}, стёкол ${count(lamps.glass)} px; бликов ${data.sparkles.length}; world-data.ts ${js.length} байт`);
+  console.log(`world.png ${MW}x${H} (картинка ${W}x${H} со сдвигом ${SIDE}); fisher.png ${fisher.w}x${fisher.h} @ ${fisher.x},${fisher.y}; line.png ${line.w}x${line.h}; bucket.png ${stand.w}x${stand.h} @ ${stand.x},${stand.y}, опора ${bucket.baseX},${bucket.baseY}, тень ${shadowPx.length} px; bucket-carry.png ${cw}x${ch}; проходимо ${count(walk)} px; за предметами ${count(depth)} px; pack.png ${pw * kinds}x${ph}, pack-ground.png ${sw * kinds}x${sh}, опора ${pack.baseX},${pack.baseY}, тень ${sackShadow.length} px; дом ${HOUSE ? 'на карте' : 'убран'}, art/house/house.png ${house.w}x${house.h} @ ${house.x},${house.y} (${count(home)} px); lights.png ${lights.w}x${lights.h} @ ${lights.x},${lights.y}, glow.png ${glow.w}x${glow.h} @ ${glow.x},${glow.y}, стёкол ${count(lamps.glass)} px; бликов ${data.sparkles.length}; world-data.ts ${js.length} байт`);
 
   if (debugDir) {                                                    // проверочные картинки: разметка поверх карты
     fs.mkdirSync(debugDir, { recursive: true });

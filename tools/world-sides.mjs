@@ -1,9 +1,11 @@
 // Дорисовывает карту по бокам от картинки-образца: слева лес, справа луг с дорогой.
 // Река и кусты у нижнего края идут через всю карту. План боков (берега, дорога, границы луга) — sides в world-shapes.mjs.
+// Тем же способом зарастает место дома, когда он убран с карты: поляна и опушка за ней (план — glade там же).
 //
 // Листва не выдумывается: каждая крона и каждый куст собраны из кругов, снятых с настоящих крон и кустов картинки,
 // под новым зубчатым контуром. Так бока получаются той же руки, что и середина. Деревья при этом разные:
 // у каждого своя форма кроны (от одного круга до пяти под общим контуром), своя ширина и своя порода — оттенок листа.
+// Стоят они на стволах, рядами, и на стыке с картинкой заходят на неё целыми кронами: по её краю ничего не обрезается.
 // Вода, трава, дорога и стволы рисуются цветами картинки. Всё случайное идёт от одного зерна: сборка каждый раз
 // даёт одну и ту же карту.
 
@@ -42,7 +44,8 @@ const C = {
 // pic — картинка pw×h (RGB), уже без рыбака, ведра, рюкзака и дыма. plan — sides из world-shapes.mjs.
 // Возвращает { w, buf, hedge }: карту шириной plan.left + pw + plan.right (RGB) и маску листвы изгороди над рекой —
 // герой, зайдя в неё, должен скрываться за листьями. Координаты плана — как у картинки: левее неё x < 0, правее — x >= pw.
-export function widen(pic, pw, h, plan) {
+// glade — { hole, plan }, если дом убран: hole — пиксели картинки, откуда он вырезан, plan — glade из world-shapes.mjs.
+export function widen(pic, pw, h, plan, glade = null) {
   const S = plan.left, W = S + pw + plan.right, out = Buffer.alloc(W * h * 3);   // S — на сколько картинка сдвинута вправо
   const X0 = -S, X1 = pw + plan.right;                             // края карты в координатах картинки
   let seed = 0x5eed1e;                                             // mulberry32
@@ -62,8 +65,9 @@ export function widen(pic, pw, h, plan) {
   const water = new Uint8Array(W * h);                             // где на боках вода — чтобы положить на неё тени
   const hedge = new Uint8Array(W * h);                             // листва изгороди над рекой
   // over — на сколько пикселей разрешено заходить на саму картинку (так листва закрывает шов); mark — это лист изгороди
+  let open = null;                                                 // где ещё картинку можно перерисовывать: пока дорисовывается поляна
   const put = (x, y, c, over = 0, mark = false) => {
-    if (!onMap(x, y) || (onPic(x) && !(x < over || x >= pw - over))) return;
+    if (!onMap(x, y) || (onPic(x) && !(x < over || x >= pw - over) && !(open && open(x, y)))) return;
     const i = y * W + x + S; out[i * 3] = c[0]; out[i * 3 + 1] = c[1]; out[i * 3 + 2] = c[2]; water[i] = 0; hedge[i] = mark ? 1 : 0;
   };
 
@@ -155,15 +159,50 @@ export function widen(pic, pw, h, plan) {
     });
     crown(parts, { dark, breed, over });
   }
-  // Лес: ряды деревьев от верхнего края карты до линии front(x). Ближние ряды рисуются позже и закрывают дальние.
-  function forest(x0, x1, front) {
-    for (let row = 0, y = -10; y < h; row++, y += 17) {
+  // Лес: деревья на стволах, рядами от линии front(x) вверх до края карты. Ряды стоят вразбежку, поэтому ствол дальнего
+  // дерева виден в просвете между кронами ближних, а не тонет в сплошной листве; между стволами — тёмный подлесок,
+  // за ними — дальний план из сплошных тёмных крон. Чем дальше ряд, тем он темнее.
+  // first — с какого ряда начинать: нулевой, у самой линии, на лугу ставит опушка.
+  // seam — шов с картинкой: { at, dir, limit } — столбец её края, в какую сторону от него лес (-1 — слева) и до какой
+  // строки лесу можно на неё заходить. У шва ничего не обрезается по краю картинки: крона ложится на неё целиком, как
+  // легла бы на соседнее дерево, — иначе стык читается как обрезанный рисунок. Дерево, которое задело бы картинку ниже
+  // limit, не ставится вовсе: там шов закрывают заросли (seams.thicket в плане).
+  const ROW = 30, STEP = 50;                                       // шаг рядов и шаг деревьев в ряду
+  const REACH = 40;                                                // на сколько пикселей картинки лес может зайти у шва
+  const DROP = { big: 46, wide: 40, pair: 37, single: 33 };        // на сколько середина кроны выше подножия ствола
+  function forest(x0, x1, front, seam, first = 0) {
+    // half — полуширина того, что ставим, bottom — его нижний край, gap — на сколько середина должна отстоять от картинки
+    const fits = (x, bottom, half, gap) => { const away = (x - seam.at) * seam.dir; return away >= half + 2 || (away >= gap && bottom <= seam.limit); };
+    const far = cy => ({ dark: range(0.34, 0.56) + Math.max(0, 0.3 - cy / 160) });
+    open = x => (seam.dir < 0 ? x < REACH : x >= pw - REACH);
+    for (let row = 0, y = -10; y < h; row++, y += 17) {             // дальний план: глубина леса, на её фоне стоят деревья
       for (let x = x0 - 14 + (row % 2) * 16 + range(-5, 5); x < x1 + 18; x += range(27, 38)) {
-        const cy = y + range(-5, 5), lim = front(x);
-        if (cy > lim) continue;
-        tree(x, cy, 1 - (lim - cy) / Math.max(60, lim));
+        const cy = y + range(-5, 5);
+        if (cy <= front(x) - 26 && fits(x, cy + 28, REACH, 2)) tree(x, cy, 0.3, far(cy));
       }
+      const cy = y + range(-5, 5), x = seam.at + seam.dir * range(4, 12);   // у самого шва — в каждом ряду: край картинки нигде не остаётся голым
+      if (cy <= front(x) - 26 && cy + 28 <= seam.limit) tree(x, cy, 0.3, far(cy));
     }
+    for (let j = Math.ceil((Math.max(front(x0), front(x1)) + 20) / ROW); j >= first; j--) {   // от дальнего ряда к ближнему
+      const spots = [];
+      for (let x = x0 - 24 + (j % 2) * STEP / 2 + range(-5, 5); x < x1 + 30; x += STEP + range(-7, 7)) {
+        const lim = front(x), base = lim - j * ROW + range(-4, 4), near = 1 - (lim - base) / Math.max(60, lim);
+        const shape = chance([['big', 0.22], ['wide', 0.38], ['pair', 0.24], ['single', 0.16]]);
+        if (base < 2 || !fits(x, base, HALF[shape] + 6, 14)) continue;
+        spots.push({ x, base, near, shade: near > 0.75 ? 0.05 : near > 0.45 ? 0.3 : 0.55, shape });
+      }
+      for (let x = x0 - 6 + range(0, 8); x < x1 + 8; x += range(11, 16)) {   // подлесок вдоль ряда: в просветах между кронами — листва, а не пустая тьма
+        const lim = front(x), base = lim - j * ROW, near = 1 - (lim - base) / Math.max(60, lim);
+        if (base >= 2 && fits(x, base + 6, 13, 2)) lobe(x, base - range(4, 9), pick(LEAVES.bush), { r: range(7, 10), dark: (near > 0.75 ? 0.05 : near > 0.45 ? 0.3 : 0.55) + 0.2 });
+      }
+      for (const t of spots) trunk(t.x, t.base - DROP[t.shape] + 6, t.base, t.shape === 'big' ? pick([9, 10]) : t.shape === 'wide' ? pick([8, 9]) : 7, t.shade);
+      for (const t of spots) for (const side of [-1, 1]) {          // подлесок у подножия: ствол выходит из кустов, а не из пустоты
+        const from = pick(LEAVES.bush);
+        lobe(t.x + side * range(8, 13), t.base - range(3, 7), from, { r: range(6, 9), dark: t.shade + 0.15 });
+      }
+      for (const t of spots) tree(t.x + range(-2, 2), t.base - DROP[t.shape] + range(-3, 3), t.near, { shape: t.shape });
+    }
+    open = null;
   }
   // Кусты: несколько рядов листвы между линиями top(x) и bottom(x) — живая изгородь, заросший берег.
   function bushes(x0, x1, top, bottom, { kinds = ['bush'], step = [13, 19], mark = false } = {}) {
@@ -241,37 +280,72 @@ export function widen(pic, pw, h, plan) {
       for (let i = 0; i < len; i++) put(x + i, y + 1, C.pebble[1]);
     }
   }
-  // Ствол дерева на опушке: от кроны до земли, внизу чуть шире.
-  function trunk(cx, top, base, w) {
+  // Ствол дерева: от кроны до земли, внизу чуть шире. dark — насколько он в тени (дальние ряды леса).
+  function trunk(cx, top, base, w, dark = 0) {
     cx = Math.round(cx); base = Math.round(base);
+    const tone = c => (dark ? c.map(v => Math.round(v * (1 - 0.5 * dark))) : c);
     for (let y = Math.round(top); y <= base; y++) {
       const half = Math.floor(w / 2) + (base - y < 3 ? 1 : 0);
       for (let dx = -half; dx <= half; dx++) {
         const side = dx === -half || dx === half, stripe = noise(cx + dx, (y / 5) | 0, 51);
-        put(cx + dx, y, side || y === base ? C.trunkEdge : dx === -half + 1 ? C.trunkLight : dx >= half - 2 || stripe < 0.25 ? C.trunkDark : C.trunk);
+        put(cx + dx, y, tone(side || y === base ? C.trunkEdge : dx === -half + 1 ? C.trunkLight : dx >= half - 2 || stripe < 0.25 ? C.trunkDark : C.trunk));
       }
     }
   }
   // Опушка: деревья на стволах над лугом и кусты между ними. Кроны разной ширины, поэтому и стоят они неровно.
   function edge(x0, x1) {
     const spots = [];
-    for (let x = x0 + range(14, 22); x < x1 - 6; x += range(34, 50)) spots.push({ x, shape: chance([['big', 0.35], ['wide', 0.4], ['pair', 0.25]]), base: meadowTop(x) + range(0, 3) });
+    for (let x = x0 + range(42, 50); x < x1 - 6; x += range(34, 50)) spots.push({ x, shape: chance([['big', 0.35], ['wide', 0.4], ['pair', 0.25]]), base: meadowTop(x) + range(0, 3) });
     for (const t of spots) trunk(t.x, t.base - 34, t.base, t.shape === 'pair' ? 7 : pick([8, 9, 10]));
-    for (let x = x0 - 2; x < x1 + 6; x += range(11, 17)) {         // кусты у подножия — стволы видны между ними
+    for (let x = x0 + 14; x < x1 + 6; x += range(11, 17)) {        // кусты у подножия — стволы видны между ними; у шва их заменяют заросли
       const from = pick(LEAVES[rnd() < 0.3 ? 'leafy' : 'bush']);
       lobe(x, meadowTop(x) - range(5, 9), from, { r: range(8, 11) });
     }
     for (const t of spots) tree(t.x + range(-2, 2), t.base - (t.shape === 'big' ? 46 : t.shape === 'wide' ? 40 : 37) + range(-3, 3), 1, { shape: t.shape, kind: rnd() < 0.25 ? 'olive' : 'crown' });
   }
 
+  // ---------- поляна на месте дома ----------
+  // Ниже линии опушки вырезанное место становится травой, выше — лесом: тьма, по ней кроны второго ряда, стволы,
+  // кусты у подножия и кроны самой опушки. Листве можно ложиться и на соседние кроны картинки: обрежь её по силуэту
+  // дома — от него остался бы след.
+  function clearing({ hole, plan: g }) {
+    const line = curveOf(g.edge), ground = [], corner = curveOf(g.shade), cornerEnd = g.shade[g.shade.length - 1][0];
+    open = (x, y) => hole[y * pw + x] === 1;
+    for (let y = 0; y < h; y++) for (let x = 0; x < pw; x++) {
+      if (!hole[y * pw + x]) continue;
+      let shade = line(x) + 6 + 2.5 * Math.sin(x / 7) + 3 * (soft(x, 0, 9, 1, 61) - 0.5);   // под опушкой трава в тени, как на лугу
+      if (x < cornerEnd) shade = Math.max(shade, corner(x) + 3 * (soft(x, y, 4, 3, 62) - 0.5));   // в углу тень глубже — как на траве картинки рядом
+      const top = line(x);
+      if (y < top - 1) put(x, y, C.deep[Math.floor(noise(x >> 2, y >> 1, 3) * C.deep.length)]);
+      else { put(x, y, y < shade ? C.grassShade[Math.floor(noise(x >> 1, y, 8) * 3)] : C.grass[Math.floor(soft(x, y, 5, 3, 9) * 3.99)]); if (y > shade + 3) ground.push([x, y]); }
+    }
+    for (let n = Math.round(ground.length / 150); n > 0; n--) {      // пучки травы, изредка цветы — как на лугу
+      const [x, y] = pick(ground), kind = rnd();
+      if (kind < 0.6) { const c = pick(C.tuft); put(x, y, c); put(x - 1, y - 1, c); put(x + 1, y - 1, c); if (rnd() < 0.5) put(x, y - 2, c); }
+      else if (kind < 0.88) { put(x, y, C.tuftLight); put(x + 1, y - 1, C.tuftLight); }
+      else { put(x, y, C.heart); put(x - 1, y, C.petal); put(x + 1, y, C.petal); put(x, y - 1, C.petal); put(x, y + 1, C.petal); put(x, y + 2, C.tuft[0]); }
+    }
+    open = (x, y) => x >= g.span[0] && x <= g.span[1] && y < line(x) + 9;   // лес: всё, что выше опушки, с запасом на кусты у подножия
+    for (const [x, y, shape, kind, dark] of g.back) tree(x, y, 0.6, { shape, kind, dark });
+    const spots = g.trees.map(([x, shape, kind]) => ({ x, shape, kind, base: line(x) + range(0, 2) }));
+    for (const t of spots) trunk(t.x, t.base - 36, t.base, t.shape === 'pair' ? 7 : pick([8, 9, 10]));
+    for (let x = g.span[0] + range(2, 6); x < g.span[1]; x += range(11, 16)) {
+      const from = pick(LEAVES[rnd() < 0.3 ? 'leafy' : 'bush']);
+      lobe(x, line(x) - range(5, 9), from, { r: range(8, 11) });
+    }
+    for (const t of spots) tree(t.x + range(-2, 2), t.base - (t.shape === 'big' ? 46 : t.shape === 'wide' ? 40 : 37) + range(-3, 3), 1, { shape: t.shape, kind: t.kind });
+    open = null;
+  }
+  if (glade) { const keep = seed; seed = 0x91ade5; clearing(glade); seed = keep; }   // у поляны своё зерно: бока от неё не зависят
+
   // ---------- левый бок: лес до самой реки ----------
-  forest(X0, 0, x => riverTop.left(x) - 18);
+  forest(X0, 0, x => riverTop.left(x) - 11, { at: 0, dir: -1, limit: plan.seams.left.forest });
   river(X0, 0, riverTop.left, riverBottom.left);
-  bushes(X0, 0, x => riverTop.left(x) - 22, x => riverTop.left(x) - 2);
+  bushes(X0, 0, x => riverTop.left(x) - 14, x => riverTop.left(x) - 2);                // кусты над водой — в один ряд: над ними видны стволы
   bushes(X0, 0, x => riverBottom.left(x) - 5, () => h + 8);
 
   // ---------- правый бок: лес, опушка, луг с дорогой, изгородь над рекой ----------
-  forest(pw, X1, x => meadowTop(x) - 36);
+  forest(pw, X1, meadowTop, { at: pw - 1, dir: 1, limit: plan.seams.right.forest }, 1);   // ряд у самого луга ставит опушка — edge()
   meadow(pw, X1);
   road(pw, X1);
   river(pw, X1, riverTop.right, riverBottom.right);
@@ -279,21 +353,16 @@ export function widen(pic, pw, h, plan) {
   bushes(pw, X1, x => meadowBottom(x) - 6, x => riverTop.right(x) - 2, { mark: true });
   bushes(pw, X1, x => riverBottom.right(x) - 5, () => h + 8);
 
-  // ---------- швы: листва вдоль края картинки закрывает её ровный срез ----------
-  // Деревья встают широкими кронами вразбежку — то ближе к картинке, то дальше, — чтобы шов не читался столбом.
-  for (const [x, out1, list] of [[0, -1, plan.seams.left], [pw - 1, 1, plan.seams.right]]) {
+  // ---------- швы ниже леса: заросли вдоль края картинки ----------
+  // Выше лес сам заходит на картинку (см. forest). Здесь её край закрывают кусты в два столбца: ближний ложится на
+  // картинку, дальний уводит заросли вглубь бока — получается куртина, а не полоска вдоль среза.
+  for (const [x, out1, list] of [[0, -1, plan.seams.left.thicket], [pw - 1, 1, plan.seams.right.thicket]]) {
     for (const [y0, y1, kind, dark] of list) {
-      if (kind === 'bush') {
-        const isHedge = out1 > 0 && y0 > meadowTop(pw) + 20 && y1 < h;   // кусты ниже тропинки — часть изгороди над рекой
+      const isHedge = out1 > 0 && y0 > meadowTop(pw) + 20 && y1 < h;   // кусты ниже тропинки — часть изгороди над рекой
+      for (const [from0, to0] of [[14, 26], [-2, 8]]) {             // сначала дальний столбец, потом ближний — поверх него
         for (let y = y0 + 5; y < y1; y += range(8, 12)) {
-          const from = pick(LEAVES.bush);
-          lobe(x + out1 * range(-2, 8), y, from, { r: Math.min(from.r, 15) - range(0, 3), dark, over: 13, mark: isHedge });
-        }
-      } else {
-        for (let y = y0 + 12; y < y1 + 6; y += range(19, 26)) {
-          // крона стоит снаружи и заходит на картинку своим краем на reach пикселей — сама, без обрезки по линии
-          const shape = chance([['wide', 0.5], ['big', 0.35], ['pair', 0.15]]), reach = range(5, 13);
-          tree(x + out1 * (HALF[shape] - reach), y, 1, { kind, dark, shape, over: 22 });
+          const from = pick(LEAVES[kind]);
+          lobe(x + out1 * range(from0, to0), y, from, { r: Math.min(from.r, 15) - range(0, 3), dark, over: 13, mark: isHedge });
         }
       }
     }

@@ -30,7 +30,7 @@ export const standPoint = (): Point => World.nearestWalkable(seat.x, seat.y) || 
 // Рюкзак на своём месте у угла дома — там же, где на картинке.
 export const startPack = (): PackState => ({ x: World.pack.baseX, y: World.pack.baseY, worn: false, kind: PACKS.DEFAULT });
 
-// Так игра начинается у нового игрока: рыбак сидит на причале, ведро и рюкзак — у дома, кадр как на картинке.
+// Так игра начинается у нового игрока: рыбак сидит на причале, ведро и рюкзак — на своих местах с картинки (там они стоят у дома).
 export function startState(): WorldState {
   return { x: seat.x, y: seat.y, dir: 'down', sitting: true, bucket: { x: World.bucket.baseX, y: World.bucket.baseY, carried: false, home: true }, pack: startPack(), picX: World.pic.x };
 }

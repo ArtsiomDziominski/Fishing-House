@@ -71,8 +71,8 @@ if (before.canSet) {
   await sleep(400);
   check(clock === null && weather === null, 'часы и погода с клиента не выставляются — сервер их не слушает');
 }
-check(self!.sitting && self!.bucket.home, 'новый игрок сидит на причале, ведро у дома');
-check(!self!.pack.worn && self!.pack.x === World.pack.baseX && self!.pack.kind === 'leather', 'кожаный рюкзак лежит у дома');
+check(self!.sitting && self!.bucket.home, 'новый игрок сидит на причале, ведро на своём месте');
+check(!self!.pack.worn && self!.pack.x === World.pack.baseX && self!.pack.kind === 'leather', 'кожаный рюкзак лежит на своём месте');
 
 // ведро далеко — забросить нельзя
 room.send('press');
