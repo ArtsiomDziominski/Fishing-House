@@ -14,7 +14,8 @@ export const useGameStore = defineStore('game', {
     roomId: '',
     bag: emptyBag() as Bag,
     pack: PACKS.DEFAULT as PackKind,
-    sky: { label: '', dark: 0, minutes: 0, canSet: false, moved: false } as SkyInfo,   // время суток: часы, темнота фона, можно ли переводить часы
+    // время суток и погода: часы, темнота фона, погода словами; можно ли их выставлять (разработка) и что выставлено
+    sky: { label: '', dark: 0, minutes: 0, canSet: false, moved: false, weather: '', fixKind: null, fixWind: null } as SkyInfo,
     actions: { bucket: null, pack: null, fish: null, hot: false, stand: false } as Actions,
     toast: { text: '', tone: '' as Tone, fishId: null as string | null, show: false, seq: 0 },
     quietHint: false,

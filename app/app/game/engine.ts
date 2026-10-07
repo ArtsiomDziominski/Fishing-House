@@ -10,16 +10,21 @@
 
 import type { Room } from '@colyseus/sdk';
 import {
-  World, FISH, PACKS, PACK_KINDS, MOVE_EVERY, SPEED, CARRY_SPEED, REACH, seat, nearSeat, standPoint, dist, dayHour, dayPart, clockText, skyAt,
-  type Bag, type Catch, type ClientMessages, type Dir, type PackKind, type PlayerView, type ServerMessages, type Sky, type WorldState,
+  World, FISH, PACKS, PACK_KINDS, MOVE_EVERY, SPEED, CARRY_SPEED, REACH, seat, nearSeat, standPoint, dist, dayHour, dayPart, clockText, skyAt, weatherText,
+  type Bag, type Catch, type ClientMessages, type Dir, type PackKind, type PlayerView, type ServerMessages, type Sky, type WeatherKind, type WorldState,
 } from '@fh/shared';
 import { HERO } from './hero.ts';
 import { createFishingView, drawBite, drawFishing, type FishArt } from './fishing-view.ts';
+import { createWeatherView, HAZE } from './weather-view.ts';
 
 export interface Actions { bucket: string | null; pack: string | null; fish: string | null; hot: boolean; stand: boolean }
 // Время суток для интерфейса: подпись часов, насколько темно (0..1), минута игровых суток,
-// разрешает ли сервер переводить часы (разработка) и переведены ли они сейчас.
-export interface SkyInfo { label: string; dark: number; minutes: number; canSet: boolean; moved: boolean }
+// разрешает ли сервер переводить часы и выставлять погоду (разработка), переведены ли часы сейчас;
+// weather — погода словами, fixKind и fixWind — что из погоды выставлено вручную (null — идёт по расписанию).
+export interface SkyInfo {
+  label: string; dark: number; minutes: number; canSet: boolean; moved: boolean;
+  weather: string; fixKind: WeatherKind | null; fixWind: boolean | null;
+}
 export type Tone = '' | 'good' | 'bad';
 
 // Куда движок сообщает о том, что показывает интерфейс вокруг холста (его держит Pinia-хранилище).
@@ -38,6 +43,7 @@ export interface GameUI {
 export interface GameHandle {
   bucketAction(): void; packAction(): void; setPack(kind: PackKind): void; fishAction(): void; standUp(): void; zoom(step: number): void; destroy(): void;
   setClock(hour: number | null): void;                  // перевести часы причала на этот час (на сервере, у всех); null — настоящее время
+  setWeather(kind: WeatherKind | null, wind: boolean | null): void;   // выставить погоду и ветер (на сервере, у всех); null — по расписанию
 }
 
 interface Hero { x: number; y: number; dir: Dir; sitting: boolean; moving: boolean; anim: number; path: { x: number; y: number }[] | null; then: 'sit' | 'pick' | 'wear' | null; stuck: number }
@@ -87,12 +93,13 @@ export async function startGame(canvas: HTMLCanvasElement, room: Room, ui: GameU
   // Время суток: skew — на сколько часы причала (их ведёт сервер) впереди наших, мс; pier — можно ли их переводить
   // и переведены ли они; fixedHour — час из адреса (?hour=22): время тогда стоит, и только у нас.
   let skew = 0, pier = { canSet: false, moved: false }, fixedHour = params.has('hour') ? Number(params.get('hour')) : NaN, skyKey = '';
+  let weather: ServerMessages['weather'] = { kind: 'clear', wind: false, fixKind: null, fixWind: null };   // погода — какой её назвал сервер
   // Перевод часов: wantHour — час, который ещё не ушёл на сервер (undefined — слать нечего), clockIn — пауза до следующей отправки.
   let wantHour: number | null | undefined, clockIn = 0;
 
   // Сервер шлёт «self» и ведро сразу при входе — пока грузятся картинки, складываем сообщения в очередь.
-  // Часы сервера в очередь не идут: важно, в какой момент они пришли.
-  type Queued = Exclude<keyof ServerMessages, 'clock'>;
+  // Часы и погода в очередь не идут: у часов важно, в какой момент они пришли, а погоде картинки не нужны.
+  type Queued = Exclude<keyof ServerMessages, 'clock' | 'weather'>;
   type Inbox = { [K in Queued]: [K, ServerMessages[K]] }[Queued];
   let inbox: Inbox[] | null = [];
   const receive = (m: Inbox) => { if (inbox) inbox.push(m); else handle(m); };
@@ -101,6 +108,7 @@ export async function startGame(canvas: HTMLCanvasElement, room: Room, ui: GameU
     room.onMessage('bag', (m: ServerMessages['bag']) => receive(['bag', m])),
     room.onMessage('fish', (m: ServerMessages['fish']) => receive(['fish', m])),
     room.onMessage('clock', (m: ServerMessages['clock']) => { skew = m.now - Date.now(); pier = { canSet: m.canSet, moved: m.moved }; }),
+    room.onMessage('weather', (m: ServerMessages['weather']) => { weather = m; }),
   ];
 
   // ---------- картинки ----------
@@ -137,6 +145,7 @@ export async function startGame(canvas: HTMLCanvasElement, room: Room, ui: GameU
   }
   const pailBody = makeCanvas(B.w, B.h);                                     // ведро без тени — для любого места, кроме исходного
   { const px = ctx2d(pailBody); px.drawImage(img.bucket, 0, 0); for (const [dx, dy] of B.shadow) px.clearRect(dx!, dy!, 1, 1); }
+  const wx = createWeatherView(img.world);                                   // дождь, ветер, пасмурный свет
 
   // ---------- размер и камера ----------
   function layout() {
@@ -369,6 +378,7 @@ export async function startGame(canvas: HTMLCanvasElement, room: Room, ui: GameU
   const DIRS: Record<string, [number, number]> = { ArrowUp: [0, -1], KeyW: [0, -1], ArrowDown: [0, 1], KeyS: [0, 1], ArrowLeft: [-1, 0], KeyA: [-1, 0], ArrowRight: [1, 0], KeyD: [1, 0] };
   function update(dt: number) {
     updateGhosts(dt);
+    wx.update(dt, weather);
     if (!ready) return;
     let dx = 0, dy = 0, passed = false;
     const step = (bucket.carried ? CARRY_SPEED : SPEED) * dt;
@@ -423,10 +433,18 @@ export async function startGame(canvas: HTMLCanvasElement, room: Room, ui: GameU
   // ---------- время суток ----------
   // Час считаем сами, но по часам сервера — так у всех на причале одно время.
   const hourNow = () => (Number.isFinite(fixedHour) ? fixedHour : dayHour(Date.now() + skew));
-  function refreshSky() {                               // часы в интерфейсе и темнота фона вокруг холста
-    const hour = hourNow(), label = dayPart(hour).name + ' · ' + clockText(hour), dark = Math.round(skyAt(hour).dark * 20) / 20;
-    const key = [label, dark, pier.canSet, pier.moved].join(); if (key === skyKey) return; skyKey = key;
-    ui.sky({ label, dark, minutes: Math.floor(((hour % 24) + 24) % 24 * 6) * 10, ...pier });
+  // Цвет, на который умножается кадр: небо по часам и погода. Ночью и так темно, поэтому тучи темнят тем слабее, чем темнее небо.
+  function frameTint(sky: Sky): [number, number, number] {
+    const w = wx.tint(), k = 1 - sky.dark;
+    const mix = (i: 0 | 1 | 2) => Math.round(sky.tint[i] * (255 + (w[i] - 255) * k) / 255);
+    return [mix(0), mix(1), mix(2)];
+  }
+  function refreshSky() {                               // часы и погода в интерфейсе, темнота фона вокруг холста
+    const hour = hourNow(), label = dayPart(hour).name + ' · ' + clockText(hour), c = frameTint(skyAt(hour));
+    const dark = Math.round((1 - (0.299 * c[0] + 0.587 * c[1] + 0.114 * c[2]) / 255) * 20) / 20;
+    const info: SkyInfo = { label, dark, minutes: Math.floor(((hour % 24) + 24) % 24 * 6) * 10, ...pier, weather: weatherText(weather), fixKind: weather.fixKind, fixWind: weather.fixWind };
+    const key = JSON.stringify(info); if (key === skyKey) return; skyKey = key;
+    ui.sky(info);
   }
   // Перевести часы причала: это делает сервер, и время меняется сразу у всех игроков (он разрешает это только в разработке).
   // Ползунок шлёт часы десятками в секунду, поэтому на сервер уходит последнее значение и не чаще, чем раз в CLOCK_EVERY.
@@ -436,6 +454,8 @@ export async function startGame(canvas: HTMLCanvasElement, room: Room, ui: GameU
     if (wantHour === undefined || clockIn > 0) return;
     send('clock', { hour: wantHour }); wantHour = undefined; clockIn = CLOCK_EVERY;
   }
+  // Выставить погоду и ветер — тоже на сервере и тоже только в разработке. null — пусть идёт по расписанию.
+  function setWeather(kind: WeatherKind | null, wind: boolean | null) { send('weather', { kind, wind }); }
 
   // ---------- отрисовка ----------
   // Из клетки стираются пиксели, закрытые предметами, которые стоят ближе к зрителю
@@ -497,11 +517,12 @@ export async function startGame(canvas: HTMLCanvasElement, room: Room, ui: GameU
   }
 
   const SPARK = ['#8abdd0', '#94d6f1'];
-  function drawSparkles(t: number) {                   // блики на воде — мерцают, как штрихи волн на картинке
+  function drawSparkles(t: number, shine: number) {    // блики на воде — мерцают, как штрихи волн на картинке; shine — сколько солнца, 0..1
+    if (shine < 0.03) return;
     for (const [x, y, len, ph] of World.sparkles) {
       const a = Math.sin(t * 0.9 + ph * 6.283);
       if (a < 0.72) continue;
-      fctx.globalAlpha = (a - 0.72) / 0.28 * 0.85;
+      fctx.globalAlpha = (a - 0.72) / 0.28 * 0.85 * shine;
       fctx.fillStyle = SPARK[len & 1]!;
       fctx.fillRect(x, y, len, 1);
     }
@@ -514,13 +535,13 @@ export async function startGame(canvas: HTMLCanvasElement, room: Room, ui: GameU
   function disc(cx2: number, cy2: number, r: number) {  // пиксельный круг
     for (let j = Math.ceil(-r); j <= r; j++) { const half = Math.floor(Math.sqrt(r * r - j * j)); fctx.fillRect(Math.round(cx2) - half, Math.round(cy2) + j, half * 2 + 1, 1); }
   }
-  function drawSmoke(t: number) {
+  function drawSmoke(t: number, wind: number) {        // wind — сила ветра, 0..1: дым стелется ниже и улетает дальше
     const puffs: { x: number; y: number; r: number; lobes: [number, number, number][] }[] = [];
     for (let i = 0; i < SMOKE.n; i++) {
       const phase = t / SMOKE.life + i / SMOKE.n, born = Math.floor(phase), u = phase - born, id = born * SMOKE.n + i;
       const rise = u < 0.2 ? u / 0.2 : 1, drift = u < 0.2 ? 0 : (u - 0.2) / 0.8;          // сначала вверх, потом по ветру
-      const x = World.smoke.x + rise * 2 + drift * (40 + noise(id, 1) * 14) + Math.sin(u * 9 + id) * 1.5;
-      const y = World.smoke.y - rise * 9 - drift * (20 + noise(id, 2) * 10);
+      const x = World.smoke.x + rise * 2 + drift * (40 + noise(id, 1) * 14) * (1 + wind * 0.9) + Math.sin(u * 9 + id) * 1.5;
+      const y = World.smoke.y - rise * 9 - drift * (20 + noise(id, 2) * 10) * (1 - wind * 0.55);
       const r = u < 0.12 ? 1 + u * 20 : u < 0.6 ? 3.4 + (u - 0.12) * 4 : 5.3 * (1 - (u - 0.6) / 0.4);   // растёт, потом тает
       if (r < 0.8) continue;
       const spread = 0.3 + u * 1.1;                                                       // чем дальше от трубы, тем рыхлее клуб
@@ -535,14 +556,17 @@ export async function startGame(canvas: HTMLCanvasElement, room: Room, ui: GameU
   // Вечер и ночь: слой цвета неба умножается на кадр, а свет из окон и фонаря проедает в нём дыры — возле дома светло.
   // Сверху тот же ореол кладётся тёплой добавкой. Днём (белое небо, свет погашен) кадр остаётся как есть.
   const GLOW_ADD = 0.3;                                 // доля тёплой добавки
-  function drawNight(sky: Sky) {
-    if (sky.dark < 0.004 && !sky.lights) return;
+  // tint — цвет неба с погодой, lights — горит ли свет в доме (0..1), haze — серая дымка под тучами (0..1).
+  function drawNight(tint: number[], lights: number, haze: number) {
+    if (!lights && haze < 0.004 && tint.every(v => v >= 254)) return;
     const g = World.glow;
     dctx.globalCompositeOperation = 'source-over'; dctx.globalAlpha = 1;
-    dctx.fillStyle = `rgb(${sky.tint.join(',')})`; dctx.fillRect(0, 0, W, H);
-    if (sky.lights) { dctx.globalCompositeOperation = 'destination-out'; dctx.globalAlpha = sky.lights; dctx.drawImage(img.glow, g.x, g.y); }
+    dctx.fillStyle = `rgb(${tint.join(',')})`; dctx.fillRect(0, 0, W, H);
+    if (lights) { dctx.globalCompositeOperation = 'destination-out'; dctx.globalAlpha = lights; dctx.drawImage(img.glow, g.x, g.y); }
     fctx.globalCompositeOperation = 'multiply'; fctx.drawImage(dusk, 0, 0);
-    if (sky.lights) { fctx.globalCompositeOperation = 'lighter'; fctx.globalAlpha = sky.lights * GLOW_ADD; fctx.drawImage(img.glow, g.x, g.y); }
+    fctx.globalCompositeOperation = 'source-over';
+    if (haze >= 0.004) { fctx.globalAlpha = haze; fctx.fillStyle = HAZE; fctx.fillRect(0, 0, W, H); }
+    if (lights) { fctx.globalCompositeOperation = 'lighter'; fctx.globalAlpha = lights * GLOW_ADD; fctx.drawImage(img.glow, g.x, g.y); }
     fctx.globalCompositeOperation = 'source-over'; fctx.globalAlpha = 1;
   }
   function drawMarker() {                              // куда идём
@@ -616,7 +640,7 @@ export async function startGame(canvas: HTMLCanvasElement, room: Room, ui: GameU
     if (sky.lights) {                                  // на карте свет погашен; горящие окна и фонарь — отдельной картинкой поверх
       fctx.globalAlpha = sky.lights; fctx.drawImage(img.lights, World.lights.x, World.lights.y); fctx.globalAlpha = 1;
     }
-    drawSparkles(t); drawSmoke(t);
+    drawSparkles(t, 1 - 0.9 * wx.st.clouds); drawSmoke(t, wx.st.wind);
     // кто дальше от зрителя, тот рисуется раньше
     const queue: { y: number; draw: () => void }[] = [];
     // Все, кто сидит, — один рыбак с картинки; рюкзак ему рисуем свой, а если сидят только другие — первого из них.
@@ -647,7 +671,9 @@ export async function startGame(canvas: HTMLCanvasElement, room: Room, ui: GameU
       bucket: bucket.carried ? null : { x: bucket.x, y: bucket.y - B.bodyH + 4 },
     }, { line: { img: img.line, x: World.line.x, y: World.line.y }, fish: fishArt });
     else if (someoneSits) fctx.drawImage(img.line, World.line.x, World.line.y);   // чужая удочка — леска в воде, как на картинке
-    drawNight(sky);                                    // всё, что ниже, — подсказки: они не темнеют
+    wx.draw(fctx);                                     // дождь, брызги, порывы ветра, листья — поверх мира и героев
+    drawNight(frameTint(sky), sky.lights, wx.haze() * Math.max(0, 1 - sky.dark * 1.6));   // ночью дымка не нужна: она бы высветлила темноту
+    // всё, что ниже, — подсказки: они не темнеют
     if (hero.sitting) drawBite(fctx, fishing.st, head);
     drawMarker(); drawPrompts(t);
     if (debug) drawDebug();
@@ -719,10 +745,10 @@ export async function startGame(canvas: HTMLCanvasElement, room: Room, ui: GameU
   // для отладки из консоли; step(dt, n) прокручивает игру вручную
   (window as any).FH_GAME = { hero, bucket, pack, view, keys, ghosts, fishing, room, sitDown, standUp, walkTo, zoom, pickUp, putDown, putOn, takeOff, setPack, fishAction, bucketAction, packAction,
     step: (dt: number, n = 1) => { for (let i = 0; i < n; i++) update(dt); render(performance.now() / 1000); },
-    hourNow, setClock, setHour: (hour: number | null) => { fixedHour = hour ?? NaN; } };   // setHour(22) останавливает время на этом часе, setHour(null) — пускает снова
+    hourNow, setClock, setWeather, wx, setHour: (hour: number | null) => { fixedHour = hour ?? NaN; } };   // setHour(22) останавливает время на этом часе, setHour(null) — пускает снова
 
   return {
-    bucketAction, packAction, setPack, fishAction, standUp, zoom, setClock,
+    bucketAction, packAction, setPack, fishAction, standUp, zoom, setClock, setWeather,
     destroy() {
       alive = false; cancelAnimationFrame(raf);
       for (const [t, type, fn, opts] of listeners) t.removeEventListener(type, fn, opts);

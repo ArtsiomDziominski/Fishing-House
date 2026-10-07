@@ -10,13 +10,13 @@ import { Room, definePlugins, type Client } from 'colyseus';
 import { UniqueSessionPlugin } from 'colyseus/plugins/unique-session';
 import { z } from 'zod';
 import {
-  World, FISH, DIRS, PACK_KINDS, ROOM_SIZE, SPEED, REACH, PUT_REACH, NEAR_PIER, HOOK_GRACE,
+  World, FISH, DIRS, PACK_KINDS, WEATHERS, ROOM_SIZE, SPEED, REACH, PUT_REACH, NEAR_PIER, HOOK_GRACE,
   createFishing, addToBag, nearSeat, bucketNearSeat, standPoint, startState, dist, seat,
   type Bag, type Fishing, type FishingEvent, type ServerMessages, type WorldState,
 } from '@fh/shared';
 import { verifyTicket, loadPlayer, saveWorld, recordCatch, type Ticket } from '@fh/shared/server';
 import { db } from './db.ts';
-import { Clock } from './clock.ts';
+import { Sky } from './sky.ts';
 import { PierState, PlayerState } from './state.ts';
 
 const TICK = 50;                    // мс между шагами симуляции (рыбалка, запас хода)
@@ -42,6 +42,7 @@ const moveMsg = point.extend({ dir: z.enum(DIRS) });
 const sitMsg = z.object({ put: point.optional() }).optional();
 const packKindMsg = z.object({ kind: z.enum(PACK_KINDS) });
 const clockMsg = z.object({ hour: z.number().min(0).max(24).nullable() });
+const weatherMsg = z.object({ kind: z.enum(WEATHERS).nullable(), wind: z.boolean().nullable() });
 
 type Auth = Ticket & { id: string };
 
@@ -56,13 +57,14 @@ export class PierRoom extends Room<{ state: PierState; client: Client<{ auth: Au
   });
 
   private sessions = new Map<string, Session>();
-  private offClock = () => {};        // отписка от часов причала
+  private offSky = () => {};          // отписка от часов и погоды причала
 
   onCreate() {
     this.setPatchRate(PATCH);
-    // Часы причала перевели (в разработке) — время суток меняется сразу у всех, кто в комнате.
-    this.offClock = Clock.onChange(() => this.broadcast('clock', this.timeNow()));
-    this.onMessage('clock', clockMsg, (_client, m) => { if (Clock.canSet) Clock.setHour(m.hour); });
+    // Сменилась погода или часы причала перевели (в разработке) — сообщаем сразу всем, кто в комнате.
+    this.offSky = Sky.onChange(what => { if (what === 'clock') this.broadcast('clock', Sky.clock()); else this.broadcast('weather', Sky.weather()); });
+    this.onMessage('clock', clockMsg, (_client, m) => { if (Sky.canSet) Sky.setHour(m.hour); });
+    this.onMessage('weather', weatherMsg, (_client, m) => { if (Sky.canSet) Sky.setWeather(m.kind, m.wind); });
     this.setSimulationInterval(dt => this.tick(dt / 1000), TICK);
     this.clock.setInterval(() => this.saveAll(false), AUTOSAVE);
 
@@ -102,7 +104,8 @@ export class PierRoom extends Room<{ state: PierState; client: Client<{ auth: Au
     this.sessions.set(client.sessionId, s);
     this.syncView(s);
     this.state.players.set(client.sessionId, view);
-    this.tell(client, 'clock', this.timeNow());        // время суток клиент считает сам, но по часам причала
+    this.tell(client, 'clock', Sky.clock());           // время суток клиент считает сам, но по часам причала
+    this.tell(client, 'weather', Sky.weather());
     this.tell(client, 'self', world);
     this.tell(client, 'bag', s.bag);
   }
@@ -119,7 +122,7 @@ export class PierRoom extends Room<{ state: PierState; client: Client<{ auth: Au
     if (s) await this.save(s, true);
   }
 
-  async onDispose() { this.offClock(); await this.saveAll(true); }
+  async onDispose() { this.offSky(); await this.saveAll(true); }
 
   // ---------- действия игрока ----------
 
@@ -234,6 +237,5 @@ export class PierRoom extends Room<{ state: PierState; client: Client<{ auth: Au
   }
   private async saveAll(force: boolean) { await Promise.all([...this.sessions.values()].map(s => this.save(s, force))); }
 
-  private timeNow(): ServerMessages['clock'] { return { now: Clock.now(), canSet: Clock.canSet, moved: Clock.moved() }; }
   private tell<K extends keyof ServerMessages>(client: Client, type: K, message: ServerMessages[K]) { client.send(type, message); }
 }

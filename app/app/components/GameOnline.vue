@@ -1,13 +1,22 @@
-<!-- Справа вверху: часы причала, кто сейчас здесь (имя — ссылка на профиль) и выход в меню.
-     В разработке часы можно перевести: время меняет сервер, сразу у всех игроков. -->
+<!-- Справа вверху: часы и погода причала, кто сейчас здесь (имя — ссылка на профиль) и выход в меню.
+     В разработке часы и погоду можно выставить: это делает сервер, сразу у всех игроков. -->
 <script setup lang="ts">
-const emit = defineEmits<{ clock: [hour: number | null] }>();   // перевести часы причала на этот час; null — настоящее время
+import { WEATHERS, WEATHER_NAMES, type WeatherKind } from '@fh/shared';
+
+const emit = defineEmits<{
+  clock: [hour: number | null];                            // перевести часы причала на этот час; null — настоящее время
+  weather: [kind: WeatherKind | null, wind: boolean | null];   // выставить погоду и ветер; null — по расписанию
+}>();
 const game = useGameStore();
 const { user } = useUserSession();
 const open = ref<'clock' | 'list' | null>(null);
 
 const PRESETS = [{ name: 'Утро', hour: 6 }, { name: 'День', hour: 12 }, { name: 'Вечер', hour: 19 }, { name: 'Ночь', hour: 23 }];
 const DAY_MINUTES = 24 * 60;
+const KINDS: { name: string; kind: WeatherKind | null }[] = [{ name: 'Сама', kind: null }, ...WEATHERS.map(kind => ({ name: WEATHER_NAMES[kind], kind }))];
+const WINDS: { name: string; wind: boolean | null }[] = [{ name: 'Сам', wind: null }, { name: 'Тихо', wind: false }, { name: 'Дует', wind: true }];
+// что-то выставлено вручную — время или погода не такие, как были бы сами
+const manual = computed(() => game.sky.moved || game.sky.fixKind !== null || game.sky.fixWind !== null);
 
 // Пока ползунок тянут, он показывает то, что под пальцем, а не ответ сервера: тот приходит с опозданием и дёргал бы ручку назад.
 const draft = ref<number | null>(null);
@@ -27,6 +36,8 @@ onBeforeUnmount(() => clearTimeout(settle));
 function blur(ev: Event) { (ev.currentTarget as HTMLElement).blur(); }
 function toggle(ev: Event, what: 'clock' | 'list') { blur(ev); open.value = open.value === what ? null : what; }
 function setClock(ev: Event, hour: number | null) { blur(ev); draft.value = null; emit('clock', hour); }
+function setKind(ev: Event, kind: WeatherKind | null) { blur(ev); emit('weather', kind, game.sky.fixWind); }
+function setWind(ev: Event, wind: boolean | null) { blur(ev); emit('weather', game.sky.fixKind, wind); }
 </script>
 
 <template>
@@ -34,12 +45,12 @@ function setClock(ev: Event, hour: number | null) { blur(ev); draft.value = null
     <div class="bar">
       <template v-if="game.sky.label">
         <button
-          v-if="game.sky.canSet" type="button" class="chip clock" :class="{ moved: game.sky.moved }"
-          title="Время на причале. Нажми, чтобы перевести часы" :aria-expanded="open === 'clock'" @click="toggle($event, 'clock')"
+          v-if="game.sky.canSet" type="button" class="chip clock" :class="{ manual }"
+          title="Время и погода на причале. Нажми, чтобы выставить их" :aria-expanded="open === 'clock'" @click="toggle($event, 'clock')"
         >
-          {{ game.sky.label }}
+          {{ game.sky.label }}<span class="wx"> · {{ game.sky.weather }}</span>
         </button>
-        <span v-else class="chip clock still" title="Время на причале: игровой час идёт минуту">{{ game.sky.label }}</span>
+        <span v-else class="chip clock still" title="Время и погода на причале: игровой час идёт минуту">{{ game.sky.label }}<span class="wx"> · {{ game.sky.weather }}</span></span>
       </template>
       <button type="button" class="chip" :aria-expanded="open === 'list'" @click="toggle($event, 'list')">
         <span class="dot" :class="'is-' + game.status" />
@@ -48,8 +59,8 @@ function setClock(ev: Event, hour: number | null) { blur(ev); draft.value = null
       <NuxtLink to="/" class="chip" title="В меню">Меню</NuxtLink>
     </div>
 
-    <div v-if="open === 'clock' && game.sky.canSet" class="list clockbox">
-      <label class="slider">
+    <div v-if="open === 'clock' && game.sky.canSet" class="list skybox">
+      <label class="group">
         <span>Перевести часы</span>
         <!-- ползунок — минуты игровых суток с шагом в десять -->
         <input
@@ -57,11 +68,24 @@ function setClock(ev: Event, hour: number | null) { blur(ev); draft.value = null
           @input="slide" @change="release"
         >
       </label>
-      <div class="presets">
+      <div class="row four">
         <button v-for="p in PRESETS" :key="p.name" type="button" @click="setClock($event, p.hour)">{{ p.name }}</button>
       </div>
       <button type="button" :disabled="!game.sky.moved" @click="setClock($event, null)">Настоящее время</button>
-      <p class="muted">Время меняется на сервере — сразу у всех игроков. Работает только в разработке.</p>
+
+      <div class="group">
+        <span>Погода — {{ game.sky.weather.toLowerCase() }}</span>
+        <div class="row two">
+          <button v-for="k in KINDS" :key="k.name" type="button" :class="{ on: game.sky.fixKind === k.kind }" :aria-pressed="game.sky.fixKind === k.kind" @click="setKind($event, k.kind)">{{ k.name }}</button>
+        </div>
+      </div>
+      <div class="group">
+        <span>Ветер</span>
+        <div class="row three">
+          <button v-for="w in WINDS" :key="w.name" type="button" :class="{ on: game.sky.fixWind === w.wind }" :aria-pressed="game.sky.fixWind === w.wind" @click="setWind($event, w.wind)">{{ w.name }}</button>
+        </div>
+      </div>
+      <p class="muted">Время и погода меняются на сервере — сразу у всех игроков. Работает только в разработке.</p>
     </div>
 
     <ul v-if="open === 'list'" class="list">
@@ -76,7 +100,7 @@ function setClock(ev: Event, hour: number | null) { blur(ev); draft.value = null
 <style scoped>
 .online { position: fixed; right: 12px; top: 12px; display: grid; justify-items: end; gap: 6px; font-size: 13px; }
 .bar { display: flex; gap: 6px; }
-.chip, .clockbox button {
+.chip, .skybox button {
   display: flex; align-items: center; gap: 7px;
   padding: 6px 11px;
   border: 1px solid rgba(244, 227, 193, 0.3); border-radius: 8px;
@@ -86,9 +110,9 @@ function setClock(ev: Event, hour: number | null) { blur(ev); draft.value = null
   text-decoration: none;
   cursor: pointer;
 }
-.chip:hover, .clockbox button:hover { background: var(--wood-hover); color: var(--paper); }
-.chip.clock { font-variant-numeric: tabular-nums; }
-.chip.clock.moved { border-color: var(--coat); }   /* часы переведены — время не настоящее */
+.chip:hover, .skybox button:hover { background: var(--wood-hover); color: var(--paper); }
+.chip.clock { gap: 0; white-space: pre; font-variant-numeric: tabular-nums; }
+.chip.clock.manual { border-color: var(--coat); }   /* время или погода выставлены вручную */
 .chip.clock.still { cursor: default; }
 .chip.clock.still:hover { background: var(--wood); }
 .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--paper-dim); }
@@ -103,12 +127,19 @@ function setClock(ev: Event, hour: number | null) { blur(ev); draft.value = null
   user-select: text;
 }
 .list li { padding: 2px 0; }
-.clockbox { display: grid; gap: 8px; width: 244px; padding: 10px 12px; user-select: none; }
-.slider { display: grid; gap: 6px; font-weight: 600; }
-.slider input { width: 100%; margin: 0; accent-color: var(--coat); cursor: pointer; }
-.presets { display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px; }
-.clockbox button { justify-content: center; padding: 6px 4px; background: none; }
-.clockbox button:disabled { opacity: 0.4; cursor: default; background: none; }
-.clockbox p { margin: 0; font-size: 12px; line-height: 1.35; }
-@media (max-width: 560px) { .online { top: 64px; } }   /* под панелью ведра */
+.skybox { display: grid; gap: 8px; width: 244px; max-height: 80vh; padding: 10px 12px; user-select: none; }
+.group { display: grid; gap: 6px; font-weight: 600; }
+.group input { width: 100%; margin: 0; accent-color: var(--coat); cursor: pointer; }
+.row { display: grid; gap: 4px; }
+.row.four { grid-template-columns: repeat(4, 1fr); }
+.row.three { grid-template-columns: repeat(3, 1fr); }
+.row.two { grid-template-columns: repeat(2, 1fr); }
+.skybox button { justify-content: center; padding: 6px 4px; background: none; }
+.skybox button.on { border-color: var(--coat); color: var(--coat); }
+.skybox button:disabled { opacity: 0.4; cursor: default; background: none; }
+.skybox p { margin: 0; font-size: 12px; line-height: 1.35; }
+@media (max-width: 560px) {
+  .online { top: 64px; }   /* под панелью ведра */
+  .wx { display: none; }   /* на узком экране погоду видно и так — в чипе остаются только часы */
+}
 </style>

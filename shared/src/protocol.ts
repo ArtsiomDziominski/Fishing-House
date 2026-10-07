@@ -4,6 +4,7 @@ import type { Catch } from './fish.ts';
 import type { FishingEvent } from './fishing.ts';
 import type { PackKind } from './packs.ts';
 import type { Dir, WorldState } from './rules.ts';
+import type { Weather, WeatherKind } from './weather.ts';
 
 export const ROOM = 'pier';             // комната-причал; когда в ней тесно, сервер открывает ещё одну такую же
 export const ROOM_SIZE = 50;            // игроков в одной копии причала
@@ -36,6 +37,7 @@ export interface ClientMessages {
   packOff: { x: number; y: number };          // снять рюкзак и положить сюда
   packKind: { kind: PackKind };               // выбрать другой рюкзак
   clock: { hour: number | null };             // перевести часы причала на этот час — сразу у всех; null — настоящее время. Только в разработке
+  weather: { kind: WeatherKind | null; wind: boolean | null };   // выставить погоду и ветер — сразу у всех; null — по расписанию. Только в разработке
 }
 
 // Сервер → браузер (только своему игроку; остальных игроков видно в состоянии комнаты).
@@ -46,6 +48,9 @@ export interface ServerMessages {
   // Часы причала, мс: по ним у всех одно время суток. Приходят при входе и когда часы перевели.
   // canSet — сервер разрешает их переводить (разработка), moved — сейчас они переведены.
   clock: { now: number; canSet: boolean; moved: boolean };
+  // Погода на причале: приходит при входе и когда она меняется. fixKind и fixWind — что выставлено вручную
+  // в разработке (null — идёт по расписанию).
+  weather: Weather & { fixKind: WeatherKind | null; fixWind: boolean | null };
 }
 
 // Как другие игроки видны в состоянии комнаты.

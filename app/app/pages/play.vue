@@ -2,7 +2,7 @@
      входим в комнату-причал на игровом сервере и запускаем движок на холсте. -->
 <script setup lang="ts">
 import { Client, type Room } from '@colyseus/sdk';
-import { ROOM, World } from '@fh/shared';
+import { ROOM, World, type WeatherKind } from '@fh/shared';
 import { startGame, type GameHandle } from '~/game/engine';
 
 definePageMeta({ layout: false, middleware: 'auth' });
@@ -19,6 +19,8 @@ function endpoint() {
   const url = config.public.gameUrl;
   return url.startsWith('/') ? location.origin + url : url;
 }
+
+function setWeather(kind: WeatherKind | null, wind: boolean | null) { handle?.setWeather(kind, wind); }
 
 function stop() {
   handle?.destroy(); handle = null;
@@ -79,7 +81,7 @@ const overlay = computed(() => {
     <GameToast />
     <GameDock @bucket="handle?.bucketAction()" @pack="handle?.packAction()" @fish="handle?.fishAction()" @stand="handle?.standUp()" />
     <GamePack @pick="handle?.setPack($event)" />
-    <GameOnline @clock="handle?.setClock($event)" />
+    <GameOnline @clock="handle?.setClock($event)" @weather="setWeather" />
     <div class="zoom" aria-label="Масштаб">
       <button type="button" title="Мельче (−)" :disabled="!game.canZoomOut" @click="handle?.zoom(-1); ($event.currentTarget as HTMLElement).blur()">−</button>
       <button type="button" title="Крупнее (+)" :disabled="!game.canZoomIn" @click="handle?.zoom(1); ($event.currentTarget as HTMLElement).blur()">+</button>
