@@ -90,8 +90,8 @@ export async function startGame(canvas: HTMLCanvasElement, room: Room, ui: GameU
 
   // ---------- картинки ----------
   const img: Record<'world' | 'fisher' | 'line' | 'bucket' | 'carry' | 'pack', HTMLImageElement> = {} as any;
-  const files = { world: 'world.png', fisher: 'fisher.png', line: 'line.png', bucket: 'bucket.png', carry: 'bucket-carry.png', pack: 'pack.png' } as const;
-  await Promise.all((Object.keys(files) as (keyof typeof files)[]).map(k => loadImage('/assets/' + files[k]).then(im => { img[k] = im; })));
+  const files = { world: 'world.png', fisher: 'fisher.png', line: 'line.png', bucket: 'bucket.png', carry: 'bucket-carry.png', pack: 'pack-ground.png' } as const;
+  await Promise.all((Object.keys(files) as (keyof typeof files)[]).map(k => loadImage('/assets/' + files[k] + '?v=' + World.rev).then(im => { img[k] = im; })));
   const rigs = {} as Record<Dir, { arm: HTMLCanvasElement; x: number; y: number; bucket: [number, number] }>;
   const fishArt: Record<string, FishArt & { tail: [string, string] }> = {};
   for (const dir of ['down', 'up', 'left', 'right'] as const) {
@@ -109,7 +109,7 @@ export async function startGame(canvas: HTMLCanvasElement, room: Room, ui: GameU
     }
     return set;
   }
-  // Рюкзаки: кадр листа pack.png на вид и накладка на спину сидящего рыбака.
+  // Рюкзаки: кадр листа pack-ground.png на вид (на земле рюкзак вдвое меньше, чем на картинке) и накладка на спину сидящего рыбака.
   const packArt = {} as Record<PackKind, { ground: HTMLCanvasElement; seat: HTMLCanvasElement; seatX: number; seatY: number }>;
   PACK_KINDS.forEach((kind, i) => {
     const ground = makeCanvas(P.w, P.h); ctx2d(ground).drawImage(img.pack, i * P.w, 0, P.w, P.h, 0, 0, P.w, P.h);
@@ -146,7 +146,7 @@ export async function startGame(canvas: HTMLCanvasElement, room: Room, ui: GameU
   // ---------- ведро ----------
   const canPick = () => !hero.sitting && !bucket.carried && dist(hero, bucket) <= REACH;
   // Можно ли поставить предмет дном в точку: под ним земля, место рыбака свободно, и герой не окажется внутри.
-  // half — полуширина дна: 5 у ведра, 8 у рюкзака.
+  // half — полуширина дна: 5 у ведра, 4 у рюкзака.
   function fits(x: number, y: number, half = 5) {
     if (!World.canWalk(x, y) || !World.canWalk(x - half, y) || !World.canWalk(x + half, y) || !World.canWalk(x, y - 2)) return false;
     if (x >= seat.x - 7 - half && x <= seat.x + 9 + half && y >= seat.y - 12 && y <= seat.y + 8) return false;
@@ -190,7 +190,7 @@ export async function startGame(canvas: HTMLCanvasElement, room: Room, ui: GameU
   const canWear = () => !hero.sitting && !pack.worn && dist(hero, pack) <= REACH;
   function settlePack(x: number, y: number) {            // снятый рюкзак ложится на землю и, как ведро, становится препятствием
     pack.x = Math.round(x); pack.y = Math.round(y); pack.worn = false;
-    pack.blocked = World.block(pack.x, pack.y - 1, 9, 3); mapRev++;
+    pack.blocked = World.block(pack.x, pack.y - 1, 5, 2); mapRev++;
   }
   function liftPack() { if (pack.blocked) World.unblock(pack.blocked); pack.blocked = null; mapRev++; }
   function putOn() {
@@ -204,10 +204,10 @@ export async function startGame(canvas: HTMLCanvasElement, room: Room, ui: GameU
   function takeOff() {
     if (!pack.worn || hero.sitting) return false;
     const side = hero.dir === 'left' ? 1 : hero.dir === 'right' ? -1 : hero.dir === 'down' ? 1 : -1;   // сбоку, со стороны свободной от ведра руки
-    const spots = [[15 * side, 1], [-15 * side, 1], [0, 10], [15 * side, 6], [-15 * side, 6], [15 * side, -5], [-15 * side, -5], [0, -9], [20 * side, 1], [-20 * side, 1]];
+    const spots = [[12 * side, 1], [-12 * side, 1], [0, 8], [12 * side, 6], [-12 * side, 6], [12 * side, -5], [-12 * side, -5], [0, -8], [17 * side, 1], [-17 * side, 1]];
     for (const [dx, dy] of spots) {
       const x = Math.round(hero.x + dx!), y = Math.round(hero.y + dy!);
-      if (fits(x, y, 8)) { flushMove(); settlePack(x, y); send('packOff', { x, y }); return true; }
+      if (fits(x, y, 4)) { flushMove(); settlePack(x, y); send('packOff', { x, y }); return true; }
     }
     ui.toast('Здесь рюкзак не положить — тесно', 'bad');
     return false;
@@ -226,7 +226,7 @@ export async function startGame(canvas: HTMLCanvasElement, room: Room, ui: GameU
   const nearSeatNow = () => !hero.sitting && nearSeat(hero);
   const onFishingSpot = (x: number, y: number) => x >= seat.x - 10 && x <= seat.x + 14 && y >= seat.y - 31 && y <= seat.y + 12;
   const onBucket = (x: number, y: number) => !bucket.carried && x >= bucket.x - 9 && x <= bucket.x + 9 && y >= bucket.y - 19 && y <= bucket.y + 2;
-  const onPack = (x: number, y: number) => !pack.worn && x >= pack.x - 11 && x <= pack.x + 11 && y >= pack.y - 20 && y <= pack.y + 2;
+  const onPack = (x: number, y: number) => !pack.worn && x >= pack.x - 7 && x <= pack.x + 7 && y >= pack.y - 12 && y <= pack.y + 2;
   const onHero = (x: number, y: number) => Math.abs(x - hero.x) <= 10 && y <= hero.y + 2 && y >= hero.y - FH;
   const inWater = (x: number, y: number) => !World.canWalk(x, y) && y >= (x < 60 ? 226 : x < 132 ? 232 : 250);   // река и причал с его сваями
 
@@ -443,7 +443,7 @@ export async function startGame(canvas: HTMLCanvasElement, room: Room, ui: GameU
     sctx.clearRect(0, 0, sack.width, sack.height);
     for (const [dx, dy, a] of P.shadow) { sctx.fillStyle = `rgba(14, 26, 12, ${a! / 100})`; sctx.fillRect(dx!, dy!, 1, 1); }
     sctx.drawImage(packArt[p.kind].ground, 0, 0);
-    blit(sack, sctx, p.x - (P.baseX - P.x), p.y - (P.baseY - P.y), p.y);
+    blit(sack, sctx, p.x - (P.w >> 1), p.y - (P.h - 1), p.y);
   }
   function drawHero(a: Drawn, t: number) {
     const hx = Math.round(a.x), hy = Math.round(a.y);
@@ -473,6 +473,31 @@ export async function startGame(canvas: HTMLCanvasElement, room: Room, ui: GameU
       fctx.fillRect(x, y, len, 1);
     }
     fctx.globalAlpha = 1;
+  }
+  // Дым из трубы: клубы один за другим выходят из устья, поднимаются, их сносит вправо, они растут и тают.
+  // Всё считается от времени, без состояния: у клуба номер i своя доля пути u, у каждого нового — своя форма.
+  const SMOKE = { n: 6, life: 9, light: '#d0bda4', shade: '#b3a08b' };
+  const noise = (n: number, s: number) => { const v = Math.sin(n * 127.1 + s * 311.7) * 43758.5453; return v - Math.floor(v); };
+  function disc(cx2: number, cy2: number, r: number) {  // пиксельный круг
+    for (let j = Math.ceil(-r); j <= r; j++) { const half = Math.floor(Math.sqrt(r * r - j * j)); fctx.fillRect(Math.round(cx2) - half, Math.round(cy2) + j, half * 2 + 1, 1); }
+  }
+  function drawSmoke(t: number) {
+    const puffs: { x: number; y: number; r: number; lobes: [number, number, number][] }[] = [];
+    for (let i = 0; i < SMOKE.n; i++) {
+      const phase = t / SMOKE.life + i / SMOKE.n, born = Math.floor(phase), u = phase - born, id = born * SMOKE.n + i;
+      const rise = u < 0.2 ? u / 0.2 : 1, drift = u < 0.2 ? 0 : (u - 0.2) / 0.8;          // сначала вверх, потом по ветру
+      const x = World.smoke.x + rise * 2 + drift * (40 + noise(id, 1) * 14) + Math.sin(u * 9 + id) * 1.5;
+      const y = World.smoke.y - rise * 9 - drift * (20 + noise(id, 2) * 10);
+      const r = u < 0.12 ? 1 + u * 20 : u < 0.6 ? 3.4 + (u - 0.12) * 4 : 5.3 * (1 - (u - 0.6) / 0.4);   // растёт, потом тает
+      if (r < 0.8) continue;
+      const spread = 0.3 + u * 1.1;                                                       // чем дальше от трубы, тем рыхлее клуб
+      puffs.push({ x, y, r, lobes: [[0, 0, 1], [(noise(id, 3) - 0.2) * r * spread * 1.4, (noise(id, 4) - 0.6) * r * spread, 0.75], [-(noise(id, 5) + 0.2) * r * spread, (noise(id, 6) - 0.3) * r * spread, 0.65]] });
+    }
+    // у каждого клуба — тень снизу справа, свет сверху слева, как у нарисованного дыма на картинке
+    for (const p of puffs) {
+      fctx.fillStyle = SMOKE.shade; for (const [dx, dy, k] of p.lobes) disc(p.x + dx, p.y + dy, p.r * k);
+      fctx.fillStyle = SMOKE.light; for (const [dx, dy, k] of p.lobes) if (p.r * k >= 1.5) disc(p.x + dx - 1, p.y + dy - 1, p.r * k - 1);
+    }
   }
   function drawMarker() {                              // куда идём
     if (!marker) return;
@@ -541,7 +566,7 @@ export async function startGame(canvas: HTMLCanvasElement, room: Room, ui: GameU
 
   function render(t: number) {
     fctx.drawImage(img.world, 0, 0);
-    drawSparkles(t);
+    drawSparkles(t); drawSmoke(t);
     // кто дальше от зрителя, тот рисуется раньше
     const queue: { y: number; draw: () => void }[] = [];
     // Все, кто сидит, — один рыбак с картинки; рюкзак ему рисуем свой, а если сидят только другие — первого из них.

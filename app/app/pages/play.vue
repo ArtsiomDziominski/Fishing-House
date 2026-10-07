@@ -2,7 +2,7 @@
      входим в комнату-причал на игровом сервере и запускаем движок на холсте. -->
 <script setup lang="ts">
 import { Client, type Room } from '@colyseus/sdk';
-import { ROOM } from '@fh/shared';
+import { ROOM, World } from '@fh/shared';
 import { startGame, type GameHandle } from '~/game/engine';
 
 definePageMeta({ layout: false, middleware: 'auth' });
@@ -70,7 +70,7 @@ const overlay = computed(() => {
 
 <template>
   <div class="play">
-    <img class="backdrop" src="/assets/world.png" alt="" aria-hidden="true">
+    <img class="backdrop" :src="'/assets/world.png?v=' + World.rev" alt="" aria-hidden="true">
     <main class="stage">
       <canvas ref="canvas" width="240" height="320" aria-label="Домик рыбака у реки" />
     </main>

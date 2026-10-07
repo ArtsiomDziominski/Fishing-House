@@ -7,7 +7,7 @@ const game = useGameStore();
 const open = ref(false);
 
 // Картинки — кадры листа pack.png в порядке PACK_KINDS; размер кадра знает карта.
-const sheet = { '--w': World.pack.w, '--h': World.pack.h, '--n': PACK_KINDS.length };
+const sheet = { '--w': World.pack.icon.w, '--h': World.pack.icon.h, '--n': PACK_KINDS.length };
 const frame = (kind: PackKind) => ({ '--i': PACK_KINDS.indexOf(kind) });
 
 // после клика снимаем фокус с кнопки, иначе пробел и Enter будут нажимать её, а не подсекать
