@@ -1,11 +1,11 @@
-// Проверка игрового сервера целиком: бот заводит игрока в базе, входит по билету, идёт за ведром,
-// несёт его к причалу, садится и ловит рыбу; заодно проверяет, что телепорт сервер не принимает.
+// Проверка игрового сервера целиком: бот заводит игрока в базе, входит по билету, идёт за ведром и рюкзаком,
+// несёт их к причалу, садится и ловит рыбу; заодно проверяет, что телепорт сервер не принимает.
 //
 //   npm run smoke -w game-server            (нужны запущенные база и игровой сервер, .env с DATABASE_URL и GAME_SECRET)
 //   GAME_URL=http://localhost:2567 npm run smoke -w game-server
 
 import { Client, type Room } from '@colyseus/sdk';
-import { World, ROOM, seat, standPoint, type Bag, type ServerMessages, type WorldState } from '@fh/shared';
+import { World, ROOM, seat, standPoint, type Bag, type PlayerView, type ServerMessages, type WorldState } from '@fh/shared';
 import { createDb, createAccount, issueTicket, getProfile } from '@fh/shared/server';
 
 const url = process.env.GAME_URL || 'http://localhost:2567';
@@ -33,6 +33,7 @@ const check = (cond: unknown, what: string) => { if (!cond) throw new Error('н�
 
 await until('себя и ведро', () => !!self && !!bag);
 check(self!.sitting && self!.bucket.home, 'новый игрок сидит на причале, ведро у дома');
+check(!self!.pack.worn && self!.pack.x === World.pack.baseX && self!.pack.kind === 'leather', 'кожаный рюкзак лежит у дома');
 
 // ведро далеко — забросить нельзя
 room.send('press');
@@ -54,6 +55,12 @@ async function walk(to: { x: number; y: number }) {
     }
   }
 }
+// рюкзак далеко — надеть нельзя
+self = null;
+room.send('packOn');
+await until('отказ надеть рюкзак', () => !!self);
+check(!self!.pack.worn, 'издалека рюкзак не надеть');
+
 self = null;
 await walk({ x: World.bucket.baseX, y: World.bucket.baseY + 6 });
 await sleep(300);
@@ -65,6 +72,23 @@ await until('поправку', () => !!self);
 check(Math.hypot(self!.x - pos.x, self!.y - pos.y) < 1, 'телепорт не принят, сервер вернул героя');
 
 room.send('pick');
+
+// рюкзак: подойти, надеть, выбрать другой, снять рядом и надеть снова — остальным всё это видно в состоянии комнаты
+const seen = () => (room.state as { players: { get(sid: string): PlayerView | undefined } }).players.get(room.sessionId);
+await walk({ x: World.pack.baseX, y: World.pack.baseY + 6 });
+self = null;
+room.send('packOn');
+room.send('packKind', { kind: 'sailor' });
+await until('рюкзак на спине', () => !!seen()?.wearing && seen()!.pack === 'sailor');
+check(self === null, 'рюкзак надет и сменён на морской');
+const spot = World.nearestWalkable(pos.x + 15, pos.y + 1)!;
+room.send('packOff', spot);
+await until('рюкзак на земле', () => seen()?.wearing === false);
+check(seen()!.px === spot.x && seen()!.py === spot.y, 'рюкзак снят и лежит рядом');
+room.send('packOn');
+await until('рюкзак снова на спине', () => !!seen()?.wearing);
+check(self === null, 'рюкзак надет снова, без поправок от сервера');
+
 await walk({ x: seat.x, y: seat.y });
 room.send('sit', { put: { x: 96, y: 241 } });
 await sleep(200);
@@ -90,6 +114,7 @@ again.onMessage('bag', (m: Bag) => { bag = m; });
 again.onMessage('fish', () => {});
 await until('себя после входа', () => !!self);
 check(self!.sitting && !self!.bucket.home && self!.bucket.x === 96, 'после перезахода герой на причале, ведро там, где поставили');
+check(self!.pack.worn && self!.pack.kind === 'sailor', 'рюкзак после перезахода на спине, тот же морской');
 check(bag!.total === 1, 'ведро после перезахода с той же рыбой');
 await again.leave();
 await db.close();

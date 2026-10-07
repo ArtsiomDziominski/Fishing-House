@@ -3,6 +3,7 @@
 //   app/public/assets/fisher.png  — сидящий рыбак с удочкой, вырезанный с картинки пиксель в пиксель
 //   app/public/assets/line.png    — его леска со всплеском (пока он не рыбачит, рисуется как на картинке)
 //   app/public/assets/bucket.png, bucket-carry.png — ведро у дома: стоит на земле и в руке, ручкой вверх
+//   app/public/assets/pack.png    — рюкзак у дома: по кадру на каждую расцветку из shared/src/packs.ts
 //   app/public/assets/icon.png    — значок вкладки: лицо героя из app/app/game/hero.ts
 //   shared/src/world-data.ts      — проходимость и «глубина» предметов из tools/world-shapes.mjs
 //
@@ -15,6 +16,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import SHAPES from './world-shapes.mjs';
 import { HERO } from '../app/app/game/hero.ts';
+import { PACKS, PACK_KINDS } from '../shared/src/packs.ts';
 
 let sharp;
 try { sharp = (await import('sharp')).default; } catch (e) { console.error('Нужен пакет sharp:  npm i --no-save sharp'); process.exit(1); }
@@ -210,6 +212,59 @@ function drawHandle(buf, w, h) {                                    // buf — R
   for (const [x, y] of pts) if (y < HANDLE_UP + 1) { set(x - (x < cx ? 1 : 0) + (x > cx ? 1 : 0), y, dark); }
 }
 
+// ---------- 3в. Рюкзак у дома ----------
+// Рюкзак тоже вырезается в текстуру: герой носит его на спине и кладёт, где захочет.
+// Под ним дорисовываются каменный цоколь стены, угловой столб, к которому он прислонён, и трава.
+const PACK_ROWS = {              // строка → отрезки [x0, x1] рюкзака вместе с контуром
+  185: [[133, 135]], 186: [[132, 136]], 187: [[132, 135], [139, 141]], 188: [[130, 135], [138, 142]],
+  189: [[129, 143]], 190: [[128, 143]], 191: [[128, 144]], 192: [[128, 144]], 193: [[128, 144]],
+  194: [[127, 145]], 195: [[126, 145]], 196: [[126, 145]], 197: [[126, 145]], 198: [[126, 145]],
+  199: [[126, 144]], 200: [[127, 143]], 201: [[128, 141]], 202: [[129, 139]], 203: [[131, 138]],
+};
+const PACK_BUCKLE = [[131, 194], [131, 195]];                      // пряжка — жёлтая у рюкзака любой расцветки
+// следы сглаживания вокруг рюкзака: на стене, на столбе и светлая кайма на траве слева
+const PACK_HALO = [[136, 188], [144, 190], [145, 193], [127, 193], [126, 194], [125, 195], [125, 196], [125, 197], [125, 198], [125, 199]];
+function packMask(d) {
+  const at = (x, y) => { const i = (y * W + x) * 3; return [d[i], d[i + 1], d[i + 2]]; };
+  const body = new Uint8Array(W * H), shadow = new Uint8Array(W * H), halo = new Uint8Array(W * H);
+  for (const y in PACK_ROWS) for (const [x0, x1] of PACK_ROWS[y]) for (let x = x0; x <= x1; x++) body[y * W + x] = 1;
+  for (const [x, y] of PACK_HALO) halo[y * W + x] = 1;
+  // тень рюкзака на траве — полоса вдоль его дна и правого бока
+  const grass = hex('7a9632'), far = c => Math.abs(c[0] - grass[0]) + Math.abs(c[1] - grass[1]) + Math.abs(c[2] - grass[2]);
+  for (let y = 199; y <= 205; y++) for (let x = 125; x <= 147; x++) if (!body[y * W + x] && far(at(x, y)) > 26) shadow[y * W + x] = 1;
+  return { body, shadow, halo };
+}
+function repaintPack(buf, m) {
+  const src = Buffer.from(buf);
+  const at = (x, y) => { const i = (y * W + x) * 3; return [src[i], src[i + 1], src[i + 2]]; };
+  const put = (x, y, c) => { const i = (y * W + x) * 3; buf[i] = c[0]; buf[i + 1] = c[1]; buf[i + 2] = c[2]; };
+  const C = {
+    outline: hex('170501'), shade: hex('4a6243'),
+    stone: [hex('8a6652'), hex('896551'), hex('866652')], stoneTop: hex('97765f'), stoneLow: hex('886252'), stoneFoot: hex('795653'), stoneEdge: hex('6f5650'),
+  };
+  const wallFoot = x => 190 + Math.floor((x - 126) / 3);           // нижний контур цоколя: на пиксель ниже через каждые три
+  const postFoot = x => (x <= 138 ? 195 : x <= 141 ? 196 : x <= 145 ? 197 : 196);   // низ столба — углом к зрителю
+  for (let y = 184; y <= 205; y++) for (let x = 125; x <= 147; x++) {
+    const i = y * W + x; if (!m.body[i] && !m.shadow[i] && !m.halo[i]) continue;
+    const grass = at(x, 206 + (y % 3)); let c;
+    if (x >= 137) {                                                // столб: волокна идут сверху вниз — тянем чистую строку над рюкзаком
+      const d = y - postFoot(x);
+      if (x === 137 ? d <= 0 : d === 0) c = C.outline;             // 137 — левый контур столба
+      else if (d < 0) c = at(x, 186);
+      else c = x >= 143 && d <= 2 ? C.shade : grass;               // у подножия — тень, как под стеной правее
+    } else {
+      const d = y - wallFoot(x);
+      if (x < 126 || d > 0) c = grass;
+      else if (d === 0) c = C.outline;
+      else if (d === -1) c = C.stoneFoot;                          // камень темнеет к низу — как на видимой части цоколя
+      else if (d === -2) c = C.stoneLow;
+      else if (x === 136) c = C.stoneEdge;
+      else c = y === 185 ? C.stoneTop : C.stone[Math.floor(hash(x >> 1, y, 4) * 3)];
+    }
+    put(x, y, c);
+  }
+}
+
 // ---------- 4. Разметка → растры ----------
 function inPoly(pts, x, y) {
   let inside = false;
@@ -295,6 +350,8 @@ function rle(arr) {                                                  // [зна�
   const world = repaint(src, mask);
   const pail = bucketMask(src);
   repaintBucket(world, pail);
+  const sack = packMask(src);
+  repaintPack(world, sack);
   fs.mkdirSync(ASSETS, { recursive: true });
   await sharp(world, { raw: { width: W, height: H, channels: 3 } }).png({ compressionLevel: 9 }).toFile(path.join(ASSETS, 'world.png'));
 
@@ -336,6 +393,28 @@ function rle(arr) {                                                  // [зна�
     bodyW: bodyOnly.w, bodyH: bodyOnly.h, handle: HANDLE_UP, shadow: shadowPx,
   };
 
+  // рюкзак: по кадру на вид из PACK_KINDS, перекрашенному его расцветкой. Тень — списком, как у переставленного ведра
+  const sackBody = cut(sack.body), pw = sackBody.w, ph = sackBody.h, kinds = PACK_KINDS.length;
+  const sheet = Buffer.alloc(pw * kinds * ph * 4);
+  PACK_KINDS.forEach((kind, k) => {
+    for (let y = 0; y < ph; y++) for (let x = 0; x < pw; x++) {
+      const o = (y * pw + x) * 4; if (!sackBody.buf[o + 3]) continue;
+      const own = sackBody.buf.subarray(o, o + 3), buckle = PACK_BUCKLE.some(p => p[0] === sackBody.x + x && p[1] === sackBody.y + y);
+      const c = buckle ? own : PACKS.tint(kind, own), t = (y * pw * kinds + k * pw + x) * 4;
+      sheet[t] = c[0]; sheet[t + 1] = c[1]; sheet[t + 2] = c[2]; sheet[t + 3] = 255;
+    }
+  });
+  await save('pack.png', pw * kinds, ph, sheet);
+  const sackShadow = [];                                             // [dx, dy, плотность в %] от левого верха кадра; тень выходит за кадр вправо и вниз
+  for (let y = sackBody.y; y <= sackBody.y + ph + 2; y++) for (let x = sackBody.x; x <= sackBody.x + pw + 2; x++) if (sack.shadow[y * W + x]) {
+    const i = (y * W + x) * 3, dark = 1 - lum([src[i], src[i + 1], src[i + 2]]) / lum(hex('7a9632'));
+    sackShadow.push([x - sackBody.x, y - sackBody.y, Math.round(Math.max(8, Math.min(60, dark * 115)))]);
+  }
+  const pack = {
+    x: sackBody.x, y: sackBody.y, w: pw, h: ph,                      // где кадр лежит на картинке
+    baseX: sackBody.x + (pw >> 1), baseY: sackBody.y + ph - 1, shadow: sackShadow,
+  };
+
   // значок вкладки: голова героя анфас, 19×19 → ×3
   const face = HERO.build().down[0], icon = Buffer.alloc(19 * 19 * 4);
   for (let y = 0; y < 19; y++) for (let x = 0; x < 19; x++) for (let k = 0; k < 4; k++) icon[(y * 19 + x) * 4 + k] = face[(y * HERO.FW + x) * 4 + k];
@@ -349,17 +428,17 @@ function rle(arr) {                                                  // [зна�
     line: { x: line.x, y: line.y, w: line.w, h: line.h },
     rod: { x: 48, tipY: tip, waterY: SHAPES.points.waterY },         // леска: столбец, кончик удилища, уровень воды
     seat: { x: SHAPES.points.seat[0], y: SHAPES.points.seat[1], r: SHAPES.points.seatRadius },
-    bucket,
+    bucket, pack,
     sparkles: sparkles(world),
     walk: rle(walk), depth: rle(depth),
   };
   const js = '// Сгенерировано tools/build-world.mjs из tools/world-shapes.mjs — руками не править.\n' +
     '// walk и depth — растры 240×320 парами [значение, длина]: проходимость и строка-опора предмета в точке.\n' +
-    'export const WORLD_DATA = ' + JSON.stringify(data).replace(/,"(fisher|line|rod|seat|bucket|sparkles|walk|depth)"/g, ',\n  "$1"').replace('{"w"', '{\n  "w"').replace(/\}$/, '\n}') + ';\n';
+    'export const WORLD_DATA = ' + JSON.stringify(data).replace(/,"(fisher|line|rod|seat|bucket|pack|sparkles|walk|depth)"/g, ',\n  "$1"').replace('{"w"', '{\n  "w"').replace(/\}$/, '\n}') + ';\n';
   fs.writeFileSync(path.join(ROOT, 'shared', 'src', 'world-data.ts'), js);
 
   const count = a => a.reduce((s, v) => s + (v ? 1 : 0), 0);
-  console.log(`world.png ${W}x${H}; fisher.png ${fisher.w}x${fisher.h} @ ${fisher.x},${fisher.y}; line.png ${line.w}x${line.h}; bucket.png ${stand.w}x${stand.h} @ ${stand.x},${stand.y}, опора ${bucket.baseX},${bucket.baseY}, тень ${shadowPx.length} px; bucket-carry.png ${cw}x${ch}; проходимо ${count(walk)} px; за предметами ${count(depth)} px; бликов ${data.sparkles.length}; world-data.ts ${js.length} байт`);
+  console.log(`world.png ${W}x${H}; fisher.png ${fisher.w}x${fisher.h} @ ${fisher.x},${fisher.y}; line.png ${line.w}x${line.h}; bucket.png ${stand.w}x${stand.h} @ ${stand.x},${stand.y}, опора ${bucket.baseX},${bucket.baseY}, тень ${shadowPx.length} px; bucket-carry.png ${cw}x${ch}; проходимо ${count(walk)} px; за предметами ${count(depth)} px; pack.png ${pw * kinds}x${ph} @ ${pack.x},${pack.y}, опора ${pack.baseX},${pack.baseY}, тень ${sackShadow.length} px; бликов ${data.sparkles.length}; world-data.ts ${js.length} байт`);
 
   if (debugDir) {                                                    // проверочные картинки: разметка поверх карты
     fs.mkdirSync(debugDir, { recursive: true });

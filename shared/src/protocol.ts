@@ -2,6 +2,7 @@
 
 import type { Catch } from './fish.ts';
 import type { FishingEvent } from './fishing.ts';
+import type { PackKind } from './packs.ts';
 import type { Dir, WorldState } from './rules.ts';
 
 export const ROOM = 'pier';             // комната-причал; когда в ней тесно, сервер открывает ещё одну такую же
@@ -31,6 +32,9 @@ export interface ClientMessages {
   pick: void;                                 // взять ведро
   put: { x: number; y: number };              // поставить ведро сюда
   press: void;                                // забросить, подсечь — как F или пробел
+  packOn: void;                               // надеть рюкзак (он должен лежать рядом)
+  packOff: { x: number; y: number };          // снять рюкзак и положить сюда
+  packKind: { kind: PackKind };               // выбрать другой рюкзак
 }
 
 // Сервер → браузер (только своему игроку; остальных игроков видно в состоянии комнаты).
@@ -45,6 +49,7 @@ export interface PlayerView {
   pid: string; name: string;
   x: number; y: number; dir: Dir; sitting: boolean;
   carrying: boolean; bx: number; by: number; bucketHome: boolean;
+  wearing: boolean; px: number; py: number; pack: string;   // рюкзак: на спине или лежит в px, py; pack — его вид
   recent: ArrayLike<string>;
 }
 

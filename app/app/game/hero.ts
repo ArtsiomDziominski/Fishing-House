@@ -2,10 +2,12 @@
 // Голова в три четверти (ракурсы «влево»/«вправо») снята с картинки пиксель в пиксель,
 // вид спереди, со спины и туловище с ногами дорисованы той же палитрой.
 // Кадр 19×34, точка опоры (ступни) — середина нижней строки.
+// Рюкзак на спине — накладка поверх туловища, своя для каждого ракурса; её тона задаёт вид рюкзака.
 
 export type Dir = 'down' | 'up' | 'left' | 'right';
 export type Pixels = Uint8ClampedArray;
-export interface Rig { w: number; h: number; data: Pixels; x: number; y: number; bucket: [number, number] }
+export interface Patch { w: number; h: number; data: Pixels; x: number; y: number }
+export interface Rig extends Patch { bucket: [number, number] }
 
 export const HERO = (() => {
   const PAL: Record<string, string> = {
@@ -14,6 +16,7 @@ export const HERO = (() => {
     R: '904c07', H: 'c27709', r: 'ca8523', O: 'eda50b', s: 'e7a62c',   // тени плаща
     Y: 'e1b054', Z: 'f6c12a', W: 'fac708',                             // свет плаща
     y: 'e9a37c', S: 'cd8d68',                                          // кожа
+    g: 'fdcf6a',                                                       // пряжка рюкзака
   };
   const FW = 19, FH = 34;
 
@@ -141,6 +144,43 @@ export const HERO = (() => {
     },
   };
 
+  // Рюкзак на спине. Цифры 1..5 — тона его расцветки от света к тени, at — место накладки относительно туловища.
+  // Спереди видны только лямки, со спины — весь рюкзак, сбоку он выступает за спину (кадр «влево»: спина справа).
+  const PACK: Record<'down' | 'up' | 'left', { at: [number, number]; map: string[] }> = {
+    down: { at: [6, 0], map: ['23...32', '23...32', '23...32', '34...43', '34...43', '34...43', '.4...4.'] },
+    up: {
+      at: [6, 0],
+      map: [
+        '.3...3.',
+        '.ooooo.',
+        'o11112o',
+        'o12223o',
+        'o44g44o',
+        'o23334o',
+        'o23334o',
+        'o33445o',
+        '.ooooo.',
+      ],
+    },
+    left: {
+      at: [12, 1],
+      map: [
+        '.4.ooo.',
+        '.4o112o',
+        '4.o123o',
+        '4.o444o',
+        '.4o234o',
+        '..o234o',
+        '..o345o',
+        '...ooo.',
+      ],
+    },
+  };
+
+  // Сидящий рыбак вырезан с картинки (assets/fisher.png) и сидит спиной вправо — как кадр «влево».
+  // Рюкзак ему кладётся той же накладкой; здесь её место на этом спрайте.
+  const SEAT_PACK: [number, number] = [31, 18];
+
   // Ноги: 6 строк (28..33). stand — обе на земле, step — одна приподнята.
   const LEGS = {
     front: {
@@ -211,13 +251,13 @@ export const HERO = (() => {
   const COLORS: Record<string, number[]> = {}; for (const k in PAL) COLORS[k] = rgb(PAL[k]!);
 
   function blank() { return new Uint8ClampedArray(FW * FH * 4); }
-  function stamp(buf: Pixels, map: string[], ox: number, oy: number) {
+  function stamp(buf: Pixels, map: string[], ox: number, oy: number, colors = COLORS) {
     for (let j = 0; j < map.length; j++) {
       const row = map[j]!;
       for (let i = 0; i < row.length; i++) {
         const ch = row[i]!; if (ch === '.') continue;
         const x = ox + i, y = oy + j; if (x < 0 || y < 0 || x >= FW || y >= FH) continue;
-        const c = COLORS[ch]; if (!c) throw new Error('hero: нет цвета "' + ch + '"');
+        const c = colors[ch]; if (!c) throw new Error('hero: нет цвета "' + ch + '"');
         const o = (y * FW + x) * 4; buf[o] = c[0]!; buf[o + 1] = c[1]!; buf[o + 2] = c[2]!; buf[o + 3] = 255;
       }
     }
@@ -241,13 +281,15 @@ export const HERO = (() => {
     for (const [r, c] of EYES[dir] || []) rows[r]![c] = r === mid ? 'N' : 'y';
     return rows.map(r => r.join(''));
   }
-  function frontFrame(dir: 'down' | 'up', f: number, blink: boolean, carry: boolean) {
+  type Tones = Record<string, number[]> | null;
+  function frontFrame(dir: 'down' | 'up', f: number, blink: boolean, carry: boolean, pack: Tones) {
     const buf = blank();
     const step = f === 1 || f === 3, dip = step ? 1 : 0;
     const legs = LEGS[dir === 'down' ? 'front' : 'back'];
     let lmap = step ? legs.step : legs.stand; if (f === 3) lmap = mirrorMap(lmap);
     stamp(buf, lmap, 0, 28);
     stamp(buf, BODY[dir], 0, 17 + dip);
+    if (pack) stamp(buf, PACK[dir].map, PACK[dir].at[0], 17 + dip + PACK[dir].at[1], pack);
     // руки: противоход ногам
     const swing = f === 1 ? 1 : f === 3 ? -1 : 0;
     const busy = carry ? (dir === 'down' ? 'left' : 'right') : '';     // эта рука держит ведро и не качается
@@ -256,30 +298,44 @@ export const HERO = (() => {
     stamp(buf, blink ? blinkHead(dir) : HEAD[dir], 0, dip);
     return buf;
   }
-  function sideFrame(f: number, blink: boolean, carry: boolean) {
+  function sideFrame(f: number, blink: boolean, carry: boolean, pack: Tones) {
     const buf = blank();
     const lift = f === 2 || f === 4 ? -1 : 0;                 // на проходе тело чуть выше
     const lmap = f === 0 ? LEGS.side.stand : (f === 1 || f === 3) ? LEGS.side.stride : LEGS.side.pass;
     stamp(buf, lmap, 0, 28);
     stamp(buf, BODY.left, 0, 17 + lift + 1);
+    if (pack) stamp(buf, PACK.left.map, PACK.left.at[0], 17 + lift + 1 + PACK.left.at[1], pack);   // рука — поверх рюкзака
     const armX = f === 1 ? 7 : f === 3 ? 11 : 9;              // рука вперёд / назад
     if (!carry) stamp(buf, ARM_SIDE, armX, 19 + lift + 1);
     stamp(buf, blink ? blinkHead('left') : HEAD.left, 0, lift + 1);
     return buf;
   }
 
+  const withPack = (tones: number[][]): Record<string, number[]> => ({ ...COLORS, 1: tones[0]!, 2: tones[1]!, 3: tones[2]!, 4: tones[3]!, 5: tones[4]! });
+  // Карта → RGBA: накладка, которую игра рисует отдельно от кадра.
+  function pixels(map: string[], colors = COLORS) {
+    const w = map[0]!.length, h = map.length, data = new Uint8ClampedArray(w * h * 4);
+    for (let j = 0; j < h; j++) for (let i = 0; i < w; i++) {
+      const ch = map[j]![i]!; if (ch === '.') continue;
+      const c = colors[ch]!, o = (j * w + i) * 4; data[o] = c[0]!; data[o + 1] = c[1]!; data[o + 2] = c[2]!; data[o + 3] = 255;
+    }
+    return { w, h, data };
+  }
+
   // carry = true — те же кадры без руки, занятой ведром (её рисует игра поверх ведра).
-  function build(carry = false): Record<Dir, Pixels[]> {
+  // tones — пять тонов [r, g, b] рюкзака на спине от света к тени; без них герой налегке.
+  function build(carry = false, tones: number[][] | null = null): Record<Dir, Pixels[]> {
+    const pack: Tones = tones && withPack(tones);
     const frames: Record<Dir, Pixels[]> = { down: [], up: [], left: [], right: [] };
     for (let f = 0; f < 5; f++) {
-      frames.down.push(frontFrame('down', f, false, carry));
-      frames.up.push(frontFrame('up', f, false, carry));
-      const side = sideFrame(f, false, carry);
+      frames.down.push(frontFrame('down', f, false, carry, pack));
+      frames.up.push(frontFrame('up', f, false, carry, pack));
+      const side = sideFrame(f, false, carry, pack);
       frames.left.push(side);
       frames.right.push(mirror(side));
     }
-    const wink = sideFrame(0, true, carry);                 // кадр 5 — моргнул
-    frames.down.push(frontFrame('down', 0, true, carry)); frames.up.push(frames.up[0]!);
+    const wink = sideFrame(0, true, carry, pack);           // кадр 5 — моргнул
+    frames.down.push(frontFrame('down', 0, true, carry, pack)); frames.up.push(frames.up[0]!);
     frames.left.push(wink); frames.right.push(mirror(wink));
     return frames;
   }
@@ -287,15 +343,14 @@ export const HERO = (() => {
   // Рука с ведром для стороны dir: { w, h, data (RGBA), x, y } в координатах кадра и место дна ведра.
   function carryRig(dir: Dir): Rig {
     const src = CARRY[dir === 'right' ? 'left' : dir], flip = dir === 'right';
-    const map = flip ? mirrorMap(src.arm.map) : src.arm.map, w = map[0]!.length, hgt = map.length;
-    const data = new Uint8ClampedArray(w * hgt * 4);
-    for (let j = 0; j < hgt; j++) for (let i = 0; i < w; i++) {
-      const ch = map[j]![i]!; if (ch === '.') continue;
-      const c = COLORS[ch]!, o = (j * w + i) * 4; data[o] = c[0]!; data[o + 1] = c[1]!; data[o + 2] = c[2]!; data[o + 3] = 255;
-    }
-    const x = flip ? FW - src.arm.at[0] - w : src.arm.at[0];
-    return { w, h: hgt, data, x, y: src.arm.at[1], bucket: [flip ? -src.bucket[0] : src.bucket[0], src.bucket[1]] };
+    const px = pixels(flip ? mirrorMap(src.arm.map) : src.arm.map);
+    const x = flip ? FW - src.arm.at[0] - px.w : src.arm.at[0];
+    return { ...px, x, y: src.arm.at[1], bucket: [flip ? -src.bucket[0] : src.bucket[0], src.bucket[1]] };
+  }
+  // Рюкзак на спине сидящего рыбака: накладка и её место на спрайте fisher.png.
+  function seatPack(tones: number[][]): Patch {
+    return { ...pixels(PACK.left.map, withPack(tones)), x: SEAT_PACK[0], y: SEAT_PACK[1] };
   }
 
-  return { FW, FH, PAL, build, carryRig };
+  return { FW, FH, PAL, build, carryRig, seatPack };
 })();

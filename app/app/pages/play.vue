@@ -77,7 +77,8 @@ const overlay = computed(() => {
 
     <GameCatch />
     <GameToast />
-    <GameDock @bucket="handle?.bucketAction()" @fish="handle?.fishAction()" @stand="handle?.standUp()" />
+    <GameDock @bucket="handle?.bucketAction()" @pack="handle?.packAction()" @fish="handle?.fishAction()" @stand="handle?.standUp()" />
+    <GamePack @pick="handle?.setPack($event)" />
     <GameOnline />
     <div class="zoom" aria-label="Масштаб">
       <button type="button" title="Мельче (−)" :disabled="!game.canZoomOut" @click="handle?.zoom(-1); ($event.currentTarget as HTMLElement).blur()">−</button>

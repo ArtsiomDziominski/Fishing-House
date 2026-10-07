@@ -23,7 +23,7 @@ function canWalk(x: number, y: number): boolean {
 // Строка-опора предмета в точке: если она ниже ступней героя, предмет его закрывает.
 function depthAt(x: number, y: number): number { return (x < 0 || y < 0 || x >= W || y >= H) ? 0 : depth[y * W + x]!; }
 
-// Временное препятствие (поставленное ведро): закрывает овал клеток и возвращает их список, чтобы потом открыть.
+// Временное препятствие (поставленное ведро, снятый рюкзак): закрывает овал клеток и возвращает их список, чтобы потом открыть.
 function block(cx: number, cy: number, rx: number, ry: number): number[] {
   const changed: number[] = [];
   for (let y = Math.ceil(cy - ry); y <= cy + ry; y++) for (let x = Math.ceil(cx - rx); x <= cx + rx; x++) {
@@ -122,5 +122,5 @@ function findPath(from: Point, to: Point): Point[] | null {
 
 export const World = {
   W, H, walk, depth, canWalk, depthAt, nearestWalkable, findPath, block, unblock,
-  fisher: DATA.fisher, line: DATA.line, rod: DATA.rod, seat: DATA.seat, bucket: DATA.bucket, sparkles: DATA.sparkles as [number, number, number, number][],
+  fisher: DATA.fisher, line: DATA.line, rod: DATA.rod, seat: DATA.seat, bucket: DATA.bucket, pack: DATA.pack, sparkles: DATA.sparkles as [number, number, number, number][],
 };

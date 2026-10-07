@@ -15,6 +15,10 @@ export const PlayerState = schema({
   bx: t.int16(),              // где стоит ведро, если не в руке
   by: t.int16(),
   bucketHome: t.boolean(),    // ведро на своём месте у дома
+  wearing: t.boolean(),       // рюкзак на спине
+  px: t.int16(),              // где лежит рюкзак, если не на спине
+  py: t.int16(),
+  pack: t.string(),           // вид рюкзака (PACK_KINDS)
   recent: t.array('string'),  // хвосты последних рыб над ведром
 }, 'PlayerState');
 export type PlayerState = SchemaType<typeof PlayerState>;

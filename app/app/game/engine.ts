@@ -1,4 +1,4 @@
-// Игра в браузере: рыбак ходит по миру с картинки, носит ведро и ловит рыбу с края причала — вместе с другими игроками.
+// Игра в браузере: рыбак ходит по миру с картинки, носит ведро и рюкзак и ловит рыбу с края причала — вместе с другими игроками.
 // Кадр собирается в буфере 240×320 («арт-пиксели») и выводится на экран целым множителем,
 // поэтому пиксели остаются ровными при любом размере окна.
 //
@@ -9,18 +9,19 @@
 
 import type { Room } from '@colyseus/sdk';
 import {
-  World, FISH, MOVE_EVERY, SPEED, CARRY_SPEED, REACH, seat, nearSeat, standPoint, dist,
-  type Bag, type Catch, type ClientMessages, type Dir, type PlayerView, type ServerMessages, type WorldState,
+  World, FISH, PACKS, PACK_KINDS, MOVE_EVERY, SPEED, CARRY_SPEED, REACH, seat, nearSeat, standPoint, dist,
+  type Bag, type Catch, type ClientMessages, type Dir, type PackKind, type PlayerView, type ServerMessages, type WorldState,
 } from '@fh/shared';
 import { HERO } from './hero.ts';
 import { createFishingView, drawFishing, type FishArt } from './fishing-view.ts';
 
-export interface Actions { bucket: string | null; fish: string | null; hot: boolean; stand: boolean }
+export interface Actions { bucket: string | null; pack: string | null; fish: string | null; hot: boolean; stand: boolean }
 export type Tone = '' | 'good' | 'bad';
 
 // Куда движок сообщает о том, что показывает интерфейс вокруг холста (его держит Pinia-хранилище).
 export interface GameUI {
   bag(bag: Bag): void;
+  pack(kind: PackKind): void;                           // какой рюкзак у героя сейчас
   toast(text: string, tone?: Tone, fishId?: string | null): void;
   actions(a: Actions): void;
   moved(): void;                                        // первый шаг — подсказку можно приглушить
@@ -30,17 +31,19 @@ export interface GameUI {
 }
 
 export interface GameHandle {
-  bucketAction(): void; fishAction(): void; standUp(): void; zoom(step: number): void; destroy(): void;
+  bucketAction(): void; packAction(): void; setPack(kind: PackKind): void; fishAction(): void; standUp(): void; zoom(step: number): void; destroy(): void;
 }
 
-interface Hero { x: number; y: number; dir: Dir; sitting: boolean; moving: boolean; anim: number; path: { x: number; y: number }[] | null; then: 'sit' | 'pick' | null; stuck: number }
+interface Hero { x: number; y: number; dir: Dir; sitting: boolean; moving: boolean; anim: number; path: { x: number; y: number }[] | null; then: 'sit' | 'pick' | 'wear' | null; stuck: number }
 interface Ghost { x: number; y: number; anim: number; moving: boolean; blink: number; seen: number }
-interface Drawn { x: number; y: number; dir: Dir; moving: boolean; anim: number; carrying: boolean; recent: ArrayLike<string>; blink: number }
+// pack — вид рюкзака на спине или null, если герой налегке
+interface Drawn { x: number; y: number; dir: Dir; moving: boolean; anim: number; carrying: boolean; pack: PackKind | null; recent: ArrayLike<string>; blink: number }
 
 const W = World.W, H = World.H, FW = HERO.FW, FH = HERO.FH;
 const ANCHOR = 9;                     // столбец кадра героя над точкой опоры
 const STEP_FPS = 8;                   // кадров шага в секунду
-const { fisher, bucket: B, rod } = World;
+const { fisher, bucket: B, pack: P, rod } = World;
+const packKind = (v: string): PackKind => (PACKS.isKind(v) ? v : PACKS.DEFAULT);   // вид из состояния комнаты — просто строка
 
 const loadImage = (src: string) => new Promise<HTMLImageElement>((ok, fail) => { const im = new Image(); im.onload = () => ok(im); im.onerror = () => fail(new Error('не загрузилось: ' + src)); im.src = src; });
 const makeCanvas = (w: number, h: number) => { const c = document.createElement('canvas'); c.width = w; c.height = h; return c; };
@@ -60,16 +63,18 @@ export async function startGame(canvas: HTMLCanvasElement, room: Room, ui: GameU
   const cell = makeCanvas(CW, CH), cctx = ctx2d(cell);
   const TOP = 3;                                                             // запас над ведром под хвосты рыб
   const pail = makeCanvas(B.w, B.h + TOP), pctx = ctx2d(pail);               // клетка ведра на земле
+  const sack = makeCanvas(P.w + 3, P.h + 3), sctx = ctx2d(sack);             // клетка рюкзака на земле: справа и снизу место под тень
 
   const hero: Hero = { x: seat.x, y: seat.y, dir: 'down', sitting: true, moving: false, anim: 0, path: null, then: null, stuck: 0 };
   const bucket = { x: B.baseX, y: B.baseY, carried: false, home: true, blocked: null as number[] | null, pointed: false };
+  const pack = { x: P.baseX, y: P.baseY, worn: false, kind: PACKS.DEFAULT, blocked: null as number[] | null };
   let bag: Bag = { counts: {}, best: {}, total: 0, grams: 0, recent: [] };
   let pendingBag: Bag | null = null;                                         // ведро после подсечки — покажем, когда рыба долетит
   const view = { k: 1, zoom: 0, w: W, h: H, camX: 0, camY: 0 };
   const keys = new Set<string>();
   const ghosts = new Map<string, Ghost>();
   let marker: { x: number; y: number; t: number } | null = null, moved = false, debug = params.has('debug');
-  let debugLayer: HTMLCanvasElement | null = null, debugFor: number[] | null | undefined, pointer: { x: number; y: number } | null = null;
+  let debugLayer: HTMLCanvasElement | null = null, debugFor = -1, mapRev = 0, pointer: { x: number; y: number } | null = null;   // mapRev растёт, когда предмет ставят или поднимают
   let ready = false, sendIn = 0, lastSent = { x: hero.x, y: hero.y }, frameNo = 0, onlineKey = '', onlineIn = 0, actionsKey = '';
   let raf = 0, last = 0, alive = true;
 
@@ -84,18 +89,33 @@ export async function startGame(canvas: HTMLCanvasElement, room: Room, ui: GameU
   ];
 
   // ---------- картинки ----------
-  const img: Record<'world' | 'fisher' | 'line' | 'bucket' | 'carry', HTMLImageElement> = {} as any;
-  const files = { world: 'world.png', fisher: 'fisher.png', line: 'line.png', bucket: 'bucket.png', carry: 'bucket-carry.png' } as const;
+  const img: Record<'world' | 'fisher' | 'line' | 'bucket' | 'carry' | 'pack', HTMLImageElement> = {} as any;
+  const files = { world: 'world.png', fisher: 'fisher.png', line: 'line.png', bucket: 'bucket.png', carry: 'bucket-carry.png', pack: 'pack.png' } as const;
   await Promise.all((Object.keys(files) as (keyof typeof files)[]).map(k => loadImage('/assets/' + files[k]).then(im => { img[k] = im; })));
-  const heroFrames = {} as Record<Dir, HTMLCanvasElement[]>, carryFrames = {} as Record<Dir, HTMLCanvasElement[]>;
   const rigs = {} as Record<Dir, { arm: HTMLCanvasElement; x: number; y: number; bucket: [number, number] }>;
   const fishArt: Record<string, FishArt & { tail: [string, string] }> = {};
-  const plain = HERO.build(false), busy = HERO.build(true);
-  for (const dir of Object.keys(plain) as Dir[]) {
-    heroFrames[dir] = plain[dir].map(buf => fromPixels({ w: FW, h: FH, data: buf }));
-    carryFrames[dir] = busy[dir].map(buf => fromPixels({ w: FW, h: FH, data: buf }));
+  for (const dir of ['down', 'up', 'left', 'right'] as const) {
     const rig = HERO.carryRig(dir); rigs[dir] = { arm: fromPixels(rig), x: rig.x, y: rig.y, bucket: rig.bucket };
   }
+  // Кадры героя: налегке и с рюкзаком каждого вида, с ведром и без. Набор собирается, когда впервые понадобился.
+  const frameSets = new Map<string, Record<Dir, HTMLCanvasElement[]>>();
+  function heroFrames(carry: boolean, kind: PackKind | null) {
+    const key = (carry ? '+' : '-') + (kind || '');
+    let set = frameSets.get(key);
+    if (!set) {
+      const px = HERO.build(carry, kind && PACKS.tones(kind)); set = {} as Record<Dir, HTMLCanvasElement[]>;
+      for (const dir of Object.keys(px) as Dir[]) set[dir] = px[dir].map(buf => fromPixels({ w: FW, h: FH, data: buf }));
+      frameSets.set(key, set);
+    }
+    return set;
+  }
+  // Рюкзаки: кадр листа pack.png на вид и накладка на спину сидящего рыбака.
+  const packArt = {} as Record<PackKind, { ground: HTMLCanvasElement; seat: HTMLCanvasElement; seatX: number; seatY: number }>;
+  PACK_KINDS.forEach((kind, i) => {
+    const ground = makeCanvas(P.w, P.h); ctx2d(ground).drawImage(img.pack, i * P.w, 0, P.w, P.h, 0, 0, P.w, P.h);
+    const s = HERO.seatPack(PACKS.tones(kind));
+    packArt[kind] = { ground, seat: fromPixels(s), seatX: s.x, seatY: s.y };
+  });
   for (const sp of FISH.SPECIES) {
     const s = FISH.sprite(sp), side = fromPixels(s);
     fishArt[sp.id] = { side, sideFlip: flipped(side), up: fromPixels(FISH.upright(s)), tail: sp.tail };
@@ -125,18 +145,19 @@ export async function startGame(canvas: HTMLCanvasElement, room: Room, ui: GameU
 
   // ---------- ведро ----------
   const canPick = () => !hero.sitting && !bucket.carried && dist(hero, bucket) <= REACH;
-  // Можно ли поставить ведро дном в точку: под ним земля, место рыбака свободно, и герой не окажется внутри.
-  function fits(x: number, y: number) {
-    if (!World.canWalk(x, y) || !World.canWalk(x - 5, y) || !World.canWalk(x + 5, y) || !World.canWalk(x, y - 2)) return false;
-    if (x >= seat.x - 12 && x <= seat.x + 14 && y >= seat.y - 12 && y <= seat.y + 8) return false;
-    const dx = (hero.x - x) / 8.5, dy = (hero.y - (y - 1)) / 4.5;
+  // Можно ли поставить предмет дном в точку: под ним земля, место рыбака свободно, и герой не окажется внутри.
+  // half — полуширина дна: 5 у ведра, 8 у рюкзака.
+  function fits(x: number, y: number, half = 5) {
+    if (!World.canWalk(x, y) || !World.canWalk(x - half, y) || !World.canWalk(x + half, y) || !World.canWalk(x, y - 2)) return false;
+    if (x >= seat.x - 7 - half && x <= seat.x + 9 + half && y >= seat.y - 12 && y <= seat.y + 8) return false;
+    const dx = (hero.x - x) / (half + 3.5), dy = (hero.y - (y - 1)) / 4.5;
     return hero.sitting || dx * dx + dy * dy > 1;
   }
   function settle(x: number, y: number) {                // ведро встаёт на землю и становится препятствием (для своего героя)
     bucket.x = Math.round(x); bucket.y = Math.round(y); bucket.carried = false;
-    bucket.blocked = World.block(bucket.x, bucket.y - 1, 7, 3);
+    bucket.blocked = World.block(bucket.x, bucket.y - 1, 7, 3); mapRev++;
   }
-  function lift() { if (bucket.blocked) World.unblock(bucket.blocked); bucket.blocked = null; }
+  function lift() { if (bucket.blocked) World.unblock(bucket.blocked); bucket.blocked = null; mapRev++; }
   function pickUp() {
     if (!canPick()) return false;
     flushMove();
@@ -165,10 +186,47 @@ export async function startGame(canvas: HTMLCanvasElement, room: Room, ui: GameU
     if (bucket.carried) putDown(); else pickUp();
   }
 
+  // ---------- рюкзак ----------
+  const canWear = () => !hero.sitting && !pack.worn && dist(hero, pack) <= REACH;
+  function settlePack(x: number, y: number) {            // снятый рюкзак ложится на землю и, как ведро, становится препятствием
+    pack.x = Math.round(x); pack.y = Math.round(y); pack.worn = false;
+    pack.blocked = World.block(pack.x, pack.y - 1, 9, 3); mapRev++;
+  }
+  function liftPack() { if (pack.blocked) World.unblock(pack.blocked); pack.blocked = null; mapRev++; }
+  function putOn() {
+    if (!canWear()) return false;
+    flushMove();
+    liftPack(); pack.worn = true;
+    hero.path = null; hero.then = null; marker = null;
+    send('packOn');
+    return true;
+  }
+  function takeOff() {
+    if (!pack.worn || hero.sitting) return false;
+    const side = hero.dir === 'left' ? 1 : hero.dir === 'right' ? -1 : hero.dir === 'down' ? 1 : -1;   // сбоку, со стороны свободной от ведра руки
+    const spots = [[15 * side, 1], [-15 * side, 1], [0, 10], [15 * side, 6], [-15 * side, 6], [15 * side, -5], [-15 * side, -5], [0, -9], [20 * side, 1], [-20 * side, 1]];
+    for (const [dx, dy] of spots) {
+      const x = Math.round(hero.x + dx!), y = Math.round(hero.y + dy!);
+      if (fits(x, y, 8)) { flushMove(); settlePack(x, y); send('packOff', { x, y }); return true; }
+    }
+    ui.toast('Здесь рюкзак не положить — тесно', 'bad');
+    return false;
+  }
+  function packAction() {
+    if (hero.sitting) return;
+    if (pack.worn) takeOff(); else putOn();
+  }
+  function setPack(kind: PackKind) {                     // другой рюкзак — меняется и на спине, и на земле
+    if (!ready || kind === pack.kind) return;
+    pack.kind = kind; ui.pack(kind);
+    send('packKind', { kind });
+  }
+
   // ---------- герой ----------
   const nearSeatNow = () => !hero.sitting && nearSeat(hero);
   const onFishingSpot = (x: number, y: number) => x >= seat.x - 10 && x <= seat.x + 14 && y >= seat.y - 31 && y <= seat.y + 12;
   const onBucket = (x: number, y: number) => !bucket.carried && x >= bucket.x - 9 && x <= bucket.x + 9 && y >= bucket.y - 19 && y <= bucket.y + 2;
+  const onPack = (x: number, y: number) => !pack.worn && x >= pack.x - 11 && x <= pack.x + 11 && y >= pack.y - 20 && y <= pack.y + 2;
   const onHero = (x: number, y: number) => Math.abs(x - hero.x) <= 10 && y <= hero.y + 2 && y >= hero.y - FH;
   const inWater = (x: number, y: number) => !World.canWalk(x, y) && y >= (x < 60 ? 226 : x < 132 ? 232 : 250);   // река и причал с его сваями
 
@@ -197,7 +255,7 @@ export async function startGame(canvas: HTMLCanvasElement, room: Room, ui: GameU
   function fishAction() {                               // F, пробел: сесть, забросить, подсечь
     if (hero.sitting) send('press'); else if (nearSeatNow()) sitDown();
   }
-  function walkTo(x: number, y: number, then?: 'sit' | 'pick') {
+  function walkTo(x: number, y: number, then?: 'sit' | 'pick' | 'wear') {
     if (hero.sitting) standUp();
     const path = World.findPath(hero, { x, y });
     if (!path || !path.length) { hero.path = null; marker = null; return; }
@@ -209,6 +267,7 @@ export async function startGame(canvas: HTMLCanvasElement, room: Room, ui: GameU
     const then = hero.then; hero.path = null; hero.then = null; marker = null;
     if (then === 'sit' && nearSeatNow()) sitDown();
     else if (then === 'pick') pickUp();
+    else if (then === 'wear') putOn();
   }
   function noteMoved() { if (!moved) { moved = true; ui.moved(); } }
 
@@ -236,9 +295,11 @@ export async function startGame(canvas: HTMLCanvasElement, room: Room, ui: GameU
     if (w.sitting && (!hero.sitting || fishing.st.phase === 'off')) { hero.sitting = true; fishing.sit(); }   // в т.ч. первый вход сидя
     else if (!w.sitting && hero.sitting) { hero.sitting = false; fishing.leave(); }
     if (hero.sitting) { hero.x = seat.x; hero.y = seat.y; }
-    lift();
+    lift(); liftPack();
     bucket.home = w.bucket.home;
     if (w.bucket.carried) bucket.carried = true; else settle(w.bucket.x, w.bucket.y);
+    pack.kind = w.pack.kind; ui.pack(pack.kind);
+    if (w.pack.worn) pack.worn = true; else settlePack(w.pack.x, w.pack.y);
     lastSent = { x: hero.x, y: hero.y };
     if (!ready) { ready = true; layout(); }
   }
@@ -332,6 +393,7 @@ export async function startGame(canvas: HTMLCanvasElement, room: Room, ui: GameU
     const ph = fishing.st.phase;
     const a: Actions = {
       bucket: hero.sitting ? null : bucket.carried ? 'Поставить ведро' : canPick() ? 'Взять ведро' : null,
+      pack: hero.sitting ? null : pack.worn ? 'Снять рюкзак' : canWear() ? 'Надеть рюкзак' : null,
       fish: hero.sitting
         ? (ph === 'rest' ? 'Забросить' : ph === 'bite' ? 'Подсекай!' : ph === 'wait' || ph === 'cast' || ph === 'scare' ? 'Подсечь' : 'Есть!')
         : nearSeatNow() ? 'Сесть рыбачить' : null,
@@ -377,13 +439,19 @@ export async function startGame(canvas: HTMLCanvasElement, room: Room, ui: GameU
     drawTails(pctx, 0, TOP, b.recent);
     blit(pail, pctx, ox, oy, b.y);
   }
+  function drawPack(p: { x: number; y: number; kind: PackKind }) {   // рюкзак на земле
+    sctx.clearRect(0, 0, sack.width, sack.height);
+    for (const [dx, dy, a] of P.shadow) { sctx.fillStyle = `rgba(14, 26, 12, ${a! / 100})`; sctx.fillRect(dx!, dy!, 1, 1); }
+    sctx.drawImage(packArt[p.kind].ground, 0, 0);
+    blit(sack, sctx, p.x - (P.baseX - P.x), p.y - (P.baseY - P.y), p.y);
+  }
   function drawHero(a: Drawn, t: number) {
     const hx = Math.round(a.x), hy = Math.round(a.y);
     const f = a.moving ? 1 + (Math.floor(a.anim) % 4) : ((t + a.blink) % 3.7 < 0.14 ? 5 : 0);   // стоя иногда моргает
     cctx.clearRect(0, 0, CW, CH);
     cctx.fillStyle = 'rgba(18, 22, 10, 0.3)';         // тень под ногами
     cctx.fillRect(CX + 4, FH - 2, 11, 1); cctx.fillRect(CX + 2, FH - 1, 15, 2); cctx.fillRect(CX + 4, FH + 1, 11, 1);
-    cctx.drawImage((a.carrying ? carryFrames : heroFrames)[a.dir][f]!, CX, 0);
+    cctx.drawImage(heroFrames(a.carrying, a.pack)[a.dir][f]!, CX, 0);
     if (a.carrying) {                                 // ведро в руке качается вместе с плечом
       const rig = rigs[a.dir], side = a.dir === 'left' || a.dir === 'right';
       const sway = side ? (f === 2 || f === 4 ? -1 : 0) : (f === 1 || f === 3 ? 1 : 0);
@@ -412,13 +480,13 @@ export async function startGame(canvas: HTMLCanvasElement, room: Room, ui: GameU
     fctx.fillStyle = 'rgba(244, 227, 193, 0.9)';
     for (const [dx, dy] of [[-3 - p, 0], [2 + p, 0], [0, -2 - p], [0, 1 + p]] as const) fctx.fillRect(x + dx, y + dy, dx ? 2 : 1, dx ? 1 : 2);
   }
-  const GLYPH: Record<'E' | 'F', string[]> = { E: ['###', '#..', '##.', '#..', '###'], F: ['###', '#..', '##.', '#..', '#..'] };
-  function drawKeycap(letter: 'E' | 'F', cx2: number, top: number) {   // клавиша-подсказка над предметом
+  const GLYPH: Record<'E' | 'F' | 'Q', string[]> = { E: ['###', '#..', '##.', '#..', '###'], F: ['###', '#..', '##.', '#..', '#..'], Q: ['.###.', '#...#', '#...#', '#..#.', '.##.#'] };   // Q в три пикселя шириной не читается
+  function drawKeycap(letter: 'E' | 'F' | 'Q', cx2: number, top: number) {   // клавиша-подсказка над предметом
     const x0 = cx2 - 4;
     fctx.fillStyle = '#240702'; fctx.fillRect(x0 + 1, top, 7, 9); fctx.fillRect(x0, top + 1, 9, 7);
     fctx.fillStyle = '#f4e3c1'; fctx.fillRect(x0 + 1, top + 1, 7, 7);
     fctx.fillStyle = '#240702';
-    GLYPH[letter].forEach((row, j) => { for (let i = 0; i < 3; i++) if (row[i] === '#') fctx.fillRect(x0 + 3 + i, top + 2 + j, 1, 1); });
+    GLYPH[letter].forEach((row, j) => { for (let i = 0; i < row.length; i++) if (row[i] === '#') fctx.fillRect(x0 + 4 - (row.length >> 1) + i, top + 2 + j, 1, 1); });
   }
   function drawPrompts(t: number) {
     const bob = Math.floor(t * 2.5) % 2;
@@ -427,6 +495,7 @@ export async function startGame(canvas: HTMLCanvasElement, room: Room, ui: GameU
       fctx.fillStyle = '#240702'; fctx.fillRect(bucket.x - 3, bucket.y - 28 - bob, 7, 3); fctx.fillRect(bucket.x - 2, bucket.y - 25 - bob, 5, 1); fctx.fillRect(bucket.x - 1, bucket.y - 24 - bob, 3, 1);
       fctx.fillStyle = '#f4e3c1'; fctx.fillRect(bucket.x - 2, bucket.y - 27 - bob, 5, 1); fctx.fillRect(bucket.x - 1, bucket.y - 26 - bob, 3, 1); fctx.fillRect(bucket.x, bucket.y - 25 - bob, 1, 1);
     }
+    if (canWear() && !hero.moving) drawKeycap('Q', pack.x, pack.y - P.h - 13 - bob);
     if (nearSeatNow() && !hero.moving) drawKeycap('F', Math.round(hero.x), Math.round(hero.y) - FH - 11 - bob);
   }
 
@@ -441,12 +510,12 @@ export async function startGame(canvas: HTMLCanvasElement, room: Room, ui: GameU
     x.putImageData(id, 0, 0); return c;
   }
   function drawDebug() {
-    if (!debugLayer || debugFor !== bucket.blocked) { debugLayer = buildDebugLayer(); debugFor = bucket.blocked; }   // проходимость меняется, когда ведро переставляют
+    if (!debugLayer || debugFor !== mapRev) { debugLayer = buildDebugLayer(); debugFor = mapRev; }   // проходимость меняется, когда ведро или рюкзак переставляют
     fctx.drawImage(debugLayer, 0, 0);
     fctx.fillStyle = '#f0f'; fctx.fillRect(Math.round(hero.x), Math.round(hero.y), 1, 1);
     if (hero.path) { fctx.fillStyle = '#0ff'; for (const p of hero.path) fctx.fillRect(p.x, p.y, 1, 1); }
     const px = pointer ? `  курсор ${pointer.x},${pointer.y}  ходить ${World.canWalk(pointer.x, pointer.y) ? 'да' : 'нет'}  опора ${World.depthAt(pointer.x, pointer.y)}` : '';
-    ui.debug(`герой ${hero.x.toFixed(1)},${hero.y.toFixed(1)} ${hero.dir}${hero.sitting ? ' сидит' : ''}  рыбалка ${fishing.st.phase}  ведро ${bucket.carried ? 'в руке' : bucket.x + ',' + bucket.y}  игроков рядом ${ghosts.size}  масштаб ×${view.k}${px}`);
+    ui.debug(`герой ${hero.x.toFixed(1)},${hero.y.toFixed(1)} ${hero.dir}${hero.sitting ? ' сидит' : ''}  рыбалка ${fishing.st.phase}  ведро ${bucket.carried ? 'в руке' : bucket.x + ',' + bucket.y}  рюкзак ${pack.kind} ${pack.worn ? 'на спине' : pack.x + ',' + pack.y}  игроков рядом ${ghosts.size}  масштаб ×${view.k}${px}`);
   }
 
   // Имена над чужими героями — уже на экранном холсте, чтобы текст был чётким при любом масштабе.
@@ -475,19 +544,26 @@ export async function startGame(canvas: HTMLCanvasElement, room: Room, ui: GameU
     drawSparkles(t);
     // кто дальше от зрителя, тот рисуется раньше
     const queue: { y: number; draw: () => void }[] = [];
-    let someoneSits = hero.sitting;
+    // Все, кто сидит, — один рыбак с картинки; рюкзак ему рисуем свой, а если сидят только другие — первого из них.
+    let someoneSits = hero.sitting, seatPack: PackKind | null = hero.sitting && pack.worn ? pack.kind : null;
     if (ready) {
-      if (!hero.sitting) queue.push({ y: hero.y, draw: () => drawHero({ ...hero, carrying: bucket.carried, recent: bag.recent, blink: 0 }, t) });
+      if (!hero.sitting) queue.push({ y: hero.y, draw: () => drawHero({ ...hero, carrying: bucket.carried, pack: pack.worn ? pack.kind : null, recent: bag.recent, blink: 0 }, t) });
       if (!bucket.carried) queue.push({ y: bucket.y, draw: () => drawBucket({ ...bucket, recent: bag.recent }) });
+      if (!pack.worn) queue.push({ y: pack.y, draw: () => drawPack(pack) });
     }
     players()?.forEach((p, sid) => {
       if (sid === room.sessionId) return;
       const g = ghosts.get(sid); if (!g) return;
-      if (p.sitting) someoneSits = true;
-      else queue.push({ y: g.y, draw: () => drawHero({ x: g.x, y: g.y, dir: p.dir, moving: g.moving, anim: g.anim, carrying: p.carrying, recent: p.recent, blink: g.blink }, t) });
+      const worn = p.wearing ? packKind(p.pack) : null;
+      if (p.sitting) { if (!someoneSits) seatPack = worn; someoneSits = true; }
+      else queue.push({ y: g.y, draw: () => drawHero({ x: g.x, y: g.y, dir: p.dir, moving: g.moving, anim: g.anim, carrying: p.carrying, pack: worn, recent: p.recent, blink: g.blink }, t) });
       if (!p.carrying) queue.push({ y: p.by - 0.5, draw: () => drawBucket({ x: p.bx, y: p.by, home: p.bucketHome, recent: p.recent }) });
+      if (!p.wearing) queue.push({ y: p.py - 0.5, draw: () => drawPack({ x: p.px, y: p.py, kind: packKind(p.pack) }) });
     });
-    if (someoneSits) queue.push({ y: seat.y, draw: () => fctx.drawImage(img.fisher, fisher.x, fisher.y) });
+    if (someoneSits) queue.push({ y: seat.y, draw: () => {
+      fctx.drawImage(img.fisher, fisher.x, fisher.y);
+      if (seatPack) { const a = packArt[seatPack]; fctx.drawImage(a.seat, fisher.x + a.seatX, fisher.y + a.seatY); }
+    } });
     queue.sort((a, b) => a.y - b.y);
     for (const q of queue) q.draw();
     if (hero.sitting) drawFishing(fctx, fishing.st, t, {
@@ -520,6 +596,7 @@ export async function startGame(canvas: HTMLCanvasElement, room: Room, ui: GameU
     if (ev.repeat) return;
     if (ev.code === 'KeyF' || ev.code === 'Space' || ev.code === 'Enter') { fishAction(); ev.preventDefault(); }
     else if (ev.code === 'KeyE') bucketAction();
+    else if (ev.code === 'KeyQ') packAction();
     else if (ev.code === 'Escape') standUp();
     else if (ev.code === 'Equal' || ev.code === 'NumpadAdd') zoom(1);
     else if (ev.code === 'Minus' || ev.code === 'NumpadSubtract') zoom(-1);
@@ -534,6 +611,7 @@ export async function startGame(canvas: HTMLCanvasElement, room: Room, ui: GameU
     if (hero.sitting && (onFishingSpot(p.x, p.y) || inWater(p.x, p.y))) fishAction();   // сидя: клик по рыбаку или воде — рыбалка
     else if (bucket.carried && onHero(p.x, p.y)) putDown();
     else if (onBucket(p.x, p.y)) { if (canPick()) pickUp(); else walkTo(bucket.x, bucket.y + 5, 'pick'); }
+    else if (onPack(p.x, p.y)) { if (canWear()) putOn(); else walkTo(pack.x, pack.y + 5, 'wear'); }
     else if (onFishingSpot(p.x, p.y)) { if (nearSeatNow()) sitDown(); else walkTo(seat.x, seat.y, 'sit'); }
     else walkTo(p.x, p.y);
   });
@@ -561,16 +639,16 @@ export async function startGame(canvas: HTMLCanvasElement, room: Room, ui: GameU
   raf = requestAnimationFrame(tick);
 
   // для отладки из консоли; step(dt, n) прокручивает игру вручную
-  (window as any).FH_GAME = { hero, bucket, view, keys, ghosts, fishing, room, sitDown, standUp, walkTo, zoom, pickUp, putDown, fishAction, bucketAction,
+  (window as any).FH_GAME = { hero, bucket, pack, view, keys, ghosts, fishing, room, sitDown, standUp, walkTo, zoom, pickUp, putDown, putOn, takeOff, setPack, fishAction, bucketAction, packAction,
     step: (dt: number, n = 1) => { for (let i = 0; i < n; i++) update(dt); render(performance.now() / 1000); } };
 
   return {
-    bucketAction, fishAction, standUp, zoom,
+    bucketAction, packAction, setPack, fishAction, standUp, zoom,
     destroy() {
       alive = false; cancelAnimationFrame(raf);
       for (const [t, type, fn, opts] of listeners) t.removeEventListener(type, fn, opts);
       for (const off of offs) off();
-      lift();
+      lift(); liftPack();
       delete (window as any).FH_GAME;
     },
   };

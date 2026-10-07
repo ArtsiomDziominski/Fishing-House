@@ -4,13 +4,13 @@
 // - ходит клиент сам (так нет задержки), а сервер проверяет каждый шаг: в проходимую ли клетку и не быстрее ли, чем можно;
 //   не принял — шлёт игроку «self», и тот встаёт туда, где сервер его видит;
 // - рыбалку ведёт только сервер: когда клюёт, кто клюнул, успел ли подсечь. Клиент шлёт лишь нажатия;
-// - улов пишется в базу сразу при подсечке, место героя и ведра — при выходе и раз в минуту.
+// - улов пишется в базу сразу при подсечке, место героя, ведра и рюкзака — при выходе и раз в минуту.
 
 import { Room, definePlugins, type Client } from 'colyseus';
 import { UniqueSessionPlugin } from 'colyseus/plugins/unique-session';
 import { z } from 'zod';
 import {
-  World, FISH, DIRS, ROOM_SIZE, SPEED, REACH, PUT_REACH, NEAR_PIER, HOOK_GRACE,
+  World, FISH, DIRS, PACK_KINDS, ROOM_SIZE, SPEED, REACH, PUT_REACH, NEAR_PIER, HOOK_GRACE,
   createFishing, addToBag, nearSeat, bucketNearSeat, standPoint, startState, dist, seat,
   type Bag, type Fishing, type FishingEvent, type ServerMessages, type WorldState,
 } from '@fh/shared';
@@ -39,6 +39,7 @@ interface Session {
 const point = z.object({ x: z.number().finite(), y: z.number().finite() });
 const moveMsg = point.extend({ dir: z.enum(DIRS) });
 const sitMsg = z.object({ put: point.optional() }).optional();
+const packKindMsg = z.object({ kind: z.enum(PACK_KINDS) });
 
 type Auth = Ticket & { id: string };
 
@@ -65,6 +66,13 @@ export class PierRoom extends Room<{ state: PierState; client: Client<{ auth: Au
     this.onMessage('pick', client => this.pick(client));
     this.onMessage('put', point, (client, m) => this.put(client, m.x, m.y));
     this.onMessage('press', client => this.withSession(client, s => { if (s.world.sitting) s.fishing.press(); }));
+    this.onMessage('packOn', client => this.packOn(client));
+    this.onMessage('packOff', point, (client, m) => this.packOff(client, m.x, m.y));
+    this.onMessage('packKind', packKindMsg, (client, m) => this.withSession(client, s => {
+      if (s.world.pack.kind === m.kind) return;
+      s.world.pack.kind = m.kind; s.dirty = true;
+      this.syncView(s);
+    }));
   }
 
   // Билет выдаёт сайт после входа (POST /api/game/ticket); без него в комнату не пустит.
@@ -163,6 +171,23 @@ export class PierRoom extends Room<{ state: PierState; client: Client<{ auth: Au
     this.syncView(s);
   }
 
+  // Рюкзак надевают стоя рядом с ним, снимают — на землю возле себя. Сидя он остаётся там, где был: на спине или на земле.
+  private packOn(client: Client) {
+    const s = this.sessions.get(client.sessionId); if (!s) return;
+    const w = s.world;
+    if (w.sitting || w.pack.worn || dist(w, w.pack) > REACH + SLACK) { this.reject(client, s); return; }
+    w.pack.worn = true; s.dirty = true;
+    this.syncView(s);
+  }
+
+  private packOff(client: Client, x: number, y: number) {
+    const s = this.sessions.get(client.sessionId); if (!s) return;
+    const w = s.world;
+    if (w.sitting || !w.pack.worn || dist(w, { x, y }) > PUT_REACH || !World.canWalk(x, y)) { this.reject(client, s); return; }
+    w.pack = { x: Math.round(x), y: Math.round(y), worn: false, kind: w.pack.kind }; s.dirty = true;
+    this.syncView(s);
+  }
+
   // ---------- рыбалка ----------
 
   private onFishing(client: Client, s: Session, ev: FishingEvent) {
@@ -187,6 +212,7 @@ export class PierRoom extends Room<{ state: PierState; client: Client<{ auth: Au
     const w = s.world, v = s.view;
     v.x = w.x; v.y = w.y; v.dir = w.dir; v.sitting = w.sitting;
     v.carrying = w.bucket.carried; v.bx = w.bucket.x; v.by = w.bucket.y; v.bucketHome = w.bucket.home;
+    v.wearing = w.pack.worn; v.px = w.pack.x; v.py = w.pack.y; v.pack = w.pack.kind;
     const recent = s.bag.recent.filter(id => FISH.byId[id]);
     if (v.recent.length !== recent.length || recent.some((id, i) => v.recent[i] !== id)) {
       v.recent.clear(); for (const id of recent) v.recent.push(id);
@@ -196,7 +222,7 @@ export class PierRoom extends Room<{ state: PierState; client: Client<{ auth: Au
   private async save(s: Session, force: boolean) {
     if (!s.dirty && !force) return;
     s.dirty = false;
-    try { await saveWorld(db, s.pid, { ...s.world, bucket: { ...s.world.bucket } }); }
+    try { await saveWorld(db, s.pid, { ...s.world, bucket: { ...s.world.bucket }, pack: { ...s.world.pack } }); }
     catch (err) { s.dirty = true; console.error(`не сохранилось место игрока ${s.pid}:`, err); }
   }
   private async saveAll(force: boolean) { await Promise.all([...this.sessions.values()].map(s => this.save(s, force))); }

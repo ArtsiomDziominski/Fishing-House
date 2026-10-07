@@ -5,7 +5,8 @@ import { randomInt } from 'node:crypto';
 import { desc, eq, sql } from 'drizzle-orm';
 import { FISH, type Catch } from '../fish.ts';
 import { emptyBag, type Bag } from '../protocol.ts';
-import { DIRS, type WorldState } from '../rules.ts';
+import { PACKS } from '../packs.ts';
+import { DIRS, startPack, type WorldState } from '../rules.ts';
 import { World } from '../world.ts';
 import { loginKey } from '../account.ts';
 import type { Db } from './db.ts';
@@ -64,14 +65,16 @@ export async function loadBag(db: Db, pid: string): Promise<Bag> {
   return bag;
 }
 
-// Сохранённое место героя и ведра; что не так — исправляем, чтобы игрок не застрял в стене.
+// Сохранённое место героя, ведра и рюкзака; что не так — исправляем, чтобы игрок не застрял в стене.
+// У тех, кто играл до появления рюкзаков, рюкзака в записи нет — он ждёт на своём месте у дома.
 function cleanWorld(w: WorldState | null): WorldState | null {
   if (!w || typeof w.x !== 'number' || typeof w.y !== 'number' || !w.bucket) return null;
   const p = World.nearestWalkable(w.x, w.y) || { x: World.seat.x, y: World.seat.y };
-  const b = w.bucket;
+  const b = w.bucket, k: Partial<WorldState['pack']> = w.pack || startPack();
   return {
     x: p.x, y: p.y, dir: DIRS.includes(w.dir) ? w.dir : 'down', sitting: !!w.sitting,
     bucket: { x: Math.round(b.x) || World.bucket.baseX, y: Math.round(b.y) || World.bucket.baseY, carried: !!b.carried && !w.sitting, home: !!b.home },
+    pack: { x: Math.round(k.x!) || World.pack.baseX, y: Math.round(k.y!) || World.pack.baseY, worn: !!k.worn, kind: PACKS.isKind(k.kind) ? k.kind : PACKS.DEFAULT },
   };
 }
 
