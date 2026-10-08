@@ -1,0 +1,51 @@
+# Проверки на каждый пуш в main и на каждый пул-реквест: тесты общего кода, типы всех пакетов и бот,
+# который проходит игру через настоящий игровой сервер с базой. То же у себя — `npm run check:all`.
+name: Проверки
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: check-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    services:
+      db:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: fishing
+          POSTGRES_PASSWORD: fishing
+          POSTGRES_DB: fishing
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U fishing"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      DATABASE_URL: postgres://fishing:fishing@localhost:5432/fishing
+      GAME_SECRET: ci-only-game-secret-0123456789abcdef0123456789   # только для этой проверки: база живёт, пока идёт задача
+
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22      # как в Dockerfile
+          cache: npm
+      - run: npm ci
+      - name: Тесты общего кода
+        run: npm test
+      - name: Типы
+        run: npm run typecheck
+      - name: Миграции
+        run: npm run db:migrate
+      - name: Бот проходит игру
+        run: npm run smoke:own -w game-server

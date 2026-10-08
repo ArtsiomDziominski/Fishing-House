@@ -1,0 +1,64 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm test *)",
+      "Bash(npm run check *)",
+      "Bash(npm run check:all *)",
+      "Bash(npm run typecheck *)",
+      "Bash(npm run smoke *)",
+      "Bash(npm run smoke:own *)",
+      "Bash(npm run db:migrate *)",
+      "Bash(git status *)",
+      "Bash(git diff *)",
+      "Bash(git log *)",
+      "Bash(git show *)",
+      "PowerShell(npm test *)",
+      "PowerShell(npm run check *)",
+      "PowerShell(npm run check:all *)",
+      "PowerShell(npm run typecheck *)",
+      "PowerShell(npm run smoke *)",
+      "PowerShell(npm run smoke:own *)",
+      "PowerShell(npm run db:migrate *)",
+      "PowerShell(git status *)",
+      "PowerShell(git diff *)",
+      "PowerShell(git log *)",
+      "PowerShell(git show *)"
+    ]
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          { "type": "command", "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/rules.mjs\" guard" }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          { "type": "command", "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/rules.mjs\" note" }
+        ]
+      },
+      {
+        "matcher": "Bash|PowerShell",
+        "hooks": [
+          { "type": "command", "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/rules.mjs\" world" }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/rules.mjs\" check",
+            "timeout": 180,
+            "statusMessage": "Тесты и типы тронутых пакетов"
+          }
+        ]
+      }
+    ]
+  }
+}

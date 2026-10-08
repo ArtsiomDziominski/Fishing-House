@@ -3,6 +3,7 @@
 //
 //   npm run smoke -w game-server            (нужны запущенные база и игровой сервер, .env с DATABASE_URL и GAME_SECRET)
 //   GAME_URL=http://localhost:2567 npm run smoke -w game-server
+//   npm run smoke:own -w game-server        (то же, но сервер бот поднимает сам — smoke-own.ts)
 
 import { Client, type Room } from '@colyseus/sdk';
 import { World, ITEMS, ROOM, DAY_LENGTH, WEATHERS, dayHour, weatherText, seat, standPoint, type Bag, type Item, type PlayerView, type ServerMessages, type WorldState } from '@fh/shared';
