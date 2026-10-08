@@ -19,6 +19,7 @@ import { createRiverView } from './river-view.ts';
 import { createWeatherView, HAZE } from './weather-view.ts';
 import { createBoatsView } from './boats.ts';
 import { createGullView } from './gull.ts';
+import { createCrowView } from './crow.ts';
 import { createWildlifeView } from './wildlife.ts';
 import { createHouseView } from './house.ts';
 import { createPetsView } from './pets.ts';
@@ -157,6 +158,7 @@ export async function startGame(canvas: HTMLCanvasElement, room: Room, ui: GameU
   { const px = ctx2d(pailBody); px.drawImage(img.bucket, 0, 0); for (const [dx, dy] of B.shadow) px.clearRect(dx!, dy!, 1, 1); }
   const river = createRiverView(img.world);                                  // где на карте вода и как она течёт
   const boats = createBoatsView(W, H, river.water);                          // лодки у причала; их пиксели — уже не вода
+  const crow = createCrowView();                                             // ворона над поляной и на крыше дома
   const gull = createGullView(W);                                            // чайка над водой и на столбах причала
   const life = createWildlifeView(W, H, river.water);                        // утки и рыбы на открытой воде, в стороне от лодок
   const home = createHouseView(img.house, img.world);                        // дом поверх карты: за ним можно спрятаться
@@ -658,11 +660,14 @@ export async function startGame(canvas: HTMLCanvasElement, room: Room, ui: GameU
     // кто дальше от зрителя, тот рисуется раньше
     const queue: { y: number; draw: () => void }[] = [];
     for (const b of boats) queue.push({ y: b.y, draw: () => b.draw(fctx, t) });
-    const bird = gull.at(Date.now() + skew);         // сидящая — в очереди по низу столба, летящая — поверх всех
+    const people = [...(ready ? [hero] : []), ...ghosts.values()];
+    const afoot: { x: number; y: number }[] = ready && !hero.sitting ? [hero] : [];// кто на ногах: сидящего рыбака чайка не боится
+    players()?.forEach((p, sid) => { const g = ghosts.get(sid); if (g && !p.sitting && sid !== room.sessionId) afoot.push(g); });
+    const bird = gull.at(Date.now() + skew, afoot);  // сидящая — в очереди по низу столба, летящая — поверх всех
     if (bird?.perched) queue.push({ y: bird.base, draw: () => fctx.drawImage(bird.img, bird.x, bird.y) });
-    const wild = life.at(Date.now() + skew, [...(ready ? [hero] : []), ...ghosts.values()]);   // кто подойдёт близко, спугнёт утку
+    const wild = life.at(Date.now() + skew, people);   // кто подойдёт близко, спугнёт утку
     for (const w of wild.water) queue.push({ y: w.y, draw: () => w.draw(fctx) });
-    for (const p of pets.at(Date.now() + skew)) queue.push({ y: p.y, draw: () => p.draw(fctx) });   // кот и собака — как все, по лапам
+    for (const p of pets.at(Date.now() + skew, Number.isFinite(fixedHour) ? fixedHour : undefined)) queue.push({ y: p.y, draw: () => p.draw(fctx) });   // кот и собака — как все, по лапам
     // Все, кто сидит, — один рыбак с картинки; рюкзак ему рисуем свой, а если сидят только другие — первого из них.
     let someoneSits = hero.sitting, seatPack: PackKind | null = hero.sitting && pack.worn ? pack.kind : null;
     if (ready) {
@@ -686,6 +691,8 @@ export async function startGame(canvas: HTMLCanvasElement, room: Room, ui: GameU
     queue.sort((a, b) => a.y - b.y);
     for (const q of queue) q.draw();
     if (bird && !bird.perched) fctx.drawImage(bird.img, bird.x, bird.y);
+    const rook = crow.at(Date.now() + skew);           // ворона — над всеми: и в полёте, и на коньке крыши
+    if (rook) fctx.drawImage(rook.img, rook.x, rook.y);
     for (const draw of wild.air) draw(fctx);           // летящие утки — тоже поверх всех
     const head = { x: seat.x + 2, y: fisher.y };       // макушка сидящего рыбака
     if (hero.sitting) drawFishing(fctx, fishing.st, t, {

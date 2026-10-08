@@ -12,8 +12,9 @@ export const clockShift = (hour: number, ms: number): number => (wrap(hour) - da
 
 export interface DayPart { id: 'night' | 'morning' | 'day' | 'evening'; name: string }
 const NIGHT: DayPart = { id: 'night', name: 'Ночь' };
+export const NIGHT_HOURS = { from: 21, to: 5 };   // ночь: с какого часа и до какого (по ней же спят кот и собака)
 // [до какого часа, часть суток]
-const PARTS: [number, DayPart][] = [[5, NIGHT], [8, { id: 'morning', name: 'Утро' }], [18, { id: 'day', name: 'День' }], [21, { id: 'evening', name: 'Вечер' }], [24, NIGHT]];
+const PARTS: [number, DayPart][] = [[NIGHT_HOURS.to, NIGHT], [8, { id: 'morning', name: 'Утро' }], [18, { id: 'day', name: 'День' }], [NIGHT_HOURS.from, { id: 'evening', name: 'Вечер' }], [24, NIGHT]];
 export const dayPart = (hour: number): DayPart => { const h = wrap(hour); return (PARTS.find(p => h < p[0]) || PARTS[0]!)[1]; };
 
 // «19:40» — часы в игре идут с шагом в десять минут.

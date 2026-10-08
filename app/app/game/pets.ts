@@ -1,4 +1,5 @@
 // Кот и собака: бродят по поляне, садятся, ложатся, прыгают; кот иногда дремлет, собака что-то вынюхивает.
+// Ночью оба спят у крыльца дома: вечером приходят туда, утром уходят бродить снова.
 // Только картинка — героя не задерживают и на игру не влияют. Где они и что делают, считается от часов причала
 // (их ведёт сервер), поэтому все игроки видят одних и тех же зверей в одних и тех же местах.
 // Ходят только там, где может ходить герой: карту проходимости берём из игры при создании (World.walk), маршруты
@@ -6,7 +7,7 @@
 // Кадры — пиксельные карты 1:1 в арт-пикселях (буква — цвет из PAL, точка — пусто), мордой вправо; влево — отражение.
 // Размер под героя 19×34: кот 12×9, собака 16×11. a — точка опоры: середина лап на нижнем ряду.
 
-import { World } from '@fh/shared';
+import { World, DAY_LENGTH, NIGHT_HOURS, dayPart } from '@fh/shared';
 
 type Ctx = CanvasRenderingContext2D;
 interface Pt { x: number; y: number }
@@ -165,6 +166,7 @@ const CHAIN = 12;                  // столько сроков подряд �
 const NEAR = [24, 130];            // «поближе»: не ближе и не дальше стольких пикселей
 const GRID = 2;                    // шаг сетки для поиска пути, арт-пикселей
 const AWAY = 26;                   // от места рыбака, ведра и рюкзака держатся на таком расстоянии
+const BED = { x: 62, y: 8, gap: 20 };   // ночлег: у крыльца — на столько правее левого края дома и ниже его низа; друг от друга не ближе gap
 
 const hash = (n: number, s: number) => { let h = (n * 374761393 + s * 668265263) | 0; h = (h ^ (h >>> 13)) * 1274126177 | 0; return ((h ^ (h >>> 16)) >>> 0) / 4294967296; };
 const ease = (k: number) => k * k * (3 - 2 * k);
@@ -282,24 +284,57 @@ export function petPlanner(room: Uint8Array, W: number, H: number, seed: number,
     }
     return path;
   }
-  // Переход в начале срока n: путь из места срока n-1 в место срока n и его длина.
-  const legMemo = new Map<number, { path: Pt[]; len: number[]; total: number }>();
-  function leg(n: number) {
-    const hit = legMemo.get(n); if (hit) return hit;
+  // Путь из a в b и его длина. key — под каким именем его запомнить.
+  const legMemo = new Map<string, Leg>();
+  function way(key: string, a: Pt, b: Pt): Leg {
+    const hit = legMemo.get(key); if (hit) return hit;
     if (legMemo.size > 8) legMemo.clear();
-    const path = route(spot(n - 1), spot(n)), len = [0];
+    const path = route(a, b), len = [0];
     for (let i = 1; i < path.length; i++) len.push(len[i - 1]! + Math.hypot(path[i]!.x - path[i - 1]!.x, path[i]!.y - path[i - 1]!.y));
     const out = { path, len, total: len[len.length - 1]! };
-    legMemo.set(n, out); return out;
+    legMemo.set(key, out); return out;
   }
-  return { spots, spot, leg, ok };
+  // Переход в начале срока n: из места срока n-1 в место срока n.
+  const leg = (n: number) => way('n' + n, spot(n - 1), spot(n));
+  // Ночлег: место, ближайшее к точке p, из тех, что годятся (fit). Вечером зверь идёт туда с места срока n, утром — оттуда.
+  function bedAt(p: Pt, fit: (q: Pt) => boolean): Pt | null {
+    let best: Pt | null = null, bd = Infinity;
+    for (const q of spots) {
+      const d = Math.hypot(q.x - p.x, q.y - p.y);
+      if (d < bd && fit(q)) { bd = d; best = q; }
+    }
+    return best;
+  }
+  const toBed = (n: number, bed: Pt) => way('to' + n, spot(n), bed);
+  const fromBed = (n: number, bed: Pt) => way('from' + n, bed, spot(n));
+  return { spots, spot, leg, ok, bedAt, toBed, fromBed };
+}
+interface Leg { path: Pt[]; len: number[]; total: number }
+
+// Когда звери спят. ms — часы причала; fixed — час, на котором время остановлено (?hour=22), иначе его нет.
+// night — сейчас ночь; sleep и wake — секунды по часам причала, когда она началась (эта или будущая, если ещё день)
+// и когда кончилась сегодня. Считаются от начала суток, поэтому не дрожат от кадра к кадру.
+export function petNight(ms: number, fixed?: number) {
+  const day = DAY_LENGTH * 1000, hourMs = day / 24, d0 = Math.floor(ms / day) * day, h = (ms - d0) / hourMs;
+  if (fixed !== undefined) return { night: dayPart(fixed).id === 'night', still: true, sleep: 0, wake: 0 };
+  const night = h >= NIGHT_HOURS.from || h < NIGHT_HOURS.to;
+  const sleep = d0 + (h < NIGHT_HOURS.to ? NIGHT_HOURS.from - 24 : NIGHT_HOURS.from) * hourMs;
+  return { night, still: false, sleep: sleep / 1000, wake: (d0 + NIGHT_HOURS.to * hourMs) / 1000 };
 }
 
 // at(ms) — что нарисовать в этот миг (ms — часы причала): по штуке на зверя, класть в общую очередь по y (лапы).
 export function createPetsView() {
   const W = World.W, H = World.H, walk = World.walk.slice();
   const avoid = [{ x: World.seat.x, y: World.seat.y }, { x: World.bucket.baseX, y: World.bucket.baseY }, { x: World.pack.baseX, y: World.pack.baseY }];
-  const pets = PETS.map(p => ({ ...p, sheet: sheet(p.art as Record<string, Map1>), plan: petPlanner(petRoom(walk, W, H, p.r), W, H, p.seed, avoid) }));
+  const beds: Pt[] = [], porch = { x: World.house.x + BED.x, y: World.house.y + World.house.h + BED.y };
+  // Спящего должно быть видно целиком: ничто из стоящего ближе к зрителю (крыльцо, бочки, кусты) его не закрывает.
+  const open = (q: Pt) => { for (let j = -8; j <= 0; j++) for (let i = -12; i <= 12; i++) if (World.depthAt(q.x + i, q.y + j) > q.y) return false; return true; };
+  const pets = PETS.map(p => {
+    const plan = petPlanner(petRoom(walk, W, H, p.r), W, H, p.seed, avoid);
+    const bed = plan.bedAt(porch, q => open(q) && !beds.some(o => Math.hypot(o.x - q.x, o.y - q.y) < BED.gap));
+    if (bed) beds.push(bed);
+    return { ...p, sheet: sheet(p.art as Record<string, Map1>), plan, bed };
+  });
   const cell = document.createElement('canvas'); cell.width = 32; cell.height = 24;
   const cctx = cell.getContext('2d')!;
 
@@ -324,11 +359,23 @@ export function createPetsView() {
     ctx.globalAlpha = 1;
   }
 
-  function at(ms: number) {
-    const s = ms / 1000, out: { y: number; draw: (ctx: Ctx) => void }[] = [];
+  // fixed — час, на котором время остановлено у этого игрока (?hour=22): тогда ночью звери просто спят на месте.
+  function at(ms: number, fixed?: number) {
+    const s = ms / 1000, out: { y: number; draw: (ctx: Ctx) => void }[] = [], dark = petNight(ms, fixed);
     pets.forEach((p, i) => {
       if (!p.plan.spots.length) return;
-      const t = s + i * 7.3, n = Math.floor(t / p.turn), u = t - n * p.turn, leg = p.plan.leg(n);
+      const shift = i * 7.3, t = s + shift, n = Math.floor(t / p.turn);
+      // bed — зверь у ночлега или идёт к нему. Вечером он доживает свой срок как обычно и с его места идёт спать;
+      // утром спит до начала первого целого срока и с ночлега идёт на место этого срока.
+      let u = t - n * p.turn, leg = p.plan.leg(n), bed = false;
+      if (p.bed && dark.still) { if (dark.night) { bed = true; u = Infinity; } }
+      else if (p.bed && dark.night) {
+        const n0 = Math.floor((dark.sleep + shift) / p.turn);
+        if (n > n0) { bed = true; leg = p.plan.toBed(n0, p.bed); u = t - (n0 + 1) * p.turn; }
+      } else if (p.bed) {
+        const n1 = Math.ceil((dark.wake + shift) / p.turn);
+        if (n < n1) { bed = true; u = Infinity; } else if (n === n1) leg = p.plan.fromBed(n1, p.bed);
+      }
       const fast = leg.total / p.speed > p.turn * 0.7, speed = fast ? Math.min(p.run, leg.total / (p.turn * 0.7)) : p.speed;
       const go = leg.total / speed;
       let x: number, y: number, left: boolean, frame: string, lift = 0, nap = false;
@@ -344,12 +391,16 @@ export function createPetsView() {
         frame = Math.floor(u * pace) % 2 ? 'walk2' : 'walk1';
         if (fast) lift = Math.floor(u * pace) % 2;                     // бегом — вприпрыжку
       } else {                                                         // на месте
-        const e = spot(p, n), v = u - go;
+        const e = bed ? p.bed! : spot(p, n), v = u - go;
         x = e.x; y = e.y; left = endFace;
         const r = hash(n, p.seed + 1); let act: Act = p.acts[0]![0], acc = 0;
         for (const [a, w] of p.acts) { acc += w; if (r < acc) { act = a; break; } }
         frame = 'walk2';
-        if (v > 0.6) {
+        if (bed) {                                                     // пришёл на ночлег: сел, лёг, уснул
+          left = beds.some(b => b !== e && b.x < e.x);                 // спят мордами друг к другу
+          if (v > 0.6) frame = v < 1.8 ? 'sit' : 'lie';
+          nap = v > 3.5;
+        } else if (v > 0.6) {
           if (act === 'jump') {                                        // прыгает на месте: подскок, пауза
             const c = (v - 0.6) % 1.3, k = c / 0.5;
             if (k < 1) { lift = Math.round(Math.sin(k * Math.PI) * 6); frame = lift > 1 ? 'jump' : 'walk2'; }
