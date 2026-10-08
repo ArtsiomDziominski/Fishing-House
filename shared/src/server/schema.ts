@@ -1,9 +1,9 @@
 // Схема базы (Drizzle). Миграции — в shared/drizzle: `npm run db:generate` после правки, `npm run db:migrate` чтобы применить.
 //
 // users   — учётные записи: имя для входа и хеш пароля. Наружу не отдаётся никогда.
-// players — игровой профиль: публичный id, имя, деньги, где игрок оставил героя и ведро.
-// catches — каждая пойманная рыба. Из неё собирается ведро и рекорды.
-// items   — вещи игрока: что это и в какой клетке сетки рюкзака лежит или что она в руке (правила — shared/src/items.ts).
+// players — игровой профиль: публичный id, имя, деньги, где игрок оставил героя и рюкзак.
+// catches — каждая пойманная рыба. Из неё собирается улов (панель ведра) и рекорды.
+// items   — вещи игрока: что это и в какой клетке сетки рюкзака лежит, что она в руке или лежит на земле (правила — shared/src/items.ts).
 
 import { sql } from 'drizzle-orm';
 import { bigserial, boolean, index, integer, jsonb, pgTable, serial, smallint, text, timestamp, uniqueIndex } from 'drizzle-orm/pg-core';
@@ -43,8 +43,11 @@ export const items = pgTable('items', {
   y: smallint('y').notNull(),
   rot: boolean('rot').notNull().default(false),                    // повёрнута на четверть оборота
   held: boolean('held').notNull().default(false),                  // в руке у героя, а не в рюкзаке; x, y, rot — где лежала до того
-  ground: boolean('ground').notNull().default(false),              // стоит на земле (лампа); тогда x, y — место на карте
+  leftHand: boolean('left_hand').notNull().default(false),         // в руке — в левой (иначе в правой; тяжёлая — в обеих, числится в правой)
+  ground: boolean('ground').notNull().default(false),              // лежит на земле, общей для всех; тогда x, y — место на карте, а player_id — кто выложил
+  lit: boolean('lit').notNull().default(false),                    // горит на земле (лампа); в руке горит ли лампа — players.world.lamp
+  fish: text('fish').notNull().default(''),                        // ведро на земле: хвосты последних рыб в нём, id через запятую
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
-}, t => [index('items_player_idx').on(t.playerId)]);
+}, t => [index('items_player_idx').on(t.playerId), index('items_ground_idx').on(t.ground).where(sql`${t.ground}`)]);
 
 export const schema = { users, players, catches, items };

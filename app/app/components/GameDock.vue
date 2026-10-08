@@ -1,23 +1,23 @@
-<!-- Низ экрана: кнопки действий (то же, что E, Q, I, L, G, F и Esc) и подсказка по управлению. -->
+<!-- Низ экрана: кнопки действий (то же, что Q, E, B, I, L, F и Esc) и подсказка по управлению. -->
 <script setup lang="ts">
-const emit = defineEmits<{ bucket: []; pack: []; open: []; lamp: []; ground: []; fish: []; stand: [] }>();
+const emit = defineEmits<{ left: []; right: []; pack: []; open: []; lamp: []; fish: []; stand: [] }>();
 const game = useGameStore();
 
 // после клика снимаем фокус с кнопки, иначе пробел и Enter будут нажимать её, а не подсекать
-function press(ev: MouseEvent, what: 'bucket' | 'pack' | 'open' | 'lamp' | 'ground' | 'fish' | 'stand') {
+function press(ev: MouseEvent, what: 'left' | 'right' | 'pack' | 'open' | 'lamp' | 'fish' | 'stand') {
   (ev.currentTarget as HTMLElement).blur();
-  if (what === 'bucket') emit('bucket'); else if (what === 'pack') emit('pack'); else if (what === 'open') emit('open'); else if (what === 'lamp') emit('lamp'); else if (what === 'ground') emit('ground'); else if (what === 'fish') emit('fish'); else emit('stand');
+  if (what === 'left') emit('left'); else if (what === 'right') emit('right'); else if (what === 'pack') emit('pack'); else if (what === 'open') emit('open'); else if (what === 'lamp') emit('lamp'); else if (what === 'fish') emit('fish'); else emit('stand');
 }
 </script>
 
 <template>
   <div class="dock">
     <div class="actions">
-      <button v-if="game.actions.bucket" type="button" @click="press($event, 'bucket')"><kbd>E</kbd><span>{{ game.actions.bucket }}</span></button>
-      <button v-if="game.actions.pack" type="button" @click="press($event, 'pack')"><kbd>Q</kbd><span>{{ game.actions.pack }}</span></button>
+      <button v-if="game.actions.left" type="button" @click="press($event, 'left')"><kbd>Q</kbd><span>{{ game.actions.left }}</span></button>
+      <button v-if="game.actions.right" type="button" @click="press($event, 'right')"><kbd>E</kbd><span>{{ game.actions.right }}</span></button>
+      <button v-if="game.actions.pack" type="button" @click="press($event, 'pack')"><kbd>B</kbd><span>{{ game.actions.pack }}</span></button>
       <button v-if="game.actions.open" type="button" @click="press($event, 'open')"><kbd>I</kbd><span>{{ game.packOpen ? 'Закрыть рюкзак' : 'Открыть рюкзак' }}</span></button>
       <button v-if="game.actions.light" type="button" @click="press($event, 'lamp')"><kbd>L</kbd><span>{{ game.actions.light }}</span></button>
-      <button v-if="game.actions.ground" type="button" @click="press($event, 'ground')"><kbd>G</kbd><span>{{ game.actions.ground }}</span></button>
       <button v-if="game.actions.fish" type="button" :class="{ hot: game.actions.hot }" @click="press($event, 'fish')"><kbd>F</kbd><span>{{ game.actions.fish }}</span></button>
       <button v-if="game.actions.stand" type="button" @click="press($event, 'stand')"><kbd>Esc</kbd><span>Встать</span></button>
     </div>
@@ -25,13 +25,13 @@ function press(ev: MouseEvent, what: 'bucket' | 'pack' | 'open' | 'lamp' | 'grou
     <div v-if="game.debug !== null" class="hint debug">{{ game.debug }}</div>
     <div v-else class="hint" :class="{ quiet: game.quietHint }">
       <span class="for-keys"><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> или клик — идти</span>
-      <span class="for-keys"><kbd>E</kbd> — взять или поставить ведро</span>
-      <span class="for-keys"><kbd>Q</kbd> — надеть или снять рюкзак</span>
+      <span class="for-keys"><kbd>Q</kbd> левая рука, <kbd>E</kbd> правая — поднять или положить (и ведро тоже)</span>
+      <span class="for-keys"><kbd>B</kbd> — надеть или снять рюкзак</span>
       <span class="for-keys"><kbd>I</kbd> — заглянуть в рюкзак</span>
-      <span v-if="game.actions.light || game.actions.ground" class="for-keys"><kbd>L</kbd> — зажечь или погасить лампу, <kbd>G</kbd> — поставить или взять</span>
+      <span v-if="game.actions.light" class="for-keys"><kbd>L</kbd> — зажечь или погасить лампу</span>
       <span class="for-keys"><kbd>F</kbd> или пробел — рыбачить</span>
       <span class="for-touch">Коснись места — рыбак пойдёт туда</span>
-      <span class="for-touch">Ведро, рюкзак и рыбалка — кнопками внизу</span>
+      <span class="for-touch">Руки, ведро, рюкзак и рыбалка — кнопками внизу</span>
     </div>
   </div>
 </template>

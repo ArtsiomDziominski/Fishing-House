@@ -21,7 +21,7 @@ export const useGameStore = defineStore('game', {
     packOpen: false,              // открыто окно рюкзака
     // время суток и погода: часы, темнота фона, погода словами; можно ли их выставлять (разработка) и что выставлено
     sky: { label: '', dark: 0, minutes: 0, canSet: false, moved: false, weather: '', fixKind: null, fixWind: null } as SkyInfo,
-    actions: { bucket: null, pack: null, fish: null, hot: false, stand: false, open: false, carry: false, light: null, ground: null } as Actions,
+    actions: { left: null, right: null, pack: null, fish: null, hot: false, stand: false, open: false, light: null } as Actions,
     toast: { text: '', tone: '' as Tone, fishId: null as string | null, show: false, seq: 0 },
     quietHint: false,
     debug: null as string | null,

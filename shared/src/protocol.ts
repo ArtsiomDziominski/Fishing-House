@@ -29,22 +29,20 @@ export function addToBag(bag: Bag, fish: Catch): { first: boolean; record: boole
 // Браузер → сервер.
 export interface ClientMessages {
   move: { x: number; y: number; dir: Dir };   // где герой сейчас
-  sit: { put?: { x: number; y: number } };    // сесть на край причала; put — куда поставить ведро, если оно в руке
+  sit: void;                                  // сесть на край причала; ведро в руке остаётся в руке (рисуется рядом с рыбаком)
   rest: void;                                 // сесть у костра — там, где стоишь; встают тем же stand или просто уходят
   stand: void;                                // встать
-  pick: void;                                 // взять ведро
-  put: { x: number; y: number };              // поставить ведро сюда
   press: void;                                // забросить, подсечь — как F или пробел
   packOn: void;                               // надеть рюкзак (он должен лежать рядом)
   packOff: { x: number; y: number };          // снять рюкзак и положить сюда
   packKind: { kind: PackKind };               // выбрать другой рюкзак (вещи должны в него влезть)
   itemMove: { id: number; x: number; y: number; rot: boolean };   // переложить вещь в рюкзаке; рюкзак на спине или рядом
-  itemDrop: { id: number };                   // выбросить вещь из рюкзака или из руки
-  itemTake: { id: number };                   // взять вещь из рюкзака в руки; не хватает рук — прежние вещи уходят в рюкзак
+  itemDrop: { id: number };                   // выложить вещь на землю у ног — из руки (где угодно) или из рюкзака (он на спине или рядом)
+  itemTake: { id: number; left?: boolean };   // взять вещь из рюкзака в руку: левую (left) или правую; не назвали — в свободную. Что было в этой руке, уходит в рюкзак
   itemStow: { id: number; at: Place | null }; // убрать вещь из рук в рюкзак: в эту клетку или (null) на свободное место
-  itemPut: { x: number; y: number };          // поставить вещь из руки на землю сюда (ITEMS.stands: пока только лампу)
-  itemPick: { pid?: string };                 // взять вещь с земли: свою или ту, что поставил игрок pid, — в руку, а занята — в рюкзак, если он рядом
-  lamp: { on: boolean };                      // зажечь или погасить лампу; она в руке или стоит на земле рядом
+  itemPut: { x: number; y: number; left?: boolean };   // положить на землю сюда, рядом с собой, то, что в левой (left) или правой руке (Q и E)
+  itemPick: { id: number; left?: boolean };   // поднять вещь с земли — любую, свою или чужую: в эту руку (не назвали — в свободную), а занята — в рюкзак, если он рядом. Она становится твоей
+  lamp: { on: boolean; id?: number };         // зажечь или погасить лампу: ту, что в руке, или (id) ту, что стоит на земле рядом
   itemGive: { kind: ItemKind };               // положить в рюкзак новую вещь. Только в разработке
   clock: { hour: number | null };             // перевести часы причала на этот час — сразу у всех; null — настоящее время. Только в разработке
   weather: { kind: WeatherKind | null; wind: boolean | null };   // выставить погоду и ветер — сразу у всех; null — по расписанию. Только в разработке
@@ -55,13 +53,14 @@ export interface ServerMessages {
   self: WorldState;                           // где ты на самом деле: при входе и когда сервер не принял ход
   bag: Bag;                                   // ведро целиком: при входе
   fish: FishingEvent & { bag?: Bag };         // рыбалка; к подсечке приложено новое ведро
-  // Вещи целиком — что в рюкзаке (list), что в руках (hands: до двух лёгких или одна тяжёлая) и что стоит на земле
-  // (ground; у неё x, y — место на карте):
+  // Вещи целиком — что в рюкзаке (list) и что в руках (hands: до двух лёгких — у каждой left, в какой она руке, — или одна тяжёлая). Что лежит на земле,
+  // видно всем в состоянии комнаты (ground):
   // при входе, когда сервер не принял перекладку и когда вещей стало больше или их разложило по новому рюкзаку.
   // note — почему не вышло: far — рюкзак далеко, full — вещи нет места, tight — вещи не влезут в выбранный рюкзак
   // (тогда сервер шлёт и «self» со старым рюкзаком), busy — руки заняты, а в рюкзак вещь с земли не убрать,
-  // hands — тяжёлую вещь не взять, пока в руке ведро.
-  items: { list: Item[]; hands: Item[]; ground: Item | null; note?: 'far' | 'full' | 'tight' | 'busy' | 'hands' };
+  // hands — тяжёлую вещь берут только двумя свободными руками, gone — вещь с земли успел поднять кто-то другой,
+  // litter — на земле уже ITEMS.GROUND_MAX твоих вещей.
+  items: { list: Item[]; hands: Item[]; note?: 'far' | 'full' | 'tight' | 'busy' | 'hands' | 'gone' | 'litter' };
   // Часы причала, мс: по ним у всех одно время суток. Приходят при входе и когда часы перевели.
   // canSet — сервер разрешает их переводить (разработка), moved — сейчас они переведены.
   clock: { now: number; canSet: boolean; moved: boolean };
@@ -75,14 +74,16 @@ export interface PlayerView {
   pid: string; name: string;
   x: number; y: number; dir: Dir; sitting: boolean;
   rest: boolean;                                            // сидит у костра
-  carrying: boolean; bx: number; by: number; bucketHome: boolean;
   wearing: boolean; px: number; py: number; pack: string;   // рюкзак: на спине или лежит в px, py; pack — его вид
-  hand: string; off: string;                                // что в руках: вид вещи (ITEM_KINDS) или пусто. Тяжёлая вещь — только в hand
-                                                            // (держат её двумя руками); off — вторая рука, она же носит ведро
-  ground: string; gx: number; gy: number;                   // что игрок поставил на землю (вид вещи или пусто) и где
-  lamp: boolean;                                            // его лампа зажжена и светит: она в руке или на земле
-  recent: ArrayLike<string>;
+  hand: string; off: string;                                // что в правой и в левой руке: вид вещи (ITEM_KINDS, ведро тоже) или пусто.
+                                                            // Тяжёлая вещь — только в hand (держат её двумя руками)
+  lamp: boolean;                                            // лампа у него в руке зажжена и светит
+  recent: ArrayLike<string>;                                // хвосты последних рыб — над ведром, если оно у него в руке
 }
+
+// Вещь на земле, как её видят все в состоянии комнаты (ключ — её id строкой). Поля совпадают с GroundState
+// в game-server/src/state.ts. Земля одна на все копии причала и не пустеет, когда игрок уходит. fish — хвосты рыб над ведром.
+export interface GroundView { kind: string; x: number; y: number; lit: boolean; fish: string }
 
 // Почему сервер закрыл соединение.
 export const KICK = { replaced: 'replaced' } as const;

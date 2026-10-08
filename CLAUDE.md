@@ -21,8 +21,8 @@
 - **`@fh/shared`** работает и в браузере, и в Node. **`@fh/shared/server`** — только для серверов (база, билеты, `node:crypto`); в код `app/app/` его не импортировать, кроме `import type`.
 - **Вход**: `nuxt-auth-utils`, сессия в зашифрованной cookie: `user = { id, name }`, где `id` — публичный id игрока (10 символов `[a-z0-9]`). Пароли — `hashPassword`/`verifyPassword` (scrypt).
 - **В игру**: страница `/play` берёт у сайта билет (`POST /api/game/ticket`, HMAC общим `GAME_SECRET`, живёт минуту) и входит в комнату `pier` на Colyseus. `onAuth` комнаты проверяет билет и кладёт `id` игрока в `client.auth.id` — по нему `UniqueSessionPlugin` выбивает старую вкладку (причина `replaced`).
-- **Кто главный**: сервер. Клиент ходит сам и шлёт место раз в 0,1 с; сервер проверяет проходимость и скорость (запас хода) и при несогласии шлёт `self`. Рыбалку целиком ведёт сервер (`createFishing` в `shared/src/fishing.ts`): клюёт, кто клюнул, успел ли подсечь (+`HOOK_GRACE` на задержку сети). Забросить можно только с удочкой в руке (`ITEMS.isRod`; её берут из рюкзака) и с ведром рядом; убрал удочку — рыбалка останавливается. Клиент лишь показывает фазы (`app/app/game/fishing-view.ts`).
-- **Что видят другие** — только состояние комнаты (`game-server/src/state.ts`). Своё ведро, вещи и рыбалку игрок получает личными сообщениями (`ServerMessages` в `shared/src/protocol.ts`).
+- **Кто главный**: сервер. Клиент ходит сам и шлёт место раз в 0,1 с; сервер проверяет проходимость и скорость (запас хода) и при несогласии шлёт `self`. Рыбалку целиком ведёт сервер (`createFishing` в `shared/src/fishing.ts`): клюёт, кто клюнул, успел ли подсечь (+`HOOK_GRACE` на задержку сети). Забросить можно только с удочкой в руке (`ITEMS.isRod`; её берут из рюкзака) и с ведром — в руке или на земле у места рыбака; убрал удочку — рыбалка останавливается. Клиент лишь показывает фазы (`app/app/game/fishing-view.ts`).
+- **Что видят другие** — только состояние комнаты (`game-server/src/state.ts`). Свой улов, вещи и рыбалку игрок получает личными сообщениями (`ServerMessages` в `shared/src/protocol.ts`).
 - **Карта** 640×360 арт-пикселей — ровно 16:9, она же кадр игры: экран стоит на месте, камеры и масштаба нет. В её середине — картинка-образец (`World.pic` — где она стоит). Разметка в `tools/world-shapes.mjs` — в координатах картинки, всё в игре и в `world-data.ts` — в координатах карты; числа, снятые с картинки прямо в коде (как `bankY` в движке), сдвигать на `World.pic`.
 - **Пока только картинка**: время суток, погода, река, лодки, птицы и звери на рыбалку не влияют.
 - **Масштаб**: в комнате до `ROOM_SIZE` = 50 игроков, дальше матчмейкер открывает новую копию причала; процессы игрового сервера связаны через Redis.
@@ -33,12 +33,13 @@
 |---|---|---|---|
 | Карта, проходимость | `world.ts`, `world-data.ts` (собирает `tools/`) | `PierRoom.move` | `game/engine.ts` |
 | Рыбалка, рыбы | `fishing.ts`, `fish.ts` | `PierRoom.onFishing` | `game/fishing-view.ts` |
-| Ведро, расстояния | `rules.ts`, `Bag` в `protocol.ts` | `pick`, `put`, `sit` | `game/engine.ts`, `components/GameCatch.vue` |
+| Ведро (вещь), улов, расстояния | `rules.ts` (`bucketNearSeat`), `ITEMS.isBucket`, `Bag` в `protocol.ts` | `bucketFor`, `sit`, `onFishing` | `drawBucket` в движке, `components/GameCatch.vue` |
 | Дом | `house.ts` | — | `game/house.ts` |
 | Костёр | `campfire.ts` | `rest` | `game/campfire.ts` |
 | Рюкзак | `packs.ts` | `packOn`, `packOff`, `packKind` | `components/GamePack.vue` |
 | Вещи и руки | `items.ts` | `item*` в `PierRoom.ts` | `components/GameBackpack.vue`, `game/backpack-view.ts`, `items-art.ts`, `held-art.ts` |
-| Лампа и свет ночью | `ITEMS.lampNear`, `lampOut` | `lamp`, `itemPut`, `itemPick` | `game/light.ts`, `drawNight` в движке |
+| Вещи на земле (общие) | `GroundItem`, `ITEMS.dropSpot`, `nearest`, `server/items.ts` (`loadGround`, `claimItem`) | `itemDrop`, `itemPut`, `itemPick`, `PierRoom.ground` | `groundItems` в движке, `groundSprite` в `held-art.ts` |
+| Лампа и свет ночью | `ITEMS.lampNear`, `lampOut` | `lamp` | `game/light.ts`, `drawNight` в движке |
 | Время суток | `daytime.ts` | `sky.ts` | `game/night-view.ts` |
 | Погода | `weather.ts` | `sky.ts` | `game/weather-view.ts`, `sound.ts` |
 | Вход, профили, билеты | `account.ts`, `server/players.ts`, `server/ticket.ts` | `onAuth` | `server/api/`, `pages/` |

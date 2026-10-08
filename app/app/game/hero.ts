@@ -5,6 +5,8 @@
 // Рюкзак на спине — накладка поверх туловища, своя для каждого ракурса; её тона задаёт вид рюкзака.
 // У костра герой сидит: кадр собирается из стоячего (seated).
 
+import type { Hand } from '@fh/shared';
+
 export type Dir = 'down' | 'up' | 'left' | 'right';
 export type Pixels = Uint8ClampedArray;
 export interface Patch { w: number; h: number; data: Pixels; x: number; y: number }
@@ -283,7 +285,8 @@ export const HERO = (() => {
     return rows.map(r => r.join(''));
   }
   type Tones = Record<string, number[]> | null;
-  function frontFrame(dir: 'down' | 'up', f: number, blink: boolean, carry: boolean, pack: Tones) {
+  // carry — какая рука держит ведро: правая (hand) спереди справа на экране, со спины — слева; левая (hand2) — наоборот.
+  function frontFrame(dir: 'down' | 'up', f: number, blink: boolean, carry: Hand | false, pack: Tones) {
     const buf = blank();
     const step = f === 1 || f === 3, dip = step ? 1 : 0;
     const legs = LEGS[dir === 'down' ? 'front' : 'back'];
@@ -293,13 +296,13 @@ export const HERO = (() => {
     if (pack) stamp(buf, PACK[dir].map, PACK[dir].at[0], 17 + dip + PACK[dir].at[1], pack);
     // руки: противоход ногам
     const swing = f === 1 ? 1 : f === 3 ? -1 : 0;
-    const busy = carry ? (dir === 'down' ? 'left' : 'right') : '';     // эта рука держит ведро и не качается
+    const busy = !carry ? '' : (dir === 'down') === (carry === 'left') ? 'left' : 'right';   // эта сторона держит ведро и не качается
     if (busy !== 'left') stamp(buf, ARM, 2, 18 + dip - (swing > 0 ? 0 : swing < 0 ? 1 : 0) + (swing > 0 ? 1 : 0));
     if (busy !== 'right') stamp(buf, ARM, 14, 18 + dip - (swing < 0 ? 0 : swing > 0 ? 1 : 0) + (swing < 0 ? 1 : 0));
     stamp(buf, blink ? blinkHead(dir) : HEAD[dir], 0, dip);
     return buf;
   }
-  function sideFrame(f: number, blink: boolean, carry: boolean, pack: Tones) {
+  function sideFrame(f: number, blink: boolean, carry: Hand | false, pack: Tones) {
     const buf = blank();
     const lift = f === 2 || f === 4 ? -1 : 0;                 // на проходе тело чуть выше
     const lmap = f === 0 ? LEGS.side.stand : (f === 1 || f === 3) ? LEGS.side.stride : LEGS.side.pass;
@@ -323,9 +326,10 @@ export const HERO = (() => {
     return { w, h, data };
   }
 
-  // carry = true — те же кадры без руки, занятой ведром (её рисует игра поверх ведра).
+  // carry — те же кадры без руки, занятой ведром (её рисует игра поверх ведра): 'right' или 'left'; false — ведра нет.
+  // Сбоку видна только ближняя рука — ведро в любой руке висит на ней.
   // tones — пять тонов [r, g, b] рюкзака на спине от света к тени; без них герой налегке.
-  function build(carry = false, tones: number[][] | null = null): Record<Dir, Pixels[]> {
+  function build(carry: Hand | false = false, tones: number[][] | null = null): Record<Dir, Pixels[]> {
     const pack: Tones = tones && withPack(tones);
     const frames: Record<Dir, Pixels[]> = { down: [], up: [], left: [], right: [] };
     for (let f = 0; f < 5; f++) {
@@ -350,7 +354,7 @@ export const HERO = (() => {
     return out;
   }
 
-  // Первая рука — свободная, не та, что носит ведро: где её кисть в кадре f (в координатах кадра) и в какую сторону от тела
+  // Правая рука: где её кисть в кадре f (в координатах кадра) и в какую сторону от тела
   // она смотрит (out: -1 — влево, 1 — вправо). По ней игра кладёт герою в руку вещь (held-art.ts). Числа — те же, что
   // у рукавов в frontFrame и sideFrame: кисть в седьмой строке рукава. Сидя у костра рука лежит на коленях.
   function hand(dir: Dir, f: number, rest = false): { x: number; y: number; out: -1 | 1 } {
@@ -362,7 +366,7 @@ export const HERO = (() => {
     return dir === 'left' ? { x, y, out: -1 } : { x: FW - 1 - x, y, out: 1 };
   }
 
-  // Вторая рука — та, что носит ведро, когда оно в руке; в ней может быть вторая лёгкая вещь. Спереди и со спины она
+  // Левая рука. Спереди и со спины она
   // с другого бока, а сбоку её не видно — она по ту сторону тела (far): вещь в ней рисуют до героя, чуть позади
   // ближней руки, и качается она в противоход.
   function hand2(dir: Dir, f: number, rest = false): { x: number; y: number; out: -1 | 1; far: boolean } {
@@ -374,12 +378,14 @@ export const HERO = (() => {
     return { ...near, x: near.x + (dir === 'left' ? 3 : -3), far: true };
   }
 
-  // Рука с ведром для стороны dir: { w, h, data (RGBA), x, y } в координатах кадра и место дна ведра.
-  function carryRig(dir: Dir): Rig {
-    const src = CARRY[dir === 'right' ? 'left' : dir], flip = dir === 'right';
+  // Рука с ведром для стороны dir: { w, h, data (RGBA), x, y } в координатах кадра и место дна ведра (от столбца-опоры ANCHOR).
+  // Нарисована левая; правая спереди и со спины — та же, отражённая на другой бок, а сбоку ведро всегда в ближней руке.
+  const ANCHOR = 9;
+  function carryRig(dir: Dir, hand: Hand = 'left'): Rig {
+    const src = CARRY[dir === 'right' ? 'left' : dir], flip = (dir === 'right') !== (hand === 'right' && (dir === 'down' || dir === 'up'));
     const px = pixels(flip ? mirrorMap(src.arm.map) : src.arm.map);
     const x = flip ? FW - src.arm.at[0] - px.w : src.arm.at[0];
-    return { ...px, x, y: src.arm.at[1], bucket: [flip ? -src.bucket[0] : src.bucket[0], src.bucket[1]] };
+    return { ...px, x, y: src.arm.at[1], bucket: [flip ? FW - 1 - 2 * ANCHOR - src.bucket[0] : src.bucket[0], src.bucket[1]] };
   }
   // Рюкзак на спине сидящего рыбака: накладка и её место на спрайте fisher.png.
   function seatPack(tones: number[][]): Patch {

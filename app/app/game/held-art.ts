@@ -52,7 +52,8 @@ const rod = (p: string, h: string, t: string): HeldArt => ({ pal: { p, h, t }, m
 // Свёрнутая сеть висит на руке: у накидки по краю грузила, у невода — поплавки.
 const BUNDLE: [number, number] = [3, -1];
 
-const HELD: Record<ItemKind, HeldArt> = {
+// Ведра здесь нет: его в руке рисует движок картинкой bucket-carry.png на руке героя (HERO.carryRig).
+const HELD: Record<Exclude<ItemKind, 'bucket'>, HeldArt> = {
   'rod-willow': rod('8a9a3c', 'c98a4b', 'ecd585'),
   'rod-bamboo': rod('d9c36a', '8e3220', 'a8862e'),
   'rod-tele': rod('3f6f9a', '3a3a44', 'e4e8e4'),
@@ -212,4 +213,24 @@ export function heldSprite(kind: string, lit = true): HeldSprite | null {
 export function heldPlace(s: HeldSprite, hand: { x: number; y: number; out: -1 | 1 }, side: boolean, floor: number) {
   const v = side ? s.side : s.front, flip = hand.out < 0, gx = flip ? v.w - 1 - v.grip[0] : v.grip[0];
   return { img: v.img[flip ? 1 : 0], w: v.w, h: v.h, x: hand.x - gx, y: Math.min(hand.y - v.grip[1], floor - v.h + 1) };
+}
+
+// Вещь на земле: лампа стоит, как в руке, а длинное (удочки, невод, топор) лежит плашмя — картинка руки, повёрнутая на
+// четверть оборота. Низ картинки — то место, где вещь касается земли. lit — горит ли лампа.
+export interface GroundSprite { img: HTMLCanvasElement; w: number; h: number }
+const lying = new Map<string, GroundSprite | null>();
+export function groundSprite(kind: string, lit = true): GroundSprite | null {
+  const key = kind + (lit ? '' : '-off');
+  let s = lying.get(key);
+  if (s !== undefined) return s;
+  const v = heldSprite(kind, lit)?.front;
+  if (!v) s = null;
+  else if (kind === 'lamp' || v.h <= v.w) s = { img: v.img[0], w: v.w, h: v.h };
+  else {
+    const c = document.createElement('canvas'); c.width = v.h; c.height = v.w;
+    const x = c.getContext('2d')!; x.translate(v.h, 0); x.rotate(Math.PI / 2); x.drawImage(v.img[0], 0, 0);
+    s = { img: c, w: v.h, h: v.w };
+  }
+  lying.set(key, s);
+  return s;
 }

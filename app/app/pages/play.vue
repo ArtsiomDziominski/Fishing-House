@@ -2,7 +2,7 @@
      входим в комнату-причал на игровом сервере и запускаем движок на холсте. -->
 <script setup lang="ts">
 import { Client, type Room } from '@colyseus/sdk';
-import { ROOM, World, type ClientMessages, type ItemKind, type Place, type ServerMessages, type WeatherKind } from '@fh/shared';
+import { ROOM, World, ITEMS, type ClientMessages, type ItemKind, type Place, type ServerMessages, type WeatherKind } from '@fh/shared';
 import { startGame, type GameHandle } from '~/game/engine';
 
 definePageMeta({ layout: false, middleware: 'auth' });
@@ -30,11 +30,13 @@ const ITEM_NOTES: Record<NonNullable<ServerMessages['items']['note']>, string> =
   full: 'В рюкзаке нет места',
   tight: 'Вещи в этот рюкзак не влезут — сначала выложи лишнее',
   busy: 'Руки заняты — убери вещь в рюкзак',
-  hands: 'Нужны обе руки — сначала поставь ведро',
+  hands: 'Нужны обе свободные руки — сначала убери то, что в руках',
+  gone: 'Кто-то успел поднять это раньше',
+  litter: `На земле уже ${ITEMS.GROUND_MAX} твоих вещей — подбери что-нибудь`,
 };
 function moveItem(id: number, x: number, y: number, rot: boolean) { send('itemMove', { id, x, y, rot }); }
 function dropItem(id: number) { send('itemDrop', { id }); }
-function takeItem(id: number) { send('itemTake', { id }); }
+function takeItem(id: number, left?: boolean) { send('itemTake', left === undefined ? { id } : { id, left }); }
 function stowItem(id: number, at: Place) { send('itemStow', { id, at }); }
 function giveItem(kind: ItemKind) { send('itemGive', { kind }); }
 
@@ -100,7 +102,7 @@ const overlay = computed(() => {
 
     <GameCatch />
     <GameToast />
-    <GameDock @bucket="handle?.bucketAction()" @pack="handle?.packAction()" @fish="handle?.fishAction()" @stand="handle?.standUp()" @open="game.togglePack()" @lamp="handle?.lampAction()" @ground="handle?.groundAction()" />
+    <GameDock @left="handle?.handAction('left')" @right="handle?.handAction('right')" @pack="handle?.packAction()" @fish="handle?.fishAction()" @stand="handle?.standUp()" @open="game.togglePack()" @lamp="handle?.lampAction()" />
     <GamePack @pick="handle?.setPack($event)" />
     <GameOnline @clock="handle?.setClock($event)" @weather="setWeather" @sound="setSound" />
     <GameBackpack @move="moveItem" @drop="dropItem" @take="takeItem" @stow="stowItem" @give="giveItem" />
