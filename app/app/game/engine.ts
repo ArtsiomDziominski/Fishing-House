@@ -144,11 +144,11 @@ export async function startGame(canvas: HTMLCanvasElement, room: Room, ui: GameU
   const files: Partial<Record<keyof typeof img, string>> = { world: 'world.png', fisher: 'fisher.png', line: 'line.png', bucket: 'bucket.png', carry: 'bucket-carry.png', pack: 'pack-ground.png', house: 'house.png' };
   if (World.lights) Object.assign(files, { lights: 'lights.png', glow: 'glow.png' });   // свет в окнах — только пока дом стоит на карте
   await Promise.all((Object.keys(files) as (keyof typeof img)[]).map(k => loadImage('/assets/' + files[k] + '?v=' + World.rev).then(im => { img[k] = im; })));
-  const rigs = {} as Record<string, { arm: HTMLCanvasElement; x: number; y: number; bucket: [number, number] }>;   // ключ — сторона и рука: 'down:left'
+  const rigs = {} as Record<string, { arm: HTMLCanvasElement; x: number; y: number; bucket: [number, number]; far: boolean }>;   // ключ — сторона и рука: 'down:left'
   const fishArt: Record<string, FishArt & { tail: [string, string] }> = {};
   const rodArt = createRod(img.fisher);
   for (const dir of ['down', 'up', 'left', 'right'] as const) {
-    for (const hand of ['left', 'right'] as const) { const rig = HERO.carryRig(dir, hand); rigs[dir + ':' + hand] = { arm: fromPixels(rig), x: rig.x, y: rig.y, bucket: rig.bucket }; }
+    for (const hand of ['left', 'right'] as const) { const rig = HERO.carryRig(dir, hand); rigs[dir + ':' + hand] = { arm: fromPixels(rig), x: rig.x, y: rig.y, bucket: rig.bucket, far: rig.far }; }
   }
   // Кадры героя: налегке и с рюкзаком каждого вида, с ведром и без. Набор собирается, когда впервые понадобился.
   const frameSets = new Map<string, Record<Dir, HTMLCanvasElement[]>>();
@@ -512,11 +512,20 @@ export async function startGame(canvas: HTMLCanvasElement, room: Room, ui: GameU
     const g = groundInReach(); if (!ready || !g) return;
     flushMove(); send('itemPick', { id: g.id, ...(side && { left: side === 'left' }) });
   }
-  // Кладём то, что в этой руке, рядом с собой, с её стороны, — туда, где вещь видно и где не лежит другая.
+  // Кладём то, что в этой руке, рядом с собой — с её стороны (HERO.hand, hand2: руки настоящие, по взгляду героя). Лицом к нам
+  // или спиной — с того бока, где эта рука на экране; боком — чуть впереди, ближней рукой ближе к нам (ниже на экране),
+  // дальней — по ту сторону. Туда, где вещь видно и где не лежит другая; с её стороны тесно — рядом, где выйдет.
   function layDown(side: Hand) {
-    const out = (side === 'left' ? HERO.hand2(hero.dir, 0) : HERO.hand(hero.dir, 0)).out, lying = groundItems();
+    const at = (side === 'left' ? HERO.hand2 : HERO.hand)(hero.dir, 0), o = at.out, lying = groundItems();
     const pail = ITEMS.isBucket(inHand(side)), k = pail ? 1.45 : 1, room = pail ? 11 : 5;   // ведро шире — ставим дальше и просторнее
-    const spots = [[9 * out, 2], [-9 * out, 2], [0, 7], [9 * out, 6], [-9 * out, 6], [0, -7], [14 * out, 2], [-14 * out, 2]];
+    let spots: number[][];
+    if (hero.dir === 'left' || hero.dir === 'right') {
+      const near = [[8 * o, 5], [4 * o, 8], [12 * o, 5], [8 * o, 9], [12 * o, 9]], far = [[8 * o, -5], [12 * o, -5], [8 * o, -9], [12 * o, -9]];
+      spots = at.far ? [...far, [12 * o, 0], ...near] : [...near, [12 * o, 0], ...far];
+    } else {
+      const by = (s: number) => [[9 * s, 2], [9 * s, 6], [9 * s, -2], [14 * s, 2], [14 * s, 6]];
+      spots = [...by(o), [0, 7], ...by(-o)];
+    }
     for (const [dx, dy] of spots) {
       const x = Math.round(hero.x + dx! * k), y = Math.round(hero.y + dy! * (pail && dy! < 0 ? 1.2 : 1));
       const seen = [0, 3, 6].every(up => World.depthAt(x, y - up) <= y);   // не за вывеской и не под кроной: вещь должно быть видно
@@ -644,23 +653,26 @@ export async function startGame(canvas: HTMLCanvasElement, room: Room, ui: GameU
     cctx.clearRect(0, 0, CW, CH);
     cctx.fillStyle = 'rgba(18, 22, 10, 0.3)';         // тень под ногами
     cctx.fillRect(CX + 4, FH - 2, 11, 1); cctx.fillRect(CX + 2, FH - 1, 15, 2); cctx.fillRect(CX + 4, FH + 1, 11, 1);
-    // вещи в руках: первая — в правой, вторая — в левой. Они сбоку от тела и видны с любой стороны, поэтому рисуются
-    // поверх героя; только сбоку левая рука — дальняя, и вещь в ней тело закрывает. Ведро висит на своей руке (rigs)
-    const side = a.dir === 'left' || a.dir === 'right', first = heldSprite(a.hands[0] || '', a.lit), second = heldSprite(a.hands[1] || '', a.lit);
-    const off = second && HERO.hand2(a.dir, f, a.rest);
-    const put = (art: NonNullable<typeof first>, at: { x: number; y: number; out: -1 | 1 }) => { const p = heldPlace(art, at, side, FH - 1); cctx.drawImage(p.img, CX + p.x, p.y); };
-    if (second && off && off.far) put(second, off);
-    cctx.drawImage(heroFrames(a.carrying, a.pack, a.rest)[a.dir][f]!, CX, 0);
-    if (first) put(first, HERO.hand(a.dir, f, a.rest));
-    if (second && off && !off.far) put(second, off);
-    if (a.carrying) {                                 // ведро в руке качается вместе с плечом
-      const rig = rigs[a.dir + ':' + a.carrying]!, side = a.dir === 'left' || a.dir === 'right';
+    // вещи в руках: первая — в правой, вторая — в левой, и руки настоящие — с той стороны, куда он смотрит (HERO.hand).
+    // Они сбоку от тела и видны с любой стороны, поэтому рисуются поверх героя; только сбоку дальняя рука — по ту
+    // сторону тела, и вещь в ней (и ведро) рисуется до него: тело её закрывает. Ведро висит на своей руке (rigs)
+    const side = a.dir === 'left' || a.dir === 'right';
+    const held = [a.hands[0], a.hands[1]].map((kind, i) => { const art = heldSprite(kind || '', a.lit); return art && { art, at: (i ? HERO.hand2 : HERO.hand)(a.dir, f, a.rest) }; });
+    const put = (far: boolean) => { for (const h of held) if (h && h.at.far === far) { const p = heldPlace(h.art, h.at, side, FH - 1); cctx.drawImage(p.img, CX + p.x, p.y); } };
+    const rig = a.carrying && rigs[a.dir + ':' + a.carrying];
+    const pail = () => {                              // ведро в руке качается вместе с плечом
+      if (!rig) return;
       const sway = side ? (f === 2 || f === 4 ? -1 : 0) : (f === 1 || f === 3 ? 1 : 0);
       const bx = CX + ANCHOR + rig.bucket[0] - (img.carry.width >> 1), by = FH - 1 + rig.bucket[1] - (img.carry.height - 1) + sway;
       cctx.drawImage(img.carry, bx, by);
       drawTails(cctx, bx, by + B.handle, a.recent);
       cctx.drawImage(rig.arm, CX + rig.x, rig.y + sway + (a.rest ? HERO.REST : 0));   // сидя плечо ниже
-    }
+    };
+    if (rig && rig.far) pail();
+    put(true);
+    cctx.drawImage(heroFrames(a.carrying, a.pack, a.rest)[a.dir][f]!, CX, 0);
+    put(false);
+    if (rig && !rig.far) pail();
     blit(cell, cctx, hx - ANCHOR - CX, hy - (FH - 1), hy);
   }
 

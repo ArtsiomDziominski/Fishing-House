@@ -9,22 +9,22 @@ import { itemSprite } from './items-art.ts';
 
 export const CELL = 24;                 // клетка рюкзака, арт-пикселей
 export const EDGE = 7;                  // кожаная рамка вокруг сетки
-// Панель рыбака: он сам (крупнее вдвое) и рядом — два высоких гнезда, по одному на руку: длинная вещь стоит в гнезде
-// стоймя. Левое гнездо — левая рука (Q), правое — правая (E). Тяжёлая вещь лежит в гнезде правой руки, а левое тогда
-// закрыто: её держат двумя руками.
+// Панель рыбака: он сам (крупнее вдвое) и по бокам — два высоких гнезда, по одному на руку: длинная вещь стоит в гнезде
+// стоймя. Рыбак стоит лицом к нам, поэтому гнездо правой руки (E) — слева от него на экране, левой (Q) — справа: каждое
+// у своей руки. Тяжёлая вещь лежит в гнезде правой руки, а левое тогда закрыто: её держат двумя руками.
 export const PANE = { w: 106, h: 112, gap: 4 };
-const MAN = { x: 7, y: 31, k: 2 };                       // где на панели стоит рыбак и во сколько раз он крупнее
-const SLOT = { x: 48, y: 7, w: 25, h: 98, gap: 2 };      // гнездо руки на панели; второе — правее на w + gap
+const MAN = { x: 34, y: 31, k: 2 };                      // где на панели стоит рыбак и во сколько раз он крупнее
+const SLOT = { x: [77, 4], y: 7, w: 25, h: 98 };         // гнёзда рук на панели: левой и правой
 
 export interface Rect { x: number; y: number; w: number; h: number }
-// Где что на холсте: рюкзак, справа от него панель рыбака с гнёздами рук (slots — левое и правое на экране: левая рука
-// и правая). На узком экране панель стоит над рюкзаком (stacked).
+// Где что на холсте: рюкзак, справа от него панель рыбака с гнёздами рук (slots — левой руки и правой; на экране
+// гнездо левой справа). На узком экране панель стоит над рюкзаком (stacked).
 export interface Layout { w: number; h: number; pane: Rect; slots: [Rect, Rect]; label: Rect; grid: Rect }
 export function backpackLayout(g: Grid, stacked: boolean): Layout {
   const gw = EDGE * 2 + g.w * CELL, gh = EDGE * 2 + g.h * CELL;
   const w = stacked ? Math.max(gw, PANE.w) : PANE.w + PANE.gap + gw, h = stacked ? PANE.h + PANE.gap + gh : Math.max(gh, PANE.h);
   const px = stacked ? (w - PANE.w) >> 1 : gw + PANE.gap, py = stacked ? 0 : (h - PANE.h) >> 1;
-  const slot = (i: number): Rect => ({ x: px + SLOT.x + i * (SLOT.w + SLOT.gap), y: py + SLOT.y, w: SLOT.w, h: SLOT.h });
+  const slot = (i: number): Rect => ({ x: px + SLOT.x[i]!, y: py + SLOT.y, w: SLOT.w, h: SLOT.h });
   return {
     w, h,
     pane: { x: px, y: py, w: PANE.w, h: PANE.h },
@@ -33,7 +33,7 @@ export function backpackLayout(g: Grid, stacked: boolean): Layout {
     grid: stacked ? { x: (w - gw) >> 1, y: PANE.h + PANE.gap, w: gw, h: gh } : { x: 0, y: (h - gh) >> 1, w: gw, h: gh },
   };
 }
-// Гнездо руки: левая — левое на экране (Q), правая — правое (E).
+// Гнездо руки: правая (E) — слева от рыбака на экране, левая (Q) — справа.
 export const slotOf = (L: Layout, side: Hand) => L.slots[side === 'left' ? 0 : 1];
 // В каком гнезде какая вещь из рук; тяжёлая — в гнезде правой руки (левое при ней закрыто, см. bothHands).
 export function handSlots(L: Layout, hands: readonly Item[]): { it: Item; at: Rect }[] {
