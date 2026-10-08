@@ -350,7 +350,7 @@ export const HERO = (() => {
     return out;
   }
 
-  // Свободная рука — не та, что носит ведро: где её кисть в кадре f (в координатах кадра) и в какую сторону от тела
+  // Первая рука — свободная, не та, что носит ведро: где её кисть в кадре f (в координатах кадра) и в какую сторону от тела
   // она смотрит (out: -1 — влево, 1 — вправо). По ней игра кладёт герою в руку вещь (held-art.ts). Числа — те же, что
   // у рукавов в frontFrame и sideFrame: кисть в седьмой строке рукава. Сидя у костра рука лежит на коленях.
   function hand(dir: Dir, f: number, rest = false): { x: number; y: number; out: -1 | 1 } {
@@ -360,6 +360,18 @@ export const HERO = (() => {
     if (dir === 'up') return { x: 3, y: 25 + lap + (f === 1 ? 2 : 0), out: -1 };
     const x = (f === 1 ? 7 : f === 3 ? 11 : 9) + 2, y = 27 + (f === 2 || f === 4 ? -1 : 0);
     return dir === 'left' ? { x, y, out: -1 } : { x: FW - 1 - x, y, out: 1 };
+  }
+
+  // Вторая рука — та, что носит ведро, когда оно в руке; в ней может быть вторая лёгкая вещь. Спереди и со спины она
+  // с другого бока, а сбоку её не видно — она по ту сторону тела (far): вещь в ней рисуют до героя, чуть позади
+  // ближней руки, и качается она в противоход.
+  function hand2(dir: Dir, f: number, rest = false): { x: number; y: number; out: -1 | 1; far: boolean } {
+    if (rest) f = 0;
+    const lap = rest ? 2 : 0;
+    if (dir === 'down') return { x: 3, y: 25 + lap + (f === 1 ? 2 : 0), out: -1, far: false };
+    if (dir === 'up') return { x: 15, y: 25 + lap + (f === 3 ? 2 : 0), out: 1, far: false };
+    const near = hand(dir, f === 1 ? 3 : f === 3 ? 1 : f, rest);
+    return { ...near, x: near.x + (dir === 'left' ? 3 : -3), far: true };
   }
 
   // Рука с ведром для стороны dir: { w, h, data (RGBA), x, y } в координатах кадра и место дна ведра.
@@ -374,5 +386,5 @@ export const HERO = (() => {
     return { ...pixels(PACK.left.map, withPack(tones)), x: SEAT_PACK[0], y: SEAT_PACK[1] };
   }
 
-  return { FW, FH, PAL, REST, build, seated, hand, carryRig, seatPack };
+  return { FW, FH, PAL, REST, build, seated, hand, hand2, carryRig, seatPack };
 })();

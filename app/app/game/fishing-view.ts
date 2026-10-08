@@ -100,7 +100,9 @@ export function createRod(fisher: HTMLImageElement) {
     return c;
   }
   return {
-    draw(ctx: Ctx, x: number, y: number, a: number) {
+    // a — на сколько удилище поднято (рад); rod — есть ли оно вообще: без удочки в руке рыбак сидит с пустыми руками
+    draw(ctx: Ctx, x: number, y: number, a: number, rod = true) {
+      if (!rod) { ctx.drawImage(body, x, y); return; }
       if (a <= 0) { ctx.drawImage(fisher, x, y); return; }
       ctx.drawImage(body, x, y);
       ctx.drawImage(turned(Math.round(a / 0.03) * 0.03), x - PAD, y - PAD);

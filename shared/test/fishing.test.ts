@@ -4,12 +4,36 @@ import { createFishing, TIME, HOOK_GRACE, type FishingEvent } from '../src/fishi
 import { FISH } from '../src/fish.ts';
 import { addToBag, emptyBag } from '../src/protocol.ts';
 
-function run(bucket = true) {
-  const events: FishingEvent[] = [];
-  const f = createFishing({ rnd: () => 0.1, hasBucket: () => bucket, emit: e => events.push(e), grace: HOOK_GRACE });
+// hand.rod — в руке ли удочка: тест может убрать её посреди рыбалки
+function run(bucket = true, rod = true) {
+  const events: FishingEvent[] = [], hand = { rod };
+  const f = createFishing({ rnd: () => 0.1, hasRod: () => hand.rod, hasBucket: () => bucket, emit: e => events.push(e), grace: HOOK_GRACE });
   const step = (sec: number) => { for (let t = 0; t < sec; t += 0.05) f.update(0.05); };
-  return { f, events, step };
+  return { f, events, step, hand };
 }
+
+test('без удочки в руке забросить нельзя, а убрал её — рыбалка кончилась', () => {
+  const { f, events, step, hand } = run(true, false);
+  f.sit(); f.press();
+  assert.deepEqual(events, [{ e: 'needRod' }]);
+  assert.equal(f.st.phase, 'rest');
+  hand.rod = true; f.press();
+  assert.equal(events.at(-1)!.e, 'cast');
+  step(TIME.cast + 0.2);
+  assert.equal(f.st.phase, 'wait');
+  hand.rod = false; step(0.05);
+  assert.equal(f.st.phase, 'rest');
+  assert.equal(events.at(-1)!.e, 'rest');
+  step(TIME.waitMax + 1);
+  assert.equal(f.st.phase, 'rest', 'без удочки само не забрасывается');
+  assert.ok(!events.some(e => e.e === 'bite'));
+});
+
+test('без удочки и без ведра сначала просят удочку', () => {
+  const { f, events } = run(false, false);
+  f.sit(); f.press();
+  assert.deepEqual(events, [{ e: 'needRod' }]);
+});
 
 test('без ведра рядом забросить нельзя', () => {
   const { f, events } = run(false);

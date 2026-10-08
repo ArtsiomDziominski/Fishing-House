@@ -6,7 +6,7 @@
 
 import { Client, type Room } from '@colyseus/sdk';
 import { World, ITEMS, ROOM, DAY_LENGTH, WEATHERS, dayHour, weatherText, seat, standPoint, type Bag, type Item, type PlayerView, type ServerMessages, type WorldState } from '@fh/shared';
-import { createDb, createAccount, issueTicket, getProfile } from '@fh/shared/server';
+import { createDb, createAccount, issueTicket, getProfile, loadItems } from '@fh/shared/server';
 
 const url = process.env.GAME_URL || 'http://localhost:2567';
 const db = createDb(undefined, 2);
@@ -80,22 +80,23 @@ if (before.canSet) {
 check(self!.sitting && self!.bucket.home, 'новый игрок сидит на причале, ведро на своём месте');
 check(!self!.pack.worn && self!.pack.x === World.pack.baseX && self!.pack.kind === 'leather', 'кожаный рюкзак лежит на своём месте');
 
-// ведро далеко — забросить нельзя
+// удочка в рюкзаке, а не в руке — забросить нельзя (про ведро сервер скажет уже потом)
 room.send('press');
-await until('needBucket', () => fish.some(f => f.e === 'needBucket'));
-check(true, 'без ведра рядом сервер не даёт забросить');
+await until('needRod', () => fish.some(f => f.e === 'needRod'));
+check(!fish.some(f => f.e === 'needBucket' || f.e === 'cast'), 'без удочки в руке сервер не даёт забросить');
 
 // встаём и идём к ведру шагами по 4 пикселя за 0,1 с — как настоящий клиент
 room.send('stand');
 const pos = { ...standPoint() };
-async function walk(to: { x: number; y: number }) {
-  const path = World.findPath(pos, to)!;
+// who и at — кто идёт и где он сейчас: по умолчанию наш бот; так же водим и второго игрока
+async function walk(to: { x: number; y: number }, who: Room = room, at: { x: number; y: number } = pos) {
+  const path = World.findPath(at, to)!;
   for (const p of path) {
     for (;;) {
-      const dx = p.x - pos.x, dy = p.y - pos.y, d = Math.hypot(dx, dy);
+      const dx = p.x - at.x, dy = p.y - at.y, d = Math.hypot(dx, dy);
       if (d < 0.5) break;
-      const k = Math.min(1, 4 / d); pos.x += dx * k; pos.y += dy * k;
-      room.send('move', { x: pos.x, y: pos.y, dir: 'down' });
+      const k = Math.min(1, 4 / d); at.x += dx * k; at.y += dy * k;
+      who.send('move', { x: at.x, y: at.y, dir: 'down' });
       await sleep(100);
     }
   }
@@ -151,23 +152,46 @@ check(thing(items!.list, 'worms').x === 5 && !items!.note, 'на удочку ч
 // рука: взять вещь из рюкзака, сменить её другой, убрать обратно. Сервер, когда согласен, молчит — как всё лежит,
 // спрашиваем отказом: просим переложить вещь, которой нет.
 const asked = async () => { items = null; room.send('itemMove', { id: 0, x: 0, y: 0, rot: false }); await until('как лежат вещи', () => !!items); return items!; };
-const rod = thing(kit, 'rod-willow');
-check((await asked()).hand === null && seen()?.hand === '', 'в руке пусто');
-room.send('itemTake', { id: rod.id });
-await until('удочку в руке', () => seen()?.hand === 'rod-willow');
+const rod = thing(kit, 'rod-willow'), floats = thing(kit, 'floats');
+const held = () => [seen()?.hand, seen()?.off].filter(Boolean).sort().join();
+check((await asked()).hands.length === 0 && held() === '', 'в руках пусто');
+// ведро в руке — одна рука занята: вещь помещается только одна, вторая заменяет её
+room.send('itemTake', { id: worms.id });
+await until('червей в руке', () => held() === 'worms');
+room.send('itemTake', { id: floats.id });
+await until('поплавки вместо червей', () => held() === 'floats');
 let got = await asked();
-check(got.hand?.id === rod.id && !got.list.some(it => it.id === rod.id) && got.list.length === kit.length - 1, 'удочка взята из рюкзака в руку — это видно всем');
+check(got.hands.length === 1 && thing(got.list, 'worms').x === 5 && thing(got.list, 'worms').y === 4, 'с ведром в руке вторая вещь заменила первую — та вернулась в рюкзак на своё место');
+// ставим ведро — свободны обе руки: две вещи разом, а ведро тогда уже не взять
+const bucketAt = World.nearestWalkable(pos.x - 14, pos.y + 2)!;
+room.send('put', bucketAt);
+await until('ведро на земле', () => seen()?.carrying === false);
+room.send('itemTake', { id: worms.id });
+await until('две вещи в руках', () => held() === 'floats,worms');
+self = null;
+room.send('pick');
+await until('отказ взять ведро', () => !!self);
+check(!self!.bucket.carried && seen()?.carrying === false, 'обе руки заняты — ведро не взять');
+// третья вещь — вместо первой из рук; удочка тоже занимает одну руку
+room.send('itemTake', { id: rod.id });
+await until('удочку и поплавки', () => held() === 'floats,rod-willow');
+got = await asked();
+check(got.hands.length === 2 && got.hands[0]!.id === rod.id && thing(got.list, 'worms').x === 5, 'удочка взята в одну руку вместо червей — в другой остались поплавки');
 room.send('itemTake', { id: scoop.id });
-await until('сачок в руке', () => seen()?.hand === 'net-scoop');
+await until('сачок и поплавки', () => held() === 'floats,net-scoop');
 got = await asked();
-check(got.hand?.id === scoop.id && thing(got.list, 'rod-willow').x === 0 && thing(got.list, 'rod-willow').y === 0, 'взял сачок — удочка из руки вернулась в рюкзак на своё место');
-room.send('itemStow', { at: { x: 0, y: 2, rot: false } });
-await until('пустую руку', () => seen()?.hand === '');
+check(thing(got.list, 'rod-willow').x === 0 && thing(got.list, 'rod-willow').y === 0, 'взял сачок — удочка из руки вернулась в рюкзак на своё место');
+room.send('itemStow', { id: scoop.id, at: { x: 0, y: 2, rot: false } });
+await until('одни поплавки', () => held() === 'floats');
+room.send('itemStow', { id: floats.id, at: null });
+await until('пустые руки', () => held() === '');
 got = await asked();
-check(got.hand === null && thing(got.list, 'net-scoop').x === 0 && thing(got.list, 'net-scoop').y === 2 && !thing(got.list, 'net-scoop').rot, 'сачок убран из руки в названную клетку');
-room.send('itemStow', { at: null });
+check(got.hands.length === 0 && thing(got.list, 'net-scoop').x === 0 && thing(got.list, 'net-scoop').y === 2 && !thing(got.list, 'net-scoop').rot && thing(got.list, 'floats').x === 3, 'сачок убран из руки в названную клетку, поплавки — на своё место');
+room.send('itemStow', { id: scoop.id, at: null });
 got = await asked();
-check(got.hand === null && got.list.length === kit.length, 'из пустой руки убирать нечего');
+check(got.hands.length === 0 && got.list.length === kit.length, 'из пустых рук убирать нечего');
+room.send('pick');                                                        // ведро — снова в руку: дальше несём его к причалу
+await until('ведро в руке', () => seen()?.carrying === true);
 room.send('itemMove', { id: scoop.id, x: 5, y: 0, rot: true });           // сачок — обратно стоймя в угол
 items = null;
 if (before.canSet) {
@@ -179,6 +203,27 @@ if (before.canSet) {
   await until('накидку', () => !!items && items.list.length === kit.length + 2);
   const seine = thing(items!.list, 'net-seine'), net = thing(items!.list, 'net-cast');
   check(seine.id > 0 && net.id > 0 && ITEMS.fits(ITEMS.grid('sailor'), items!.list, seine.kind, seine.x, seine.y, seine.rot, seine.id), 'невод и накидка легли на свободные клетки');
+  // невод тяжёлый — ему нужны обе руки: с ведром в руке его не взять, а без ведра он вытесняет из рук всё остальное
+  items = null;
+  room.send('itemTake', { id: seine.id });
+  await until('отказ взять невод', () => !!items);
+  check(items!.note === 'hands' && items!.hands.length === 0 && held() === '', 'с ведром в руке невод не взять — ему нужны обе руки');
+  room.send('put', bucketAt);
+  await until('ведро на земле', () => seen()?.carrying === false);
+  room.send('itemTake', { id: worms.id });
+  await until('червей в руке', () => held() === 'worms');
+  room.send('itemTake', { id: seine.id });
+  await until('невод в руках', () => held() === 'net-seine');
+  got = await asked();
+  check(got.hands.length === 1 && thing(got.list, 'worms').x === 5 && seen()?.off === '', 'невод взят в обе руки — черви вернулись в рюкзак');
+  self = null;
+  room.send('pick');
+  await until('отказ взять ведро', () => !!self);
+  check(seen()?.carrying === false, 'с неводом в руках ведро не взять');
+  room.send('itemStow', { id: seine.id, at: null });
+  await until('пустые руки', () => held() === '');
+  room.send('pick');
+  await until('ведро в руке', () => seen()?.carrying === true);
   self = null; items = null;
   room.send('packKind', { kind: 'leather' });
   await until('отказ сменить рюкзак', () => !!self && !!items);
@@ -209,7 +254,7 @@ if (before.canSet) {
   // на землю и обратно
   room.send('itemPut', { x: pos.x + 300, y: pos.y });
   got = await asked();
-  check(got.hand?.id === lamp.id && got.ground === null, 'далеко от себя лампу не поставить');
+  check(got.hands[0]?.id === lamp.id && got.ground === null, 'далеко от себя лампу не поставить');
   const spot = World.nearestWalkable(pos.x + 10, pos.y + 4)!;
   room.send('itemPut', spot);
   await until('лампу на земле', () => seen()?.ground === 'lamp' && seen()?.hand === '');
@@ -218,13 +263,13 @@ if (before.canSet) {
   await until('лампа на земле погашена', () => seen()?.lamp === false);
   room.send('lamp', { on: true });
   await until('лампа на земле зажжена', () => seen()?.lamp === true);
-  room.send('itemTake', { id: rod.id });                // рука занята удочкой — лампа с земли уйдёт в рюкзак
-  await until('удочку в руке', () => seen()?.hand === 'rod-willow');
+  room.send('itemTake', { id: scoop.id });              // в одной руке ведро, в другой сачок — лампа с земли уйдёт в рюкзак
+  await until('сачок в руке', () => seen()?.hand === 'net-scoop');
   room.send('itemPick');
   await until('лампу в рюкзаке', () => seen()?.ground === '');
   got = await asked();
-  check(got.ground === null && got.list.some(it => it.id === lamp.id) && seen()?.lamp === false, 'рука занята — лампа с земли убрана в рюкзак и погасла');
-  room.send('itemStow', { at: null });                   // удочку — обратно в рюкзак, на свободное место
+  check(got.ground === null && got.list.some(it => it.id === lamp.id) && seen()?.lamp === false, 'руки заняты — лампа с земли убрана в рюкзак и погасла');
+  room.send('itemStow', { id: scoop.id, at: null });     // сачок — обратно в рюкзак, на своё место
   await until('пустую руку', () => seen()?.hand === '');
   room.send('itemTake', { id: lamp.id });
   await until('лампу в руке', () => seen()?.hand === 'lamp');
@@ -233,9 +278,31 @@ if (before.canSet) {
   room.send('itemPick');
   await until('лампу снова в руке', () => seen()?.hand === 'lamp' && seen()?.ground === '');
   check(seen()?.lamp === true, 'пустой рукой лампа берётся с земли в руку');
-  room.send('itemDrop', { id: lamp.id });
-  await until('свет погас', () => seen()?.lamp === false && seen()?.hand === '');
-  check(true, 'выброшенная лампа не светит');
+  // чужую лампу с земли тоже можно взять: второй игрок подходит и забирает её — в базе у вещи меняется хозяин
+  room.send('itemPut', spot);
+  await until('лампу на земле', () => seen()?.ground === 'lamp');
+  const guest = await createAccount(db, 'гость_' + Math.random().toString(36).slice(2, 8), 'не-для-входа');
+  const other: Room = await client.joinById(room.roomId, { ticket: issueTicket(guest.id, guest.name) });
+  let theirs: ServerMessages['items'] | null = null, there: WorldState | null = null;
+  other.onMessage('items', (m: ServerMessages['items']) => { theirs = m; });
+  other.onMessage('self', (m: WorldState) => { there = m; });
+  for (const type of ['bag', 'fish', 'clock', 'weather']) other.onMessage(type, () => {});
+  await until('второго игрока', () => !!theirs && !!there);
+  other.send('itemPick', { pid: me.id });
+  await sleep(300);
+  check(seen()?.ground === 'lamp', 'издалека чужую лампу не взять');
+  other.send('stand');
+  const step = { ...standPoint() };
+  await walk(World.nearestWalkable(spot.x - 8, spot.y + 5)!, other, step);
+  theirs = null;
+  other.send('itemPick', { pid: me.id });
+  await until('лампу у второго игрока', () => !!theirs && theirs.hands[0]?.id === lamp.id && seen()?.ground === '');
+  got = await asked();
+  check(got.ground === null && got.hands.length === 0 && !got.list.some(it => it.id === lamp.id), 'второй игрок забрал лампу с земли — у первого её больше нет');
+  await other.leave();
+  await sleep(400);
+  const kept = await loadItems(db, guest.id), lost = await loadItems(db, me.id);
+  check(kept.hands[0]?.id === lamp.id && !lost.ground && !lost.list.some(it => it.id === lamp.id), 'в базе лампа перешла к новому хозяину и лежит у него в руке');
 } else {
   items = null;
   room.send('itemGive', { kind: 'net-seine' });
@@ -243,9 +310,9 @@ if (before.canSet) {
   check(items === null, 'вещи с клиента не кладутся — сервер это сообщение не слушает');
 }
 
-// с поплавками в руке — до конца: после перезахода они должны остаться в руке
-room.send('itemTake', { id: thing(kit, 'floats').id });
-await until('поплавки в руке', () => seen()?.hand === 'floats');
+// с поплавками в руке — к причалу: рыбачить ими нельзя
+room.send('itemTake', { id: floats.id });
+await until('поплавки в руке', () => held() === 'floats');
 
 // костёр у дома: сесть можно только рядом с ним, а шаг в сторону поднимает
 room.send('rest');
@@ -266,6 +333,13 @@ await walk({ x: seat.x, y: seat.y });
 const bucketSpot = { x: seat.x + 26, y: seat.y - 13 };   // место на настиле рядом с рыбаком
 room.send('sit', { put: bucketSpot });
 await sleep(200);
+fish.length = 0;
+room.send('press');
+await until('needRod у воды', () => fish.some(f => f.e === 'needRod'));
+check(!fish.some(f => f.e === 'cast'), 'ведро рядом, но в руке поплавки, а не удочка — забросить нельзя');
+// достаём удочку из рюкзака (он на спине) во вторую руку — поплавки остаются в первой. С ней — до конца: после перезахода она должна остаться в руке
+room.send('itemTake', { id: rod.id });
+await until('удочку в руке', () => seen()?.hand === 'rod-willow');
 room.send('press');
 await until('заброс', () => fish.some(f => f.e === 'cast'));
 await until('поклёвку', () => fish.some(f => f.e === 'bite'), 12000);
@@ -295,8 +369,8 @@ check(self!.sitting && !self!.bucket.home && self!.bucket.x === bucketSpot.x, '�
 check(self!.pack.worn && self!.pack.kind === 'sailor', 'рюкзак после перезахода на спине, тот же морской');
 check(bag!.total === 1, 'ведро после перезахода с той же рыбой');
 await until('вещи после входа', () => !!items);
-check(items!.list.length === kit.length - 1 && thing(items!.list, 'worms').x === 5 && thing(items!.list, 'net-scoop').rot, 'вещи после перезахода лежат там, куда их переложили, стартовый набор не задвоился');
-check(items!.hand?.kind === 'floats' && !items!.list.some(it => it.kind === 'floats'), 'поплавки после перезахода по-прежнему в руке');
+check(items!.list.length === kit.length - 2 && thing(items!.list, 'worms').x === 5 && thing(items!.list, 'net-scoop').rot, 'вещи после перезахода лежат там, куда их переложили, стартовый набор не задвоился');
+check(items!.hands.map(it => it.kind).join() === 'rod-willow,floats' && !items!.list.some(it => it.kind === 'rod-willow' || it.kind === 'floats'), 'удочка и поплавки после перезахода по-прежнему в руках');
 await again.leave();
 await db.close();
 console.log('всё работает');

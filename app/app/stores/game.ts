@@ -17,11 +17,11 @@ export const useGameStore = defineStore('game', {
     bag: emptyBag() as Bag,
     pack: PACKS.DEFAULT as PackKind,
     items: [] as Item[],          // вещи в рюкзаке, как их видит сервер (перекладку окно рюкзака показывает сразу, не дожидаясь его)
-    hand: null as Item | null,    // вещь в руке у героя
+    hands: [] as Item[],          // вещи в руках у героя: две лёгкие или одна тяжёлая
     packOpen: false,              // открыто окно рюкзака
     // время суток и погода: часы, темнота фона, погода словами; можно ли их выставлять (разработка) и что выставлено
     sky: { label: '', dark: 0, minutes: 0, canSet: false, moved: false, weather: '', fixKind: null, fixWind: null } as SkyInfo,
-    actions: { bucket: null, pack: null, fish: null, hot: false, stand: false, open: false, light: null, ground: null } as Actions,
+    actions: { bucket: null, pack: null, fish: null, hot: false, stand: false, open: false, carry: false, light: null, ground: null } as Actions,
     toast: { text: '', tone: '' as Tone, fishId: null as string | null, show: false, seq: 0 },
     quietHint: false,
     debug: null as string | null,

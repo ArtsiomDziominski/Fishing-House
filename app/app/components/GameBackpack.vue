@@ -1,17 +1,17 @@
-<!-- Окно рюкзака (I или кнопка внизу): слева сетка клеток, в ней вещи, справа рыбак и вещь у него в руке.
+<!-- Окно рюкзака (I или кнопка внизу): слева сетка клеток, в ней вещи, справа рыбак и два гнезда — его руки.
      Вещь тянут мышью или пальцем на свободные клетки, R или правая кнопка мыши поворачивают её. Двойной клик или
-     удержание берут вещь из рюкзака в руку, а вещь из руки убирают обратно; то же — перетащить её на рыбака или с него
-     в клетку. Что куда встанет, решает сервер: окно сразу показывает перекладку и шлёт её, а если сервер не согласен,
+     удержание берут вещь из рюкзака в руки, а вещь из рук убирают обратно; то же — перетащить её на рыбака или с него
+     в клетку. Лёгкая вещь занимает одну руку, тяжёлая — обе (одно широкое гнездо), а ведро в руке занимает вторую. Что куда встанет, решает сервер: окно сразу показывает перекладку и шлёт её, а если сервер не согласен,
      он присылает, как всё лежит на самом деле. -->
 <script setup lang="ts">
 import { ITEMS, ITEM_KINDS, PACKS, type Item, type ItemKind, type Place } from '@fh/shared';
-import { CELL, EDGE, backpackLayout, drawBackpack, type Drag } from '~/game/backpack-view';
+import { CELL, EDGE, backpackLayout, drawBackpack, handSlots, type Drag } from '~/game/backpack-view';
 
 const emit = defineEmits<{
   move: [id: number, x: number, y: number, rot: boolean];
   drop: [id: number];
-  take: [id: number];                    // взять вещь из рюкзака в руку
-  stow: [at: Place];                     // убрать вещь из руки в рюкзак, в эту клетку
+  take: [id: number];                    // взять вещь из рюкзака в руки
+  stow: [id: number, at: Place];         // убрать вещь из рук в рюкзак, в эту клетку
   give: [kind: ItemKind];
 }>();
 const game = useGameStore();
@@ -29,8 +29,9 @@ const grid = computed(() => ITEMS.grid(game.pack));
 const lay = computed(() => backpackLayout(grid.value, stacked.value));
 const used = computed(() => ITEMS.used(game.items));
 // вещь по номеру — в рюкзаке она или в руке
-const thing = (id: number | null) => (id === null ? null : game.items.find(it => it.id === id) || (game.hand?.id === id ? game.hand : null));
-const inHand = (id: number | null) => id !== null && game.hand?.id === id;
+const thing = (id: number | null) => (id === null ? null : game.items.find(it => it.id === id) || game.hands.find(it => it.id === id) || null);
+const inHand = (id: number | null) => id !== null && game.hands.some(it => it.id === id);
+const heavy = (kind: ItemKind) => ITEMS.weight(kind) > 1;
 // про какую вещь рассказать внизу: которую тянут, выбранную или ту, что под указателем
 const shown = computed(() => thing(drag.value?.id ?? selected.value ?? hover.value));
 
@@ -38,12 +39,14 @@ function cellsText(kind: ItemKind) {
   const n = ITEMS.cells(kind), z = ITEMS.size(kind, false);
   return `${n} ${n === 1 ? 'клетка' : 'клетки'}${n > 1 ? ` · ${z.w}×${z.h}` : ''}`;
 }
+// сколько рук нужно вещи — и где она сейчас, если уже в руках
+const handsText = (kind: ItemKind, held: boolean) => (heavy(kind) ? (held ? 'в двух руках' : 'в две руки') : held ? 'в руке' : 'в одну руку');
 
 function draw() {
   const c = el.value; if (!c) return;
-  drawBackpack(c.getContext('2d')!, { pack: game.pack, grid: grid.value, layout: lay.value, items: game.items, hand: game.hand, selected: selected.value, hover: hover.value, drag: drag.value, hold: hold.value });
+  drawBackpack(c.getContext('2d')!, { pack: game.pack, grid: grid.value, layout: lay.value, items: game.items, hands: game.hands, carry: game.actions.carry, selected: selected.value, hover: hover.value, drag: drag.value, hold: hold.value });
 }
-watch([() => game.items, () => game.hand, () => game.pack, selected, hover, drag, hold, () => game.packOpen, k, stacked], () => nextTick(draw));
+watch([() => game.items, () => game.hands, () => game.actions.carry, () => game.pack, selected, hover, drag, hold, () => game.packOpen, k, stacked], () => nextTick(draw));
 
 // ×3 на больших экранах, как и мир на 1920×1080, ×2 на остальных. Не влезает с рыбаком сбоку — он встаёт над рюкзаком;
 // на совсем узких — сколько влезет.
@@ -56,23 +59,25 @@ function fit() {
 }
 watch(grid, fit);
 
-// ---------- в руку и обратно ----------
+// ---------- в руки и обратно ----------
 
+// Не хватает рук — прежние вещи сами уходят в рюкзак. Тяжёлую не взять, пока в руке ведро.
+const TAKE_FAIL = { none: '', hands: 'Нужны обе руки — сначала поставь ведро', full: 'Вещи из рук некуда положить — в рюкзаке тесно' };
 function take(id: number) {
-  const r = ITEMS.take(grid.value, game.items, game.hand, id);
-  if (!r) { if (game.items.some(it => it.id === id)) game.showToast('Вещь из руки некуда положить — в рюкзаке тесно', 'bad'); return; }
-  game.items = r.list; game.hand = r.hand; selected.value = r.hand.id; sure.value = false;
+  const r = ITEMS.take(grid.value, game.items, game.hands, id, game.actions.carry);
+  if (typeof r === 'string') { if (TAKE_FAIL[r]) game.showToast(TAKE_FAIL[r], 'bad'); return; }
+  game.items = r.list; game.hands = r.hands; selected.value = id; sure.value = false;
   emit('take', id);
 }
 // at — в какую клетку; не названа — туда, где вещь лежала, а занято — на первое свободное место.
-function stow(at: Place | null = null) {
-  const r = ITEMS.stow(grid.value, game.items, game.hand, at);
-  if (!r) { if (game.hand) game.showToast(at ? 'Сюда вещь не встаёт' : 'В рюкзаке нет места', 'bad'); return; }
-  game.items = r.list; game.hand = null; selected.value = r.item.id; sure.value = false;
-  emit('stow', { x: r.item.x, y: r.item.y, rot: r.item.rot });
+function stow(id: number, at: Place | null = null) {
+  const r = ITEMS.stow(grid.value, game.items, game.hands, id, at);
+  if (!r) { if (inHand(id)) game.showToast(at ? 'Сюда вещь не встаёт' : 'В рюкзаке нет места', 'bad'); return; }
+  game.items = r.list; game.hands = r.hands; selected.value = id; sure.value = false;
+  emit('stow', id, { x: r.item.x, y: r.item.y, rot: r.item.rot });
 }
-// Двойной клик или удержание: из рюкзака — в руку, из руки — в рюкзак.
-const swap = (id: number) => (inHand(id) ? stow() : take(id));
+// Двойной клик или удержание: из рюкзака — в руки, из рук — в рюкзак.
+const swap = (id: number) => (inHand(id) ? stow(id) : take(id));
 
 // ---------- перетаскивание ----------
 
@@ -93,17 +98,18 @@ function itemAt(x: number, y: number): Item | null {
   const o = lay.value.grid, cx = Math.floor((x - o.x - EDGE) / CELL), cy = Math.floor((y - o.y - EDGE) / CELL);
   return game.items.find(it => { const z = ITEMS.size(it.kind, it.rot); return cx >= it.x && cx < it.x + z.w && cy >= it.y && cy < it.y + z.h; }) || null;
 }
-// Что под указателем: вещь в рюкзаке или та, что в руке.
+// Что под указателем: вещь в рюкзаке или та, что в руках (тяжёлая — в обоих гнёздах сразу).
 function hit(x: number, y: number): { it: Item; from: Drag['from'] } | null {
   const it = itemAt(x, y);
   if (it) return { it, from: 'pack' };
-  return game.hand && within(lay.value.slot, x, y) ? { it: game.hand, from: 'hand' } : null;
+  const held = handSlots(lay.value, game.hands).find(h => within(h.at, x, y));
+  return held ? { it: held.it, from: 'hand' } : null;
 }
 // Куда встанет вещь, которую тянут: в ближайшую клетку к её левому верхнему углу (подсветка не вылезает за сетку).
-// Над панелью рыбака клетки не ищем: вещь из рюкзака там просится в руку.
+// Над панелью рыбака клетки не ищем: вещь из рюкзака там просится в руки.
 function aim(from: Drag['from'], id: number, kind: ItemKind, rot: boolean, x: number, y: number): Drag {
   const z = ITEMS.size(kind, rot), g = grid.value, o = lay.value.grid, d: Drag = { id, kind, rot, x, y, from, at: null, hand: false, ok: false };
-  if (press && within(lay.value.pane, press.x, press.y)) return from === 'pack' ? { ...d, hand: true, ok: !!ITEMS.take(g, game.items, game.hand, id) } : d;
+  if (press && within(lay.value.pane, press.x, press.y)) return from === 'pack' ? { ...d, hand: true, ok: typeof ITEMS.take(g, game.items, game.hands, id, game.actions.carry) !== 'string' } : d;
   const cx = Math.round((x - o.x - EDGE) / CELL), cy = Math.round((y - o.y - EDGE) / CELL);
   if (z.w > g.w || z.h > g.h) return d;
   const at = { x: Math.min(Math.max(cx, 0), g.w - z.w), y: Math.min(Math.max(cy, 0), g.h - z.h) };
@@ -161,7 +167,7 @@ function up() {
   const d = drag.value;
   stopHold(); press = null; drag.value = null;
   if (!d) return;
-  if (d.from === 'hand') { if (d.ok && d.at) stow({ x: d.at.x, y: d.at.y, rot: d.rot }); }
+  if (d.from === 'hand') { if (d.ok && d.at) stow(d.id, { x: d.at.x, y: d.at.y, rot: d.rot }); }
   else if (d.hand) take(d.id);
   else if (d.ok && d.at) place(d.id, d.at.x, d.at.y, d.rot);
 }
@@ -175,7 +181,7 @@ function turnDrag() {
   drag.value = aim(d.from, d.id, d.kind, !d.rot, press.x - press.gx, press.y - press.gy);
 }
 // Повернуть выбранную вещь там, где лежит: тот же левый верхний угол, а если там тесно — первое место, где встанет.
-// Вещь в руке не поворачивают: она клеток не занимает.
+// Вещь в руках не поворачивают: она клеток не занимает.
 function rotate() {
   if (drag.value) { turnDrag(); return; }
   const it = game.items.find(i => i.id === selected.value);
@@ -192,7 +198,7 @@ function drop(ev: MouseEvent) {
   const id = selected.value; if (id === null) return;
   if (!sure.value) { sure.value = true; clearTimeout(sureTimer); sureTimer = setTimeout(() => { sure.value = false; }, 3000); return; }
   sure.value = false; selected.value = null;
-  if (inHand(id)) game.hand = null; else game.items = game.items.filter(it => it.id !== id);
+  if (inHand(id)) game.hands = game.hands.filter(it => it.id !== id); else game.items = game.items.filter(it => it.id !== id);
   emit('drop', id);
 }
 
@@ -209,7 +215,7 @@ watch(() => game.actions.open, near => {
   if (!near && game.packOpen) { game.packOpen = false; game.showToast('Рюкзак остался позади'); }
 });
 // вещь, на которой стояло выделение, исчезла (выбросили, сервер прислал другое)
-watch([() => game.items, () => game.hand], () => { if (selected.value !== null && !thing(selected.value)) selected.value = null; });
+watch([() => game.items, () => game.hands], () => { if (selected.value !== null && !thing(selected.value)) selected.value = null; });
 
 // Клавиши ловим раньше движка: Esc при открытом рюкзаке закрывает его, а не поднимает рыбака с места.
 function key(ev: KeyboardEvent) {
@@ -236,24 +242,25 @@ onBeforeUnmount(() => { removeEventListener('keydown', key, { capture: true }); 
         ref="el" :width="lay.w" :height="lay.h" :class="{ dragging: drag, over: hover !== null }"
         @pointerdown="down" @pointermove="move" @pointerup="up" @pointercancel="cancel" @pointerleave="hover = null" @contextmenu.prevent
       />
-      <!-- подпись над рыбаком: что у него в руке -->
-      <span class="hand" :class="{ empty: !game.hand }" :style="{ '--x': lay.label.x, '--y': lay.label.y, '--lw': lay.label.w, '--lh': lay.label.h }">{{ game.hand ? 'В руке' : 'Рука пуста' }}</span>
+      <!-- подпись над рыбаком: заняты ли руки -->
+      <span class="hand" :class="{ empty: !game.hands.length }" :style="{ '--x': lay.label.x, '--y': lay.label.y, '--lw': lay.label.w, '--lh': lay.label.h }">{{ game.hands.length ? 'В руках' : 'Руки пусты' }}</span>
     </div>
     <footer>
       <template v-if="shown">
-        <div class="what"><b>{{ ITEMS.info(shown.kind).name }}</b><span class="cells">{{ inHand(shown.id) ? 'в руке' : cellsText(shown.kind) }}</span></div>
+        <div class="what"><b>{{ ITEMS.info(shown.kind).name }}</b><span class="cells">{{ inHand(shown.id) ? handsText(shown.kind, true) : cellsText(shown.kind) + ' · ' + handsText(shown.kind, false) }}</span></div>
         <p class="text">{{ ITEMS.info(shown.kind).text }}</p>
         <div v-if="selected === shown.id && !drag" class="buttons">
-          <button v-if="inHand(shown.id)" type="button" @click="blur($event); stow()">В рюкзак</button>
+          <button v-if="inHand(shown.id)" type="button" @click="blur($event); stow(shown.id)">В рюкзак</button>
           <template v-else>
-            <button type="button" @click="blur($event); take(shown.id)">В руку</button>
+            <button type="button" @click="blur($event); take(shown.id)">{{ heavy(shown.kind) ? 'В руки' : 'В руку' }}</button>
             <button v-if="ITEMS.turns(shown.kind)" type="button" @click="blur($event); rotate()"><kbd>R</kbd>Повернуть</button>
           </template>
           <button type="button" class="drop" :class="{ sure }" @click="drop">{{ sure ? 'Точно выбросить?' : 'Выбросить' }}</button>
         </div>
       </template>
       <p v-else class="text muted">
-        Перетащи вещь на свободные клетки. Двойной клик или удержание — взять в руку или убрать обратно.
+        Перетащи вещь на свободные клетки. Двойной клик или удержание — взять в руки или убрать обратно.
+        Лёгкая вещь занимает одну руку, тяжёлая — обе.
         <span class="for-keys"><kbd>R</kbd> или правая кнопка — повернуть.</span>
       </p>
       <!-- разработка: положить в рюкзак любую вещь (сервер слушает это, только когда разрешено и время с погодой) -->

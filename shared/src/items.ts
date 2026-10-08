@@ -1,8 +1,10 @@
 // Вещи в рюкзаке: удочки, сети, топор, лампа и мелочь для рыбалки. Каждая занимает прямоугольник клеток в сетке рюкзака:
 // мелочь — одну клетку, сачок и топор — две, удочка и большие сети — четыре. Вещь можно повернуть на четверть
 // оборота — ширина и высота меняются местами. Сколько клеток в рюкзаке, знает его вид (PACKS.grid).
-// Одну вещь герой держит в руке: её берут из рюкзака и убирают обратно; пока она в руке, клеток не занимает,
-// но помнит, где лежала. Лампу из руки можно поставить на землю и взять обратно; горит она только в руке или на земле. Где что лежит, решает и хранит сервер; клиент только просит переложить и по тем же правилам
+// Вещи берут из рюкзака в руки и убирают обратно; в руках вещь клеток не занимает, но помнит, где лежала. Рук две,
+// а вещи двух весов: лёгкую держат одной рукой, тяжёлую (сеть-накидку и невод) — только двумя. Ведро в руке тоже
+// занимает руку. Значит, в руках либо две лёгкие вещи, либо одна тяжёлая, а с ведром — одна лёгкая.
+// Лампу из руки можно поставить на землю и взять обратно; горит она только в руке или на земле. Где что лежит, решает и хранит сервер; клиент только просит переложить и по тем же правилам
 // заранее подсвечивает, куда вещь встанет. Картинки — в app/app/game/items-art.ts.
 
 import { PACKS, type PackKind } from './packs.ts';
@@ -28,16 +30,16 @@ export type Place = Pick<Item, 'x' | 'y' | 'rot'>;
 export const packInReach = (hero: Point, pack: PackState, slack = 0) => pack.worn || dist(hero, pack) <= REACH + slack;
 
 export const ITEMS = (() => {
-  // w и h — клеток в ширину и в высоту, когда вещь не повёрнута; text — подпись в рюкзаке
-  const BY_KIND: Record<ItemKind, { name: string; group: ItemGroup; w: number; h: number; text: string }> = {
+  // w и h — клеток в ширину и в высоту, когда вещь не повёрнута; heavy — тяжёлая: её держат двумя руками; text — подпись в рюкзаке
+  const BY_KIND: Record<ItemKind, { name: string; group: ItemGroup; w: number; h: number; heavy?: boolean; text: string }> = {
     'rod-willow': { name: 'Ивовая удочка', group: 'rod', w: 4, h: 1, text: 'Срезана у реки. Гнётся, но держит.' },
     'rod-bamboo': { name: 'Бамбуковая удочка', group: 'rod', w: 4, h: 1, text: 'Лёгкая и звонкая, с поплавком.' },
     'rod-tele': { name: 'Телескопическая удочка', group: 'rod', w: 4, h: 1, text: 'Складывается в три колена, с катушкой.' },
     'rod-carbon': { name: 'Карбоновая удочка', group: 'rod', w: 4, h: 1, text: 'Чёрная и упругая, с блесной.' },
     'rod-gold': { name: 'Золотая удочка', group: 'rod', w: 4, h: 1, text: 'Говорят, на неё клюёт сама золотая рыбка.' },
     'net-scoop': { name: 'Сачок', group: 'net', w: 2, h: 1, text: 'Подхватить рыбу у самой воды.' },
-    'net-cast': { name: 'Сеть-накидка', group: 'net', w: 2, h: 2, text: 'Бросают кругом, по краю грузила.' },
-    'net-seine': { name: 'Невод', group: 'net', w: 4, h: 1, text: 'Длинная сеть с поплавками и грузилами.' },
+    'net-cast': { name: 'Сеть-накидка', group: 'net', w: 2, h: 2, heavy: true, text: 'Бросают кругом, по краю грузила.' },
+    'net-seine': { name: 'Невод', group: 'net', w: 4, h: 1, heavy: true, text: 'Длинная сеть с поплавками и грузилами.' },
     'axe': { name: 'Топор', group: 'tool', w: 2, h: 1, text: 'Нарубить сучьев и наколоть дров.' },
     'lamp': { name: 'Походная лампа', group: 'tool', w: 1, h: 1, text: 'Керосиновая, с ручкой. Светит в руке или на земле, в рюкзаке — нет.' },
     'worms': { name: 'Банка червей', group: 'tackle', w: 1, h: 1, text: 'Свежие, с огорода.' },
@@ -109,37 +111,56 @@ export const ITEMS = (() => {
     }
     return { list, moved };
   }
+  // Удочка ли это: с удочкой в руке рыбачат. kind приходит и строкой из состояния комнаты — незнакомая не удочка.
+  const isRod = (kind: string) => isKind(kind) && BY_KIND[kind].group === 'rod';
   // Какую вещь можно поставить из руки на землю. Пока только лампу. У вещи на земле x и y — место на карте, а не клетка.
   const stands = (kind: ItemKind) => kind === 'lamp';
-  // Лампа светит, только когда она в руке или стоит на земле (и зажжена). В рюкзаке лампа не горит.
-  const lampOut = (hand: Item | null, ground: Item | null) => hand?.kind === 'lamp' || ground?.kind === 'lamp';
-  // Зажечь и погасить лампу можно, когда она под рукой: в руке или стоит на земле рядом. slack — запас сервера на рывки сети.
-  const lampNear = (hero: Point, hand: Item | null, ground: Item | null, slack = 0) => hand?.kind === 'lamp' || ground?.kind === 'lamp' && dist(hero, ground) <= REACH + slack;
+  // Руки. Вес вещи — сколько рук она занимает: лёгкая одну, тяжёлая обе. kind приходит и строкой из состояния комнаты.
+  const HANDS = 2;
+  const weight = (kind: string) => (isKind(kind) && BY_KIND[kind].heavy ? 2 : 1);
+  // Сколько рук занято: вещами и ведром, если оно в руке.
+  const load = (hands: readonly { kind: string }[], bucket = false) => hands.reduce((n, it) => n + weight(it.kind), 0) + (bucket ? 1 : 0);
+  // Хватит ли рук взять ещё и эту вещь.
+  const canHold = (hands: readonly Item[], kind: string, bucket = false) => load(hands, bucket) + weight(kind) <= HANDS;
+  // В руках вещи лежат по порядку номеров: какая в какой руке, не меняется от перезахода.
+  const inOrder = (hands: Item[]) => hands.sort((a, b) => a.id - b.id);
 
-  // Взять вещь из рюкзака в руку. Рука занята — прежняя вещь уходит в рюкзак: на место взятой, если встаёт, иначе туда,
-  // где лежала раньше, иначе на первое свободное. back — она же на новом месте. null — такой вещи нет или прежнюю некуда деть.
-  function take(g: Grid, items: readonly Item[], hand: Item | null, id: number): { list: Item[]; hand: Item; back: Item | null } | null {
-    const it = items.find(i => i.id === id); if (!it) return null;
+  // Лампа светит, только когда она в руке или стоит на земле (и зажжена). В рюкзаке лампа не горит.
+  const lampOut = (hands: readonly Item[], ground: Item | null) => hands.some(it => it.kind === 'lamp') || ground?.kind === 'lamp';
+  // Зажечь и погасить лампу можно, когда она под рукой: в руке или стоит на земле рядом. slack — запас сервера на рывки сети.
+  const lampNear = (hero: Point, hands: readonly Item[], ground: Item | null, slack = 0) => hands.some(it => it.kind === 'lamp') || ground?.kind === 'lamp' && dist(hero, ground) <= REACH + slack;
+
+  // Взять вещь из рюкзака в руки; bucket — ведро в руке. Не хватает рук — прежние вещи уходят в рюкзак, начиная с первой,
+  // пока новая не поместится: туда, где лежали, а занято — на место взятой или на первое свободное. back — они же
+  // на новых местах. Отказ строкой: none — такой вещи нет, hands — тяжёлую не взять, пока рука занята ведром,
+  // full — прежние вещи некуда деть.
+  function take(g: Grid, items: readonly Item[], hands: readonly Item[], id: number, bucket = false): { list: Item[]; hands: Item[]; back: Item[] } | 'none' | 'hands' | 'full' {
+    const it = items.find(i => i.id === id); if (!it) return 'none';
+    if (weight(it.kind) + (bucket ? 1 : 0) > HANDS) return 'hands';
+    const keep = [...hands], out: Item[] = [], back: Item[] = [];
+    while (!canHold(keep, it.kind, bucket)) out.push(keep.shift()!);
     const list = items.filter(i => i !== it);
-    if (!hand) return { list, hand: it, back: null };
-    const at = [{ x: it.x, y: it.y, rot: hand.rot }, { x: hand.x, y: hand.y, rot: hand.rot }].find(p => fits(g, list, hand.kind, p.x, p.y, p.rot)) || spot(g, list, hand.kind);
-    if (!at) return null;
-    const back = { ...hand, ...at };
-    return { list: [...list, back], hand: it, back };
+    for (const o of out) {
+      const at = [{ x: o.x, y: o.y, rot: o.rot }, { x: it.x, y: it.y, rot: o.rot }].find(p => fits(g, list, o.kind, p.x, p.y, p.rot)) || spot(g, list, o.kind);
+      if (!at) return 'full';
+      const b = { ...o, ...at };
+      list.push(b); back.push(b);
+    }
+    return { list, hands: inOrder([...keep, it]), back };
   }
-  // Убрать вещь из руки в рюкзак: в названную клетку (at) или, если её не назвали, туда, где лежала, а занято — на первое
-  // свободное место. item — она же на новом месте. null — рука пуста или вещь не встаёт.
-  function stow(g: Grid, items: readonly Item[], hand: Item | null, at: Place | null = null): { list: Item[]; item: Item } | null {
-    if (!hand) return null;
+  // Убрать вещь id из рук в рюкзак: в названную клетку (at) или, если её не назвали, туда, где лежала, а занято — на первое
+  // свободное место. item — она же на новом месте. null — такой вещи в руках нет или она не встаёт.
+  function stow(g: Grid, items: readonly Item[], hands: readonly Item[], id: number, at: Place | null = null): { list: Item[]; hands: Item[]; item: Item } | null {
+    const it = hands.find(h => h.id === id); if (!it) return null;
     let p: Place | null;
-    if (at) p = fits(g, items, hand.kind, at.x, at.y, at.rot && turns(hand.kind)) ? { x: at.x, y: at.y, rot: at.rot && turns(hand.kind) } : null;
-    else p = fits(g, items, hand.kind, hand.x, hand.y, hand.rot) ? { x: hand.x, y: hand.y, rot: hand.rot } : spot(g, items, hand.kind);
+    if (at) p = fits(g, items, it.kind, at.x, at.y, at.rot && turns(it.kind)) ? { x: at.x, y: at.y, rot: at.rot && turns(it.kind) } : null;
+    else p = fits(g, items, it.kind, it.x, it.y, it.rot) ? { x: it.x, y: it.y, rot: it.rot } : spot(g, items, it.kind);
     if (!p) return null;
-    const item = { ...hand, ...p };
-    return { list: [...items, item], item };
+    const item = { ...it, ...p };
+    return { list: [...items, item], hands: hands.filter(h => h !== it), item };
   }
   // Сколько клеток занято.
   const used = (items: readonly Item[]) => items.reduce((n, it) => n + cells(it.kind), 0);
 
-  return { STARTER, isKind, info, size, cells, grid, turns, fits, spot, repack, settle, used, stands, lampOut, lampNear, take, stow };
+  return { STARTER, isKind, info, size, cells, grid, turns, fits, spot, repack, settle, used, isRod, stands, HANDS, weight, load, canHold, inOrder, lampOut, lampNear, take, stow };
 })();

@@ -1,5 +1,5 @@
 // Рюкзак изнутри: кожаная рамка в цвет рюкзака, сетка клеток 24×24 и вещи в ней, а рядом — сам рыбак и то, что у него
-// в руке. Рисуется 1:1 в арт-пикселях на своём маленьком холсте, а CSS увеличивает его целым множителем без сглаживания —
+// в руках. Рисуется 1:1 в арт-пикселях на своём маленьком холсте, а CSS увеличивает его целым множителем без сглаживания —
 // как и сам мир. Тянуть вещи и решать, куда они встанут, — забота окна рюкзака (components/GameBackpack.vue); здесь только картинка.
 
 import { ITEMS, PACKS, type Grid, type Item, type ItemKind, type PackKind } from '@fh/shared';
@@ -9,33 +9,43 @@ import { itemSprite } from './items-art.ts';
 
 export const CELL = 24;                 // клетка рюкзака, арт-пикселей
 export const EDGE = 7;                  // кожаная рамка вокруг сетки
-// Панель рыбака: он сам (крупнее вдвое) и рядом — высокое гнездо для вещи в руке: удочка в нём стоит стоймя.
+// Панель рыбака: он сам (крупнее вдвое) и рядом — два высоких гнезда, по одному на руку: длинная вещь стоит в гнезде
+// стоймя. Тяжёлая вещь занимает оба гнезда разом — её держат двумя руками.
 export const PANE = { w: 106, h: 112, gap: 4 };
 const MAN = { x: 7, y: 31, k: 2 };                       // где на панели стоит рыбак и во сколько раз он крупнее
-const SLOT = { x: 50, y: 7, w: 50, h: 98 };              // гнездо руки на панели
+const SLOT = { x: 48, y: 7, w: 25, h: 98, gap: 2 };      // гнездо руки на панели; второе — правее на w + gap
 
 export interface Rect { x: number; y: number; w: number; h: number }
-// Где что на холсте: рюкзак, справа от него панель рыбака с гнездом руки. На узком экране панель стоит над рюкзаком (stacked).
-export interface Layout { w: number; h: number; pane: Rect; slot: Rect; label: Rect; grid: Rect }
+// Где что на холсте: рюкзак, справа от него панель рыбака с гнёздами рук (slots — по одному, hands — оба вместе).
+// На узком экране панель стоит над рюкзаком (stacked).
+export interface Layout { w: number; h: number; pane: Rect; slots: [Rect, Rect]; hands: Rect; label: Rect; grid: Rect }
 export function backpackLayout(g: Grid, stacked: boolean): Layout {
   const gw = EDGE * 2 + g.w * CELL, gh = EDGE * 2 + g.h * CELL;
   const w = stacked ? Math.max(gw, PANE.w) : PANE.w + PANE.gap + gw, h = stacked ? PANE.h + PANE.gap + gh : Math.max(gh, PANE.h);
   const px = stacked ? (w - PANE.w) >> 1 : gw + PANE.gap, py = stacked ? 0 : (h - PANE.h) >> 1;
+  const slot = (i: number): Rect => ({ x: px + SLOT.x + i * (SLOT.w + SLOT.gap), y: py + SLOT.y, w: SLOT.w, h: SLOT.h });
   return {
     w, h,
     pane: { x: px, y: py, w: PANE.w, h: PANE.h },
-    slot: { x: px + SLOT.x, y: py + SLOT.y, w: SLOT.w, h: SLOT.h },
+    slots: [slot(0), slot(1)],
+    hands: { x: px + SLOT.x, y: py + SLOT.y, w: SLOT.w * 2 + SLOT.gap, h: SLOT.h },
     label: { x: px + MAN.x, y: py + 8, w: HERO.FW * MAN.k, h: MAN.y - 10 },      // подпись над рыбаком — её пишет окно
     grid: stacked ? { x: (w - gw) >> 1, y: PANE.h + PANE.gap, w: gw, h: gh } : { x: 0, y: (h - gh) >> 1, w: gw, h: gh },
   };
 }
+// В каком гнезде какая вещь из рук: лёгкие — по одной в гнезде, по порядку; тяжёлая — в обоих сразу.
+export function handSlots(L: Layout, hands: readonly Item[]): { it: Item; at: Rect }[] {
+  const heavy = hands.length === 1 && ITEMS.weight(hands[0]!.kind) > 1;
+  return hands.map((it, i) => ({ it, at: heavy ? L.hands : L.slots[i]! }));
+}
 
 // Вещь, которую сейчас тянут: x, y — где её левый верхний угол (арт-пиксели холста); from — откуда её взяли;
-// at — клетка, куда она встанет, hand — её несут в руку (держат над панелью рыбака); ok — выйдет ли.
+// at — клетка, куда она встанет, hand — её несут в руки (держат над панелью рыбака); ok — выйдет ли.
 export interface Drag { id: number; kind: ItemKind; rot: boolean; x: number; y: number; from: 'pack' | 'hand'; at: { x: number; y: number } | null; hand: boolean; ok: boolean }
-// hand — вещь в руке; hold — вещь, которую держат нажатой, и сколько осталось до срабатывания (k: 0..1).
+// hands — вещи в руках; carry — в руке ведро: вторая рука занята; hold — вещь, которую держат нажатой, и сколько
+// осталось до срабатывания (k: 0..1).
 export interface BackpackScene {
-  pack: PackKind; grid: Grid; layout: Layout; items: readonly Item[]; hand: Item | null;
+  pack: PackKind; grid: Grid; layout: Layout; items: readonly Item[]; hands: readonly Item[]; carry: boolean;
   selected: number | null; hover: number | null; drag: Drag | null; hold: { id: number; k: number } | null;
 }
 
@@ -45,6 +55,7 @@ const mix = (a: RGB, b: RGB, t: number) => a.map((v, i) => Math.round(v + (b[i]!
 const INK: RGB = [36, 7, 2], BLACK: RGB = [0, 0, 0], COAT: RGB = [250, 199, 8], GOOD: RGB = [138, 189, 90], BAD: RGB = [201, 83, 45];
 const BRASS: RGB = [217, 195, 106], BRASS_DARK: RGB = [168, 134, 46];
 const WOOD: RGB = [74, 44, 24], WOOD_LIGHT: RGB = [112, 70, 40], WOOD_DARK: RGB = [46, 25, 13], PAPER: RGB = [244, 227, 193];
+const STEEL: RGB = [139, 143, 152], STEEL_DARK: RGB = [93, 96, 105], STEEL_LIGHT: RGB = [180, 184, 191];
 
 let man: HTMLCanvasElement | null = null;
 // Рыбак лицом к зрителю, без рюкзака: тот раскрыт перед ним.
@@ -64,28 +75,34 @@ export function drawBackpack(ctx: CanvasRenderingContext2D, s: BackpackScene) {
   ctx.imageSmoothingEnabled = false;
   ctx.clearRect(0, 0, L.w, L.h);
 
-  // ---------- рыбак и его рука ----------
+  // ---------- рыбак и его руки ----------
   {
-    const p = L.pane, q = L.slot;
+    const p = L.pane, held = handSlots(L, s.hands), both = held.length === 1 && held[0]!.at === L.hands;
     fill(p.x + 1, p.y, p.w - 2, p.h, INK); fill(p.x, p.y + 1, p.w, p.h - 2, INK);
     fill(p.x + 1, p.y + 1, p.w - 2, p.h - 2, WOOD);
     fill(p.x + 2, p.y + 1, p.w - 4, 1, WOOD_LIGHT); fill(p.x + 1, p.y + 2, 1, p.h - 4, WOOD_LIGHT);
     fill(p.x + 2, p.y + p.h - 2, p.w - 4, 1, WOOD_DARK); fill(p.x + p.w - 2, p.y + 2, 1, p.h - 4, WOOD_DARK);
-    // рыбак: тень под ногами и он сам
+    // рыбак: тень под ногами, он сам и то, что у него в руках, — как в мире
     const mx = p.x + MAN.x, my = p.y + MAN.y, mw = HERO.FW * MAN.k, mh = HERO.FH * MAN.k;
     fill(mx + 6, my + mh - 3, mw - 12, 5, BLACK, 0.28); fill(mx + 2, my + mh - 2, mw - 4, 3, BLACK, 0.28);
     ctx.drawImage(manSprite(), mx, my, mw, mh);
-    const held = s.hand && heldSprite(s.hand.kind);      // в руке у него то же, что и в мире
-    if (held) { const at = heldPlace(held, HERO.hand('down', 0), false, HERO.FH - 1); ctx.drawImage(at.img, mx + at.x * MAN.k, my + at.y * MAN.k, at.w * MAN.k, at.h * MAN.k); }
-    // гнездо руки: углублено, как клетки рюкзака
-    fill(q.x, q.y, q.w, q.h, mix(WOOD, BLACK, 0.45));
-    fill(q.x, q.y, q.w, 1, mix(WOOD, BLACK, 0.7)); fill(q.x, q.y, 1, q.h, mix(WOOD, BLACK, 0.7));
-    fill(q.x, q.y + q.h - 1, q.w, 1, WOOD_LIGHT); fill(q.x + q.w - 1, q.y, 1, q.h, WOOD_LIGHT);
-    const it = s.hand;
-    if (!it) {                                           // пусто — пунктир: сюда можно взять вещь
-      for (let x = q.x + 5; x < q.x + q.w - 6; x += 4) { fill(x, q.y + 4, 2, 1, PAPER, 0.22); fill(x, q.y + q.h - 5, 2, 1, PAPER, 0.22); }
+    s.hands.forEach((it, i) => {
+      const art = heldSprite(it.kind); if (!art) return;
+      const at = heldPlace(art, i ? HERO.hand2('down', 0) : HERO.hand('down', 0), false, HERO.FH - 1);
+      ctx.drawImage(at.img, mx + at.x * MAN.k, my + at.y * MAN.k, at.w * MAN.k, at.h * MAN.k);
+    });
+    // гнёзда рук: углублены, как клетки рюкзака. Тяжёлая вещь — одно широкое гнездо на обе руки.
+    const recess = (q: Rect) => {
+      fill(q.x, q.y, q.w, q.h, mix(WOOD, BLACK, 0.45));
+      fill(q.x, q.y, q.w, 1, mix(WOOD, BLACK, 0.7)); fill(q.x, q.y, 1, q.h, mix(WOOD, BLACK, 0.7));
+      fill(q.x, q.y + q.h - 1, q.w, 1, WOOD_LIGHT); fill(q.x + q.w - 1, q.y, 1, q.h, WOOD_LIGHT);
+    };
+    const empty = (q: Rect) => {                         // пусто — пунктир: сюда можно взять вещь
+      for (let x = q.x + 4; x < q.x + q.w - 5; x += 4) { fill(x, q.y + 4, 2, 1, PAPER, 0.22); fill(x, q.y + q.h - 5, 2, 1, PAPER, 0.22); }
       for (let y = q.y + 5; y < q.y + q.h - 6; y += 4) { fill(q.x + 4, y, 1, 2, PAPER, 0.22); fill(q.x + q.w - 5, y, 1, 2, PAPER, 0.22); }
-    } else {
+    };
+    if (both) recess(L.hands); else L.slots.forEach(recess);
+    for (const { it, at: q } of held) {
       const img = itemSprite(it.kind), up = img.width > img.height;       // длинная вещь стоит стоймя, рукоятью вниз
       const w = up ? img.height : img.width, h = up ? img.width : img.height, x = q.x + ((q.w - w) >> 1), y = q.y + ((q.h - h) >> 1);
       ctx.globalAlpha = d?.id === it.id ? 0.3 : 1;
@@ -94,7 +111,18 @@ export function drawBackpack(ctx: CanvasRenderingContext2D, s: BackpackScene) {
       if (d?.id !== it.id) { if (s.selected === it.id) ring(q, COAT); else if (s.hover === it.id) ring(q, WOOD_LIGHT); }
       holding(it.id, q);
     }
-    if (d?.hand) fill(q.x, q.y, q.w, q.h, d.ok ? GOOD : BAD, 0.45);        // вещь из рюкзака несут в руку
+    if (!both) L.slots.forEach((q, i) => {
+      if (held[i]) return;
+      if (i === 1 && s.carry) {                          // вторая рука занята ведром — оно и нарисовано, приглушённо
+        const bx = q.x + ((q.w - 11) >> 1), by = q.y + ((q.h - 11) >> 1);
+        ctx.globalAlpha = 0.75;
+        fill(bx + 3, by, 5, 1, STEEL_DARK); fill(bx + 2, by + 1, 1, 2, STEEL_DARK); fill(bx + 8, by + 1, 1, 2, STEEL_DARK);
+        fill(bx, by + 3, 11, 1, STEEL_LIGHT); fill(bx, by + 4, 11, 5, STEEL); fill(bx + 1, by + 9, 9, 1, STEEL_DARK); fill(bx + 2, by + 10, 7, 1, STEEL_DARK);
+        fill(bx + 8, by + 4, 2, 5, STEEL_DARK);
+        ctx.globalAlpha = 1;
+      } else empty(q);
+    });
+    if (d?.hand) fill(L.hands.x, L.hands.y, L.hands.w, L.hands.h, d.ok ? GOOD : BAD, 0.45);   // вещь из рюкзака несут в руки
   }
 
   // ---------- рюкзак ----------

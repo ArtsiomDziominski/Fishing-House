@@ -23,18 +23,19 @@ function endpoint() {
 function setWeather(kind: WeatherKind | null, wind: boolean | null) { handle?.setWeather(kind, wind); }
 function setSound(on: boolean) { game.setSound(on); handle?.setSound(on); }
 
-// Вещи в рюкзаке и в руке: окно рюкзака просит, сервер решает и, если не согласен, присылает «items» с причиной.
+// Вещи в рюкзаке и в руках: окно рюкзака просит, сервер решает и, если не согласен, присылает «items» с причиной.
 const send = <K extends keyof ClientMessages>(type: K, msg: ClientMessages[K]) => room?.send(type, msg);
 const ITEM_NOTES: Record<NonNullable<ServerMessages['items']['note']>, string> = {
   far: 'Рюкзак далеко — подойди к нему',
   full: 'В рюкзаке нет места',
   tight: 'Вещи в этот рюкзак не влезут — сначала выложи лишнее',
-  busy: 'Рука занята — убери вещь в рюкзак',
+  busy: 'Руки заняты — убери вещь в рюкзак',
+  hands: 'Нужны обе руки — сначала поставь ведро',
 };
 function moveItem(id: number, x: number, y: number, rot: boolean) { send('itemMove', { id, x, y, rot }); }
 function dropItem(id: number) { send('itemDrop', { id }); }
 function takeItem(id: number) { send('itemTake', { id }); }
-function stowItem(at: Place) { send('itemStow', { at }); }
+function stowItem(id: number, at: Place) { send('itemStow', { id, at }); }
 function giveItem(kind: ItemKind) { send('itemGive', { kind }); }
 
 function stop() {
@@ -54,7 +55,7 @@ async function connect() {
     room = r;
     game.roomId = r.roomId;
     r.onMessage('items', (m: ServerMessages['items']) => {
-      game.items = m.list; game.hand = m.hand;
+      game.items = m.list; game.hands = m.hands;
       if (m.note) game.showToast(ITEM_NOTES[m.note], 'bad');
     });
     r.onDrop(() => { game.status = 'reconnecting'; });

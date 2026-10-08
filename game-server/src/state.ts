@@ -20,7 +20,8 @@ export const PlayerState = schema({
   px: t.int16(),              // где лежит рюкзак, если не на спине
   py: t.int16(),
   pack: t.string(),           // вид рюкзака (PACK_KINDS)
-  hand: t.string(),           // что в руке: вид вещи (ITEM_KINDS) или пусто
+  hand: t.string(),           // что в руках: вид вещи (ITEM_KINDS) или пусто; тяжёлая вещь — только здесь
+  off: t.string(),            // вторая рука — та, что носит ведро
   ground: t.string(),         // что игрок поставил на землю: вид вещи или пусто
   gx: t.int16(),              // и где
   gy: t.int16(),

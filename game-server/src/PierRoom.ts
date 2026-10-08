@@ -3,7 +3,8 @@
 // Кто здесь главный:
 // - ходит клиент сам (так нет задержки), а сервер проверяет каждый шаг: в проходимую ли клетку и не быстрее ли, чем можно;
 //   не принял — шлёт игроку «self», и тот встаёт туда, где сервер его видит;
-// - рыбалку ведёт только сервер: когда клюёт, кто клюнул, успел ли подсечь. Клиент шлёт лишь нажатия;
+// - рыбалку ведёт только сервер: когда клюёт, кто клюнул, успел ли подсечь. Клиент шлёт лишь нажатия. Забросить можно
+//   только с удочкой в руке (её берут из рюкзака);
 // - улов пишется в базу сразу при подсечке, место героя, ведра и рюкзака — при выходе и раз в минуту;
 // - вещи в рюкзаке перекладывает тоже сервер, и в руку их берёт он же: проверяет по ITEMS, что вещь встаёт, и пишет
 //   в базу по очереди (writes).
@@ -16,7 +17,7 @@ import {
   createFishing, addToBag, nearSeat, bucketNearSeat, standPoint, startState, packInReach, dist, seat,
   type Bag, type Fishing, type FishingEvent, type Item, type ItemKind, type ServerMessages, type WorldState,
 } from '@fh/shared';
-import { verifyTicket, loadPlayer, saveWorld, recordCatch, loadItems, addItem, placeItems, dropItem, type Stored, type Ticket } from '@fh/shared/server';
+import { verifyTicket, loadPlayer, saveWorld, recordCatch, loadItems, addItem, placeItems, passItem, dropItem, type Stored, type Ticket } from '@fh/shared/server';
 import { db } from './db.ts';
 import { Sky } from './sky.ts';
 import { PierState, PlayerState } from './state.ts';
@@ -34,7 +35,7 @@ interface Session {
   world: WorldState;                // где игрок на самом деле — по мнению сервера
   bag: Bag;
   items: Item[];                    // вещи в рюкзаке — по мнению сервера
-  hand: Item | null;                // вещь в руке; её x, y, rot — где она лежала в рюкзаке
+  hands: Item[];                    // вещи в руках, по порядку номеров: две лёгкие или одна тяжёлая; их x, y, rot — где они лежали в рюкзаке
   ground: Item | null;              // вещь на земле (лампа); её x, y — место на карте
   unsynced: Set<number>;            // вещи, которые при входе пришлось переложить, а в базе они ещё на старом месте
   writes: Promise<unknown>;         // очередь записей вещей в базу: по одной, в том порядке, в каком игрок их делал
@@ -52,7 +53,8 @@ const cell = z.number().int().min(0).max(63);
 const itemMoveMsg = z.object({ id: z.number().int(), x: cell, y: cell, rot: z.boolean() });
 const itemDropMsg = z.object({ id: z.number().int() });
 const itemTakeMsg = z.object({ id: z.number().int() });
-const itemStowMsg = z.object({ at: z.object({ x: cell, y: cell, rot: z.boolean() }).nullable() });
+const itemStowMsg = z.object({ id: z.number().int(), at: z.object({ x: cell, y: cell, rot: z.boolean() }).nullable() });
+const itemPickMsg = z.object({ pid: z.string().max(40).optional() }).optional();
 const itemGiveMsg = z.object({ kind: z.enum(ITEM_KINDS) });
 const lampMsg = z.object({ on: z.boolean() });
 const clockMsg = z.object({ hour: z.number().min(0).max(24).nullable() });
@@ -96,9 +98,9 @@ export class PierRoom extends Room<{ state: PierState; client: Client<{ auth: Au
     this.onMessage('itemMove', itemMoveMsg, (client, m) => this.itemMove(client, m.id, m.x, m.y, m.rot));
     this.onMessage('itemDrop', itemDropMsg, (client, m) => this.itemDrop(client, m.id));
     this.onMessage('itemTake', itemTakeMsg, (client, m) => this.itemTake(client, m.id));
-    this.onMessage('itemStow', itemStowMsg, (client, m) => this.itemStow(client, m.at));
+    this.onMessage('itemStow', itemStowMsg, (client, m) => this.itemStow(client, m.id, m.at));
     this.onMessage('itemPut', point, (client, m) => this.itemPut(client, m.x, m.y));
-    this.onMessage('itemPick', client => this.itemPick(client));
+    this.onMessage('itemPick', itemPickMsg, (client, m) => this.itemPick(client, m?.pid));
     this.onMessage('lamp', lampMsg, (client, m) => this.lamp(client, m.on));
     this.onMessage('itemGive', itemGiveMsg, (client, m) => { if (Sky.canSet) this.itemGive(client, m.kind); });
   }
@@ -116,15 +118,18 @@ export class PierRoom extends Room<{ state: PierState; client: Client<{ auth: Au
     const world = saved.world || startState();
     // вещи — в сетку нынешнего рюкзака. Кого пришлось переложить, тех в базе не трогаем, пока игрок сам не возьмётся
     // за рюкзак: вдруг запись мира отстала (вкладку перезагрузили, а прежний вход ещё сохраняется) и разложено всё верно
-    const stored = await loadItems(db, auth.pid), packed = ITEMS.settle(ITEMS.grid(world.pack.kind), stored.list);
+    // в руках — столько, на сколько хватает рук (ведро в руке занимает одну); лишнее считается лежащим в рюкзаке
+    const stored = await loadItems(db, auth.pid), hands: Item[] = [], extra: Item[] = [];
+    for (const it of stored.hands) (ITEMS.canHold(hands, it.kind, world.bucket.carried) ? hands : extra).push(it);
+    const packed = ITEMS.settle(ITEMS.grid(world.pack.kind), [...stored.list, ...extra]);
     // вещь на земле: карту могли перестроить, и её место оказалось в лесу или в воде — тогда она встаёт на ближайшую траву
     const out = stored.ground, at = out && (World.canWalk(out.x, out.y) ? out : World.nearestWalkable(out.x, out.y) || World.nearestWalkable(world.x, world.y) || world);
     const ground = out && at ? { ...out, x: Math.round(at.x), y: Math.round(at.y), rot: false } : null;
     const view = new PlayerState();
     view.pid = saved.id; view.name = saved.name;
     const s: Session = {
-      pid: saved.id, name: saved.name, world, bag: saved.bag, items: packed.list, hand: stored.hand, ground, unsynced: new Set(packed.moved.map(it => it.id)), writes: Promise.resolve(), view, budget: BUDGET_MAX, dirty: false,
-      fishing: createFishing({ hasBucket: () => bucketNearSeat(s.world.bucket), emit: ev => this.onFishing(client, s, ev), grace: HOOK_GRACE }),
+      pid: saved.id, name: saved.name, world, bag: saved.bag, items: packed.list, hands, ground, unsynced: new Set([...packed.moved, ...extra].map(it => it.id)), writes: Promise.resolve(), view, budget: BUDGET_MAX, dirty: false,
+      fishing: createFishing({ hasRod: () => s.hands.some(it => ITEMS.isRod(it.kind)), hasBucket: () => bucketNearSeat(s.world.bucket), emit: ev => this.onFishing(client, s, ev), grace: HOOK_GRACE }),
     };
     if (world.sitting) s.fishing.sit();
     this.sessions.set(client.sessionId, s);
@@ -159,7 +164,7 @@ export class PierRoom extends Room<{ state: PierState; client: Client<{ auth: Au
   }
   private reject(client: Client, s: Session) { this.tell(client, 'self', s.world); }
   // Вещи игрока целиком: что в рюкзаке и что в руке; note — почему не вышло то, о чём он просил.
-  private tellItems(client: Client, s: Session, note?: ServerMessages['items']['note']) { this.tell(client, 'items', { list: s.items, hand: s.hand, ground: s.ground, ...(note && { note }) }); }
+  private tellItems(client: Client, s: Session, note?: ServerMessages['items']['note']) { this.tell(client, 'items', { list: s.items, hands: s.hands, ground: s.ground, ...(note && { note }) }); }
 
   private move(client: Client, x: number, y: number, dir: WorldState['dir']) {
     const s = this.sessions.get(client.sessionId); if (!s) return;
@@ -208,7 +213,7 @@ export class PierRoom extends Room<{ state: PierState; client: Client<{ auth: Au
   private pick(client: Client) {
     const s = this.sessions.get(client.sessionId); if (!s) return;
     const w = s.world;
-    if (w.sitting || w.bucket.carried || dist(w, w.bucket) > REACH + SLACK) { this.reject(client, s); return; }
+    if (w.sitting || w.bucket.carried || dist(w, w.bucket) > REACH + SLACK || ITEMS.load(s.hands, true) > ITEMS.HANDS) { this.reject(client, s); return; }   // ведру нужна свободная рука
     w.bucket.carried = true; w.bucket.home = false; s.dirty = true;
     this.syncView(s);
   }
@@ -269,11 +274,11 @@ export class PierRoom extends Room<{ state: PierState; client: Client<{ auth: Au
     this.place(s, [it]);
   }
 
-  // Выбросить вещь: из рюкзака — заглянув в него, из руки — где угодно.
+  // Выбросить вещь: из рюкзака — заглянув в него, из рук — где угодно.
   private itemDrop(client: Client, id: number) {
     const s = this.sessions.get(client.sessionId); if (!s) return;
-    if (s.hand?.id === id) {
-      s.hand = null;
+    if (s.hands.some(it => it.id === id)) {
+      s.hands = s.hands.filter(it => it.id !== id);
       this.syncView(s);
       this.write(s, () => dropItem(db, s.pid, id));
       return;
@@ -286,28 +291,28 @@ export class PierRoom extends Room<{ state: PierState; client: Client<{ auth: Au
     this.write(s, () => dropItem(db, s.pid, id));
   }
 
-  // Взять вещь из рюкзака в руку (рюкзак на спине или рядом). Что было в руке, уходит в рюкзак; некуда — отказ.
-  // Вещь, которая ещё пишется в базу (id отрицательный), в руку не берём: её номер пока никто не знает.
+  // Взять вещь из рюкзака в руки (рюкзак на спине или рядом). Не хватает рук — прежние вещи уходят в рюкзак; некуда — отказ.
+  // Тяжёлую не взять, пока в руке ведро. Вещь, которая ещё пишется в базу (id отрицательный), в руки не берём: её номер
+  // пока никто не знает.
   private itemTake(client: Client, id: number) {
     const s = this.sessions.get(client.sessionId); if (!s) return;
     if (!packInReach(s.world, s.world.pack, SLACK)) { this.tellItems(client, s, 'far'); return; }
-    const found = s.items.some(it => it.id === id);
-    const r = id > 0 ? ITEMS.take(ITEMS.grid(s.world.pack.kind), s.items, s.hand, id) : null;
-    if (!r) { this.tellItems(client, s, found && id > 0 ? 'full' : undefined); return; }
-    s.items = r.list; s.hand = r.hand;
+    const r = id > 0 ? ITEMS.take(ITEMS.grid(s.world.pack.kind), s.items, s.hands, id, s.world.bucket.carried) : 'none';
+    if (typeof r === 'string') { this.tellItems(client, s, r === 'none' ? undefined : r); return; }
+    s.items = r.list; s.hands = r.hands;
     this.syncView(s);
-    this.place(s, [{ ...r.hand, held: true }, ...(r.back ? [r.back] : [])]);
-    if (r.back) this.tellItems(client, s);              // куда встала прежняя вещь из руки, решили мы — пусть клиент сверится
+    this.place(s, [{ ...r.hands.find(it => it.id === id)!, held: true }, ...r.back]);
+    if (r.back.length) this.tellItems(client, s);       // куда встали прежние вещи из рук, решили мы — пусть клиент сверится
   }
 
-  // Убрать вещь из руки в рюкзак: в названную клетку или на свободное место.
-  private itemStow(client: Client, at: { x: number; y: number; rot: boolean } | null) {
+  // Убрать вещь из рук в рюкзак: в названную клетку или на свободное место.
+  private itemStow(client: Client, id: number, at: { x: number; y: number; rot: boolean } | null) {
     const s = this.sessions.get(client.sessionId); if (!s) return;
-    if (!s.hand) { this.tellItems(client, s); return; }
+    if (!s.hands.some(it => it.id === id)) { this.tellItems(client, s); return; }
     if (!packInReach(s.world, s.world.pack, SLACK)) { this.tellItems(client, s, 'far'); return; }
-    const r = ITEMS.stow(ITEMS.grid(s.world.pack.kind), s.items, s.hand, at);
+    const r = ITEMS.stow(ITEMS.grid(s.world.pack.kind), s.items, s.hands, id, at);
     if (!r) { this.tellItems(client, s, at ? undefined : 'full'); return; }
-    s.items = r.list; s.hand = null;
+    s.items = r.list; s.hands = r.hands;
     this.syncView(s);
     this.place(s, [r.item]);
   }
@@ -315,30 +320,43 @@ export class PierRoom extends Room<{ state: PierState; client: Client<{ auth: Au
   // Поставить вещь из руки на землю рядом с собой. Пока это только лампа, и стоять на земле может одна.
   private itemPut(client: Client, x: number, y: number) {
     const s = this.sessions.get(client.sessionId); if (!s) return;
-    const w = s.world, it = s.hand;
-    if (!it || !ITEMS.stands(it.kind) || s.ground || it.id < 0 || w.sitting || dist(w, { x, y }) > PUT_REACH || !World.canWalk(x, y)) { this.tellItems(client, s); return; }
-    s.ground = { ...it, x: Math.round(x), y: Math.round(y), rot: false }; s.hand = null;
+    const w = s.world, it = s.hands.find(h => ITEMS.stands(h.kind));
+    if (!it || s.ground || w.sitting || dist(w, { x, y }) > PUT_REACH || !World.canWalk(x, y)) { this.tellItems(client, s); return; }
+    s.ground = { ...it, x: Math.round(x), y: Math.round(y), rot: false }; s.hands = s.hands.filter(h => h !== it);
     this.syncView(s);
     this.place(s, [{ ...s.ground, ground: true }]);
+    this.tellItems(client, s);                          // окно рюкзака узнаёт, что рука опустела
   }
 
-  // Взять свою вещь с земли, стоя рядом: в руку, а если рука занята — в рюкзак, когда он под рукой и в нём есть место.
-  private itemPick(client: Client) {
+  // Взять вещь с земли, стоя рядом: свою или чужую — ту, что поставил игрок pid из этой же комнаты. Она идёт в руки,
+  // а если свободной руки нет — в рюкзак, когда он под рукой и в нём есть место. Чужая вещь становится своей: в базе у неё
+  // меняется хозяин. Эта запись встаёт в очередь прежнего хозяина (после всего, что он успел с вещью сделать), а очередь
+  // нового ждёт её — так его следующие перекладки не обгонят передачу.
+  private itemPick(client: Client, pid?: string) {
     const s = this.sessions.get(client.sessionId); if (!s) return;
-    const w = s.world, it = s.ground;
-    if (!it || w.sitting || dist(w, it) > REACH + SLACK) { this.tellItems(client, s); return; }
-    if (!s.hand) {
-      s.hand = { ...it, x: 0, y: 0 }; s.ground = null;   // где она лежала в рюкзаке, уже не вспомнить — вернётся на свободное место
-      this.syncView(s);
-      this.place(s, [{ ...s.hand, held: true }]);
-      return;
+    const w = s.world, owner = !pid || pid === s.pid ? s : [...this.sessions.values()].find(o => o.pid === pid);
+    const it = owner?.ground;
+    if (!owner || !it || it.id < 0 || w.sitting || dist(w, it) > REACH + SLACK) { this.tellItems(client, s); return; }
+    let mine: Item, held = false;
+    if (ITEMS.canHold(s.hands, it.kind, w.bucket.carried)) { mine = { ...it, x: 0, y: 0 }; held = true; }   // где она лежала в рюкзаке, уже не вспомнить — вернётся на свободное место
+    else {
+      const at = packInReach(w, w.pack, SLACK) ? ITEMS.spot(ITEMS.grid(w.pack.kind), s.items, it.kind) : null;
+      if (!at) { this.tellItems(client, s, 'busy'); return; }
+      mine = { ...it, ...at };
     }
-    const at = packInReach(w, w.pack, SLACK) ? ITEMS.spot(ITEMS.grid(w.pack.kind), s.items, it.kind) : null;
-    if (!at) { this.tellItems(client, s, 'busy'); return; }
-    const back = { ...it, ...at };
-    s.items.push(back); s.ground = null;
+    owner.ground = null;
+    if (held) s.hands = ITEMS.inOrder([...s.hands, mine]); else s.items.push(mine);
+    if (owner === s) this.place(s, [{ ...mine, held }]);
+    else {
+      if (it.kind === 'lamp' && s.world.lamp !== owner.world.lamp) { s.world.lamp = owner.world.lamp; void this.save(s, true); }   // лампа переходит такой, какой стояла: горящей или погашенной
+      this.write(owner, () => passItem(db, owner.pid, s.pid, { ...mine, held }));
+      const passed = owner.writes;
+      this.write(s, () => passed);
+      this.syncView(owner);
+      const theirs = this.clients.find(c => this.sessions.get(c.sessionId) === owner);
+      if (theirs) this.tellItems(theirs, owner);        // прежний хозяин узнаёт, что лампы у него больше нет
+    }
     this.syncView(s);
-    this.place(s, [back]);
     this.tellItems(client, s);                          // куда легла вещь, решили мы
   }
 
@@ -346,7 +364,7 @@ export class PierRoom extends Room<{ state: PierState; client: Client<{ auth: Au
   // Нет лампы или далеко — молчим: кнопки у игрока тогда и нет.
   private lamp(client: Client, on: boolean) {
     const s = this.sessions.get(client.sessionId); if (!s) return;
-    if (!ITEMS.lampNear(s.world, s.hand, s.ground, SLACK) || s.world.lamp === on) return;
+    if (!ITEMS.lampNear(s.world, s.hands, s.ground, SLACK) || s.world.lamp === on) return;
     s.world.lamp = on; s.dirty = true;
     this.syncView(s);
     void this.save(s, true);           // сразу: лампа на земле должна гореть и после перезахода, а место героя пишется лишь раз в минуту
@@ -407,9 +425,9 @@ export class PierRoom extends Room<{ state: PierState; client: Client<{ auth: Au
     v.x = w.x; v.y = w.y; v.dir = w.dir; v.sitting = w.sitting; v.rest = w.rest;
     v.carrying = w.bucket.carried; v.bx = w.bucket.x; v.by = w.bucket.y; v.bucketHome = w.bucket.home;
     v.wearing = w.pack.worn; v.px = w.pack.x; v.py = w.pack.y; v.pack = w.pack.kind;
-    v.hand = s.hand?.kind ?? '';
+    v.hand = s.hands[0]?.kind ?? ''; v.off = s.hands[1]?.kind ?? '';
     v.ground = s.ground?.kind ?? ''; v.gx = s.ground?.x ?? 0; v.gy = s.ground?.y ?? 0;
-    v.lamp = w.lamp && ITEMS.lampOut(s.hand, s.ground);
+    v.lamp = w.lamp && ITEMS.lampOut(s.hands, s.ground);
     const recent = s.bag.recent.filter(id => FISH.byId[id]);
     if (v.recent.length !== recent.length || recent.some((id, i) => v.recent[i] !== id)) {
       v.recent.clear(); for (const id of recent) v.recent.push(id);
