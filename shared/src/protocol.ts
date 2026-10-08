@@ -47,6 +47,7 @@ export interface ClientMessages {
   lamp: { on: boolean; id?: number };         // зажечь или погасить лампу: ту, что в руке, или (id) ту, что стоит на земле рядом
   fishTake: { species: string; left?: boolean };   // достать рыбу этого вида из ведра (в руке или на земле рядом) в руку left; не назвали — в свободную
   eat: { left?: boolean };                    // съесть рыбу из руки left (не назвали — жареную первой, потом сырую)
+  dig: void;                                  // копать червей: лопата в одной руке, банка в другой, перед героем трава (WORMS)
   itemGive: { kind: ItemKind };               // положить в рюкзак новую вещь. Только в разработке
   scrap: { id: number; by: ScrapEnd };        // позвать к рыбе на земле чайку или кота (или дать ей растаять) прямо сейчас. Только в разработке
   clock: { hour: number | null };             // перевести часы причала на этот час — сразу у всех; null — настоящее время. Только в разработке
@@ -73,6 +74,11 @@ export interface ServerMessages {
   hunger: { food: number; sleep: number; lost?: number };
   // Что случилось с едой: рыба в руке пожарилась у костра (cooked) или её съели (ate: gain — сколько сытости прибавилось).
   food: { e: 'cooked' | 'ate'; fish: string; raw?: boolean; gain?: number };
+  // Черви (WORMS): used — рыба клюнула, в банке id осталось n; dug — накопал got червей (wet — земля после дождя), в банке
+  // теперь n, lost — уползло, не влезло. Отказы копать: none — тут уже вскопано, червей нет; full — банка полна; ground —
+  // здесь не копают (не трава); jar — нет банки в другой руке; shovel — нет лопаты в руке; busy — сидит, ест или уже копает.
+  worms: { e: 'used'; id: number; n: number } | { e: 'dug'; id: number; n: number; got: number; lost: number; wet: boolean }
+    | { e: 'none' | 'full' | 'ground' | 'jar' | 'shovel' | 'busy' };
   // Часы причала, мс: по ним у всех одно время суток. Приходят при входе и когда часы перевели.
   // canSet — сервер разрешает их переводить (разработка), moved — сейчас они переведены.
   clock: { now: number; canSet: boolean; moved: boolean };
@@ -92,6 +98,7 @@ export interface PlayerView {
   lamp: boolean;                                            // лампа у него в руке зажжена и светит
   sleep: boolean;                                           // спит от голода
   eat: string; eatLeft: boolean;                            // что он сейчас ест ('fish', 'fish-fried'; пусто — не ест) и какой рукой
+  dig: boolean;                                             // копает червей: лопата втыкается перед ним (WORMS.spot)
   recent: ArrayLike<string>;                                // хвосты последних рыб — над ведром, если оно у него в руке
 }
 
@@ -99,6 +106,10 @@ export interface PlayerView {
 // в game-server/src/state.ts. Земля одна на все копии причала и не пустеет, когда игрок уходит. fish — у ведра хвосты рыб над ним, у рыбы — её вид.
 // end — у рыбы: за ней пришла чайка или кот, или она тает (ScrapEnd в scraps.ts); пусто — лежит.
 export interface GroundView { kind: string; x: number; y: number; lit: boolean; fish: string; end: string }
+
+// Ямка от лопаты, как её видят все в состоянии комнаты (ключ — её номер строкой): где она и когда вскопана (мс, часы сервера).
+// Поля совпадают с HoleState в game-server/src/state.ts. Ямки общие для всех копий причала и зарастают через WORMS.REST.
+export interface HoleView { x: number; y: number; at: number }
 
 // Почему сервер закрыл соединение.
 export const KICK = { replaced: 'replaced' } as const;

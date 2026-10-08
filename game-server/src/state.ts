@@ -22,6 +22,7 @@ export const PlayerState = schema({
   sleep: t.boolean(),         // спит от голода
   eat: t.string(),            // что он сейчас ест: вид рыбы-вещи ('fish', 'fish-fried'); пусто — не ест
   eatLeft: t.boolean(),       // ест левой рукой
+  dig: t.boolean(),           // копает червей: лопата втыкается перед ним (WORMS.spot)
   recent: t.array('string'),  // хвосты последних рыб — над ведром, когда оно у него в руке
 }, 'PlayerState');
 export type PlayerState = SchemaType<typeof PlayerState>;
@@ -37,9 +38,18 @@ export const GroundState = schema({
 }, 'GroundState');
 export type GroundState = SchemaType<typeof GroundState>;
 
+// Ямка от лопаты. Поля совпадают с HoleView из @fh/shared. Зарастает через WORMS.REST.
+export const HoleState = schema({
+  x: t.int16(),               // где она на карте
+  y: t.int16(),
+  at: t.float64(),            // когда вскопана: мс, часы сервера
+}, 'HoleState');
+export type HoleState = SchemaType<typeof HoleState>;
+
 export const PierState = schema({
   players: t.map(PlayerState),   // ключ — sessionId соединения
   ground: t.map(GroundState),    // ключ — id вещи строкой; земля одна на все копии причала
   fire: t.boolean(),             // костёр горит (гаснет под дождём, разжигает игрок); один на все копии причала
+  holes: t.map(HoleState),       // ямки от лопат (ключ — номер ямки); одни на все копии причала
 }, 'PierState');
 export type PierState = SchemaType<typeof PierState>;

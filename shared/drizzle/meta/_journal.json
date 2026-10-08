@@ -64,6 +64,20 @@
       "when": 1791469590512,
       "tag": "0008_fish_gone",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1791486105895,
+      "tag": "0009_worms",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1791487902933,
+      "tag": "0010_worms_empty",
+      "breakpoints": true
     }
   ]
 }

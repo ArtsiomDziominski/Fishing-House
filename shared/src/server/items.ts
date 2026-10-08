@@ -11,8 +11,8 @@ import { catches, items, players } from './schema.ts';
 const columns = { id: items.id, kind: items.kind, x: items.x, y: items.y, rot: items.rot };
 // Вещь и где она: held — в руке (тогда x, y, rot — где она лежала в рюкзаке до того, left — в левой ли). Иначе — лежит в рюкзаке.
 export type Stored = Item & { held?: boolean };
-// Вещь на земле и кто её выложил (owner — публичный id игрока).
-export type Dropped = GroundItem & { owner: string };
+// Вещь на земле и кто её выложил (owner — публичный id игрока); у банки червей — сколько в ней (worms): поднявшему она достанется такой же.
+export type Dropped = GroundItem & { owner: string; worms?: number };
 
 // Вещи игрока в том порядке, в каком он их получал: list — в рюкзаке, hands — в руках. Выложенных на землю здесь нет —
 // они в loadGround. Кто ещё не получал стартовый набор, получает его здесь же: отметка kit и сами вещи пишутся одной
@@ -22,12 +22,12 @@ export async function loadItems(db: Db, pid: string): Promise<{ list: Item[]; ha
   const rows = await db.transaction(async tx => {
     const [fresh] = await tx.update(players).set({ kit: true }).where(and(eq(players.id, pid), eq(players.kit, false))).returning({ id: players.id });
     if (fresh) await tx.insert(items).values(ITEMS.STARTER.map(({ left, ...it }) => ({ playerId: pid, ...it, leftHand: !!left })));
-    return tx.select({ ...columns, held: items.held, left: items.leftHand, fish: items.fish }).from(items).where(and(eq(items.playerId, pid), eq(items.ground, false))).orderBy(asc(items.id));
+    return tx.select({ ...columns, held: items.held, left: items.leftHand, fish: items.fish, worms: items.worms }).from(items).where(and(eq(items.playerId, pid), eq(items.ground, false))).orderBy(asc(items.id));
   });
   const list: Item[] = [], hands: Item[] = [];
-  for (const { held, left, fish, ...row } of rows) {
+  for (const { held, left, fish, worms, ...row } of rows) {
     if (!ITEMS.isKind(row.kind)) continue;
-    const it = (ITEMS.isFish(row.kind) ? { ...row, fish } : row) as Item;
+    const it = (ITEMS.isFish(row.kind) ? { ...row, fish } : ITEMS.isBait(row.kind) ? { ...row, worms } : row) as Item;
     if (held) hands.push({ ...it, left }); else list.push(it);
   }
   return { list, hands };
@@ -35,13 +35,21 @@ export async function loadItems(db: Db, pid: string): Promise<{ list: Item[]; ha
 
 // Всё, что лежит на земле, — у всех игроков разом: его видят во всех копиях причала, даже когда хозяина нет в игре.
 export async function loadGround(db: Db): Promise<Dropped[]> {
-  const rows = await db.select({ id: items.id, kind: items.kind, x: items.x, y: items.y, lit: items.lit, fish: items.fish, owner: items.playerId }).from(items).where(eq(items.ground, true)).orderBy(asc(items.id));
-  return rows.filter((r): r is Dropped => ITEMS.isKind(r.kind));
+  const rows = await db.select({ id: items.id, kind: items.kind, x: items.x, y: items.y, lit: items.lit, fish: items.fish, owner: items.playerId, worms: items.worms }).from(items).where(eq(items.ground, true)).orderBy(asc(items.id));
+  const out: Dropped[] = [];
+  for (const { worms, ...r } of rows) if (ITEMS.isKind(r.kind)) out.push({ ...r, kind: r.kind, ...(ITEMS.isBait(r.kind) && { worms }) });
+  return out;
 }
 
 export async function addItem(db: Db, pid: string, kind: ItemKind, at: Place): Promise<Item> {
-  const [row] = await db.insert(items).values({ playerId: pid, kind, ...at }).returning(columns);
-  return row as Item;
+  const [row] = await db.insert(items).values({ playerId: pid, kind, ...at }).returning({ ...columns, worms: items.worms });
+  const { worms, ...it } = row!;
+  return (ITEMS.isBait(kind) ? { ...it, worms } : it) as Item;
+}
+
+// Сколько теперь червей в банке игрока: рыба клюнула или он накопал ещё (WORMS).
+export async function setWorms(db: Db, pid: string, id: number, n: number): Promise<void> {
+  await db.update(items).set({ worms: n }).where(and(eq(items.id, id), eq(items.playerId, pid)));
 }
 
 // Записать, где теперь эти вещи: в какой клетке рюкзака или в руке (переложили одну, взяли в руку, разложили весь рюкзак заново).

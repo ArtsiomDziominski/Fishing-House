@@ -22,7 +22,8 @@
     "db:up": "docker compose -f docker-compose.dev.yml up -d",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "npm run migrate -w shared",
-    "build:world": "tsx tools/build-world.mjs"
+    "build:world": "tsx tools/build-world.mjs",
+    "build:dig": "node tools/build-dig.mjs"
   },
   "devDependencies": {
     "@types/node": "^22.20.5",

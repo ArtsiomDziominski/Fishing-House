@@ -21,7 +21,7 @@ export const useGameStore = defineStore('game', {
     packOpen: false,              // открыто окно рюкзака
     // время суток и погода: часы, темнота фона, погода словами; можно ли их выставлять (разработка) и что выставлено
     sky: { label: '', dark: 0, minutes: 0, canSet: false, moved: false, weather: '', fixKind: null, fixWind: null } as SkyInfo,
-    actions: { left: null, right: null, pack: null, fish: null, hot: false, stand: false, open: false, light: null, eat: null } as Actions,
+    actions: { left: null, right: null, pack: null, fish: null, hot: false, stand: false, open: false, light: null, eat: null, dig: null } as Actions,
     hunger: { food: HUNGER.MAX, until: 0, lost: null } as HungerInfo,   // сытость и сон от голода
     toast: { text: '', tone: '' as Tone, fishId: null as string | null, show: false, seq: 0 },
     quietHint: false,
@@ -55,6 +55,11 @@ export const useGameStore = defineStore('game', {
         debug: text => { this.debug = text; },
         online: list => { this.online = list; },
         hunger: info => { this.hunger = info; },
+        // сколько червей в банке: в рюкзаке она или в руке, у неё новый счёт
+        worms: (id, n) => {
+          const set = (list: Item[]) => (list.some(it => it.id === id) ? list.map(it => (it.id === id ? { ...it, worms: n } : it)) : list);
+          this.items = set(this.items); this.hands = set(this.hands);
+        },
       };
     },
   },

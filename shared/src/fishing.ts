@@ -1,7 +1,8 @@
 // Рыбалка с края причала — правила. Их ведёт сервер: он решает, когда клюёт, кто клюнул и успел ли игрок подсечь.
 // Клиент только показывает фазы по событиям сервера (app/app/game/fishing-view.ts).
 // Рыбачат удочкой в одной руке и с червями в другой. Без них не забросить, а убрал удочку или червей посреди
-// рыбалки — леска сматывается.
+// рыбалки — леска сматывается. Червь уходит, когда рыба клюнула (поймал её или сорвалась); рано дёрнул — червь цел.
+// Банка опустела — рыбак больше не забрасывает (noWorms).
 //
 // Фазы: off — герой не сидит; rest — сидит, леска в воде, как на картинке; cast — заброс;
 // wait — ждём поклёвку; bite — клюёт, надо подсечь; pull — рыба идёт вверх по леске;
@@ -18,7 +19,7 @@ export type Phase = 'off' | 'rest' | 'cast' | 'wait' | 'bite' | 'pull' | 'fly' |
 
 // Что сервер сообщает игроку о его рыбалке. hook — рыба подсечена и уже лежит в ведре.
 export type FishingEvent =
-  | { e: 'needRod' } | { e: 'needBait' } | { e: 'needBucket' } | { e: 'cast' } | { e: 'nibble' } | { e: 'bite' }
+  | { e: 'needRod' } | { e: 'needBait' } | { e: 'noWorms' } | { e: 'needBucket' } | { e: 'cast' } | { e: 'nibble' } | { e: 'bite' }
   | { e: 'early' } | { e: 'miss' } | { e: 'rest' } | { e: 'hook'; fish: Catch };
 
 export interface FishingState { phase: Phase; t: number; wait: number; nibble: number; fish: Catch | null }
@@ -27,12 +28,14 @@ export interface FishingOptions {
   rnd?: () => number;
   hasRod: () => boolean;              // в руке ли удочка
   hasBait: () => boolean;             // в руке ли черви
+  hasWorms?: () => boolean;           // есть ли в этой банке хоть один червь
+  useWorm?: () => void;               // рыба клюнула — червя больше нет
   hasBucket: () => boolean;           // стоит ли ведро рядом с местом рыбака
   emit: (ev: FishingEvent) => void;
   grace?: number;                     // сколько секунд прибавить к окну подсечки
 }
 
-export function createFishing({ rnd = Math.random, hasRod, hasBait, hasBucket, emit, grace = 0 }: FishingOptions) {
+export function createFishing({ rnd = Math.random, hasRod, hasBait, hasWorms = () => true, useWorm = () => {}, hasBucket, emit, grace = 0 }: FishingOptions) {
   const st: FishingState = { phase: 'off', t: 0, wait: 0, nibble: -1, fish: null };
   const set = (phase: Phase) => { st.phase = phase; st.t = 0; };
   function cast() {
@@ -47,11 +50,14 @@ export function createFishing({ rnd = Math.random, hasRod, hasBait, hasBucket, e
     if (st.phase === 'rest') {
       if (!hasRod()) { emit({ e: 'needRod' }); return; }
       if (!hasBait()) { emit({ e: 'needBait' }); return; }
+      if (!hasWorms()) { emit({ e: 'noWorms' }); return; }
       if (!hasBucket()) { emit({ e: 'needBucket' }); return; }
       cast();
     } else if (st.phase === 'wait') { set('scare'); emit({ e: 'early' }); }
     else if (st.phase === 'bite' && st.fish) { const fish = st.fish; set('pull'); emit({ e: 'hook', fish }); }
   }
+  // Забросить снова, если в банке ещё есть черви; нет — сматываем леску и говорим почему.
+  function recast() { if (hasWorms()) cast(); else { set('rest'); emit({ e: 'noWorms' }); } }
   function update(dt: number) {
     // удочку или червей убрали из руки — рыбалка кончилась; рыба, что уже подсечена, и так в ведре
     if (st.phase !== 'off' && st.phase !== 'rest' && !(hasRod() && hasBait())) { st.fish = null; set('rest'); emit({ e: 'rest' }); return; }
@@ -60,13 +66,13 @@ export function createFishing({ rnd = Math.random, hasRod, hasBait, hasBucket, e
     if (st.phase === 'cast' && st.t >= TIME.cast) set('wait');
     else if (st.phase === 'wait') {
       if (st.nibble > 0 && t0 < st.nibble && st.t >= st.nibble) emit({ e: 'nibble' });
-      if (st.t >= st.wait) { st.fish = FISH.roll(rnd); set('bite'); emit({ e: 'bite' }); }
+      if (st.t >= st.wait) { st.fish = FISH.roll(rnd); useWorm(); set('bite'); emit({ e: 'bite' }); }   // клюнула — червя объела, поймай её или нет
     }
     else if (st.phase === 'bite' && st.fish && st.t >= FISH.byId[st.fish.id]!.window + grace) { st.fish = null; set('scare'); emit({ e: 'miss' }); }
-    else if (st.phase === 'scare' && st.t >= TIME.scare) cast();
+    else if (st.phase === 'scare' && st.t >= TIME.scare) recast();
     else if (st.phase === 'pull' && st.t >= TIME.pull) set('fly');
     else if (st.phase === 'fly' && st.t >= TIME.fly) { st.fish = null; set('pause'); }
-    else if (st.phase === 'pause' && st.t >= TIME.pause) { if (hasBucket()) cast(); else { set('rest'); emit({ e: 'rest' }); } }
+    else if (st.phase === 'pause' && st.t >= TIME.pause) { if (hasBucket()) recast(); else { set('rest'); emit({ e: 'rest' }); } }
   }
   return { st, sit, leave, press, update };
 }

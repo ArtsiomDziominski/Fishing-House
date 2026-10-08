@@ -286,8 +286,9 @@ export const HERO = (() => {
   }
   type Tones = Record<string, number[]> | null;
   // carry — какая рука держит ведро: правая лицом к нам — слева на экране, со спины — справа; левая — наоборот.
-  // eat — какая рука подносит рыбу ко рту (её рисует игра, eatArm); обе — без рукава в кадре.
-  function frontFrame(dir: 'down' | 'up', f: number, blink: boolean, carry: Hand | false, pack: Tones, eat: Hand | false = false) {
+  // eat — какая рука подносит рыбу ко рту (её рисует игра, eatArm); обе — без рукава в кадре. 'both' — обе руки на черенке
+  // лопаты: их тоже рисует игра.
+  function frontFrame(dir: 'down' | 'up', f: number, blink: boolean, carry: Hand | false, pack: Tones, eat: Hand | 'both' | false = false) {
     const buf = blank();
     const step = f === 1 || f === 3, dip = step ? 1 : 0;
     const legs = LEGS[dir === 'down' ? 'front' : 'back'];
@@ -298,7 +299,7 @@ export const HERO = (() => {
     // руки: противоход ногам
     const swing = f === 1 ? 1 : f === 3 ? -1 : 0;
     const onScreen = (h: Hand) => ((dir === 'down') === (h === 'right') ? 'left' : 'right');   // с какого бока на экране рука h
-    const busy = [carry, eat].filter((h): h is Hand => !!h).map(onScreen);   // эти руки заняты ведром или едой и не качаются
+    const busy = (eat === 'both' ? ['left', 'right'] as Hand[] : [carry, eat].filter((h): h is Hand => !!h)).map(onScreen);   // эти руки заняты ведром или едой и не качаются
     if (!busy.includes('left')) stamp(buf, ARM, 2, 18 + dip - (swing > 0 ? 0 : swing < 0 ? 1 : 0) + (swing > 0 ? 1 : 0));
     if (!busy.includes('right')) stamp(buf, ARM, 14, 18 + dip - (swing < 0 ? 0 : swing > 0 ? 1 : 0) + (swing < 0 ? 1 : 0));
     stamp(buf, blink ? blinkHead(dir) : HEAD[dir], 0, dip);
@@ -332,11 +333,12 @@ export const HERO = (() => {
   // carry — те же кадры без руки, занятой ведром (её рисует игра поверх ведра): 'right' или 'left'; false — ведра нет.
   // Сбоку ведро в дальней руке висит за телом, и ближняя рука остаётся на месте: смотрит влево — ближе к нам левая, вправо — правая.
   // tones — пять тонов [r, g, b] рюкзака на спине от света к тени; без них герой налегке.
-  // eat — рука, которая подносит рыбу ко рту: в кадре её нет (сбоку — только если она ближняя), её рисует игра (eatArm).
-  function build(carry: Hand | false = false, tones: number[][] | null = null, eat: Hand | false = false): Record<Dir, Pixels[]> {
+  // eat — рука, которая подносит рыбу ко рту: в кадре её нет (сбоку — только если она ближняя), её рисует игра (eatArm);
+  // 'both' — копает: обе руки на черенке, в кадре нет ни одной.
+  function build(carry: Hand | false = false, tones: number[][] | null = null, eat: Hand | 'both' | false = false): Record<Dir, Pixels[]> {
     const pack: Tones = tones && withPack(tones);
     const frames: Record<Dir, Pixels[]> = { down: [], up: [], left: [], right: [] };
-    const bare = (near: Hand) => carry === near || eat === near;
+    const bare = (near: Hand) => carry === near || eat === near || eat === 'both';
     for (let f = 0; f < 5; f++) {
       frames.down.push(frontFrame('down', f, false, carry, pack, eat));
       frames.up.push(frontFrame('up', f, false, carry, pack, eat));

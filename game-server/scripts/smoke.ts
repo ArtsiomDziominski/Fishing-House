@@ -9,7 +9,7 @@
 //   npm run smoke:own -w game-server        (то же, но сервер бот поднимает сам — smoke-own.ts)
 
 import { Client, type Room } from '@colyseus/sdk';
-import { World, ITEMS, HUNGER, SCRAPS, FIRE, ROOM, DAY_LENGTH, WEATHERS, REACH, dayHour, weatherText, dist, seat, standPoint, homePoint, type Bag, type GroundView, type Item, type PlayerView, type ServerMessages, type WorldState } from '@fh/shared';
+import { World, ITEMS, HUNGER, SCRAPS, FIRE, ROOM, DAY_LENGTH, WEATHERS, REACH, dayHour, weatherText, dist, WORMS, seat, standPoint, homePoint, type Bag, type GroundView, type Item, type PlayerView, type ServerMessages, type WorldState } from '@fh/shared';
 import { createDb, createAccount, issueTicket, getProfile, loadItems, loadGround, loadPlayer, saveWorld, recordCatch } from '@fh/shared/server';
 
 const url = process.env.GAME_URL || 'http://localhost:2567';
@@ -37,6 +37,8 @@ let hunger: ServerMessages['hunger'] | null = null;
 const food: ServerMessages['food'][] = [];
 room.onMessage('hunger', (m: ServerMessages['hunger']) => { hunger = m; });
 room.onMessage('food', (m: ServerMessages['food']) => { food.push(m); });
+const worm: ServerMessages['worms'][] = [];
+room.onMessage('worms', (m: ServerMessages['worms']) => { worm.push(m); });
 
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
 const until = async (what: string, ok: () => boolean, ms = 15000) => {
@@ -113,6 +115,14 @@ async function walk(to: { x: number; y: number }, who: Room = room, at: { x: num
     }
   }
 }
+// Трава, где копают червей: место рядом с from, откуда лопата (герой смотрит вниз) втыкается в траву; не у ямки away.
+function lawnNear(from: { x: number; y: number }, away?: { x: number; y: number }) {
+  for (let r = 4; r < 200; r += 2) for (let a = 0; a < 32; a++) {
+    const p = { x: Math.round(from.x + r * Math.cos(a * Math.PI / 16)), y: Math.round(from.y + r * Math.sin(a * Math.PI / 16)) };
+    if (World.canWalk(p.x, p.y) && WORMS.canDig(WORMS.spot(p, 'down')) && (!away || dist(WORMS.spot(p, 'down'), away) > WORMS.NEAR * 2) && World.findPath(from, p)) return p;
+  }
+  return null;
+}
 // рюкзак далеко — надеть нельзя
 self = null;
 room.send('packOn');
@@ -156,8 +166,9 @@ const worms = thing(kit, 'worms'), scoop = thing(kit, 'net-scoop');
 items = null;
 room.send('itemMove', { id: worms.id, x: 5, y: 4, rot: false });
 room.send('itemMove', { id: scoop.id, x: 5, y: 0, rot: true });
+room.send('itemMove', { id: thing(kit, 'shovel-old').id, x: 4, y: 1, rot: true });   // лопата — стоймя: слева место ведру 4×4
 await sleep(300);
-check(items === null, 'черви переложены в угол, сачок повёрнут стоймя — сервер согласен молча');
+check(items === null, 'черви переложены в угол, сачок и лопата повёрнуты стоймя — сервер согласен молча');
 room.send('itemMove', { id: worms.id, x: 1, y: 0, rot: false });   // там удочка
 await until('отказ положить на удочку', () => !!items);
 check(thing(items!.list, 'worms').x === 5 && !items!.note, 'на удочку червей не положить — сервер прислал, как всё лежит');
@@ -407,6 +418,35 @@ check(!fish.some(f => f.e === 'cast'), 'удочка в руке, но в дру
 // черви — в правую руку вместо поплавков: те уходят в рюкзак. С удочкой и червями — до конца: после перезахода они должны остаться в руках
 room.send('itemTake', { id: worms.id, left: false });
 await until('червей в правой руке', () => held() === 'rod-willow,worms');
+fish.length = 0;
+room.send('press');
+await until('noWorms', () => fish.some(f => f.e === 'noWorms'));
+check(!fish.some(f => f.e === 'cast'), 'стартовая банка пустая — забросить нельзя, червей сначала копают');
+// копаем: встаём, лопата — в левую руку вместо удочки, идём на траву
+room.send('stand');
+Object.assign(pos, standPoint());
+await sleep(200);
+room.send('itemTake', { id: thing(kit, 'shovel-old').id, left: true });
+await until('лопату и червей', () => held() === 'shovel-old,worms');
+const lawn1 = lawnNear(pos)!;
+check(!!lawn1, 'у причала есть трава, где копают');
+await walk(lawn1);
+await sleep(300);
+worm.length = 0;
+room.send('dig');
+await until('копает', () => seen()?.dig === true);
+await until('накопал', () => worm.some(w => w.e === 'dug'), (WORMS.DIG + 3) * 1000);
+const dug1 = worm.find(w => w.e === 'dug')!;
+check(dug1.e === 'dug' && dug1.id === worms.id && dug1.got >= 1 && dug1.n === dug1.got && !dug1.lost, `накопал в пустую банку: червей ${dug1.e === 'dug' ? dug1.n + (dug1.wet ? ' (после дождя вдвое)' : '') : 0}`);
+const wormsAfterDig = dug1.e === 'dug' ? dug1.n : 0;
+// обратно к воде: удочка — в левую руку вместо лопаты
+room.send('itemTake', { id: rod.id, left: true });
+await until('удочку и червей', () => held() === 'rod-willow,worms');
+await walk({ x: seat.x, y: seat.y });
+await sleep(300);
+room.send('sit');
+await sleep(200);
+fish.length = 0;
 room.send('press');
 await until('заброс', () => fish.some(f => f.e === 'cast'));
 await until('поклёвку', () => fish.some(f => f.e === 'bite'), 12000);
@@ -416,6 +456,8 @@ const hook = fish.find(f => f.e === 'hook')!;
 check(hook.e === 'hook' && hook.bag?.total === 1, `поймана: ${hook.e === 'hook' ? hook.fish.id + ' ' + hook.fish.grams + ' г' : ''}`);
 await until('хвост над ведром', () => onGround(pail.id)?.fish === (hook.e === 'hook' ? hook.fish.id : ''));
 check(true, 'рыба легла в ведро на настиле — её хвост видят все');
+await until('червя на крючке', () => worm.some(w => w.e === 'used'));
+check(worm.some(w => w.e === 'used' && w.id === worms.id && w.n === wormsAfterDig - 1), 'рыба клюнула — из банки ушёл один червь');
 
 await sleep(300);
 await room.leave();
@@ -434,6 +476,8 @@ again.onMessage('weather', () => {});
 again.onMessage('items', (m: ServerMessages['items']) => { items = m; });
 again.onMessage('hunger', (m: ServerMessages['hunger']) => { hunger = m; });
 again.onMessage('food', (m: ServerMessages['food']) => { food.push(m); });
+worm.length = 0;
+again.onMessage('worms', (m: ServerMessages['worms']) => { worm.push(m); });
 items = null;
 await until('себя после входа', () => !!self);
 const pailNow = (await loadGround(db)).find(g => g.id === pail.id);
@@ -443,6 +487,7 @@ check(bag!.total === 1, 'улов после перезахода тот же');
 await until('вещи после входа', () => !!items);
 check(items!.list.length === kit.length - 2 + (before.canSet ? 4 : 0) && thing(items!.list, 'floats').x === 5 && thing(items!.list, 'floats').y === 4 && thing(items!.list, 'net-scoop').rot, 'вещи после перезахода лежат там, куда их переложили (поплавки — на месте червей), стартовый набор не задвоился');
 check(items!.hands.map(it => it.kind + (it.left ? ':левая' : ':правая')).join() === 'worms:правая,rod-willow:левая' && !items!.list.some(it => it.id === rod.id || it.id === worms.id), 'черви в правой руке, удочка в левой — и после перезахода');
+check(items!.hands.find(it => it.id === worms.id)?.worms === wormsAfterDig - 1, 'червей в банке после перезахода столько же — их считает сервер');
 
 // еда: рыбу достают из ведра в свободную руку, сырую в рюкзак не убрать, у костра она жарится, жареную съедают
 const caught = hook.e === 'hook' ? hook.fish.id : '';
@@ -504,6 +549,41 @@ await until('съел', () => food.some(f => f.e === 'ate') && !!items && hand()
 check(!items!.hands.some(it => ITEMS.isFish(it.kind)) && hunger!.food === HUNGER.MAX, 'жареную рыбу съел — в руке пусто, сыт');
 await sleep(300);
 check(!(await loadItems(db, me.id)).hands.some(it => ITEMS.isFish(it.kind)) && (await getProfile(db, me.id))!.bag.total === 1, 'в базе рыбы больше нет, а в профиле улов прежний');
+
+// черви: копают лопатой на траве, держа банку в другой руке; в полную банку не копают
+{
+  again.send('stand');
+  await until('встал и дожевал', () => hand()?.rest === false && !hand()?.eat, (HUNGER.EAT + 2) * 1000);
+  const asks = async (what: string) => { worm.length = 0; again.send('dig'); await until(what, () => worm.length > 0); return worm[0]!; };
+  check((await asks('отказ копать на тропинке')).e === 'shovel', 'без лопаты в руке не накопать');
+  again.send('itemTake', { id: thing(kit, 'shovel-old').id, left: false });
+  await until('лопату в правой руке', () => hand()?.hand === 'shovel-old');
+  check((await asks('отказ копать без банки')).e === 'jar', 'с лопатой, но без банки в другой руке не накопать');
+  again.send('itemTake', { id: worms.id, left: true });
+  await until('банку в левой руке', () => hand()?.off === 'worms');
+  // трава рядом с костром — не там, где копали у причала (то место ещё пустое)
+  const lawn = lawnNear(at, WORMS.spot(lawn1, 'down'));
+  check(!!lawn, 'рядом с костром есть трава, где копают');
+  await walk(lawn!, again, at);
+  await sleep(300);
+  worm.length = 0;
+  again.send('dig');
+  await until('копает', () => hand()?.dig === true);
+  await until('накопал', () => worm.some(w => w.e === 'dug'), (WORMS.DIG + 3) * 1000);
+  const d = worm.find(w => w.e === 'dug')!;
+  check(d.e === 'dug' && d.id === worms.id && d.got >= 1 && d.n === wormsAfterDig - 1 + d.got && !d.lost, `накопал: червей +${d.e === 'dug' ? d.got + (d.wet ? ' (после дождя вдвое)' : '') : 0}`);
+  await until('перестал копать', () => hand()?.dig === false);
+  const holes = (again.state as { holes: { forEach(f: (h: { x: number; y: number }) => void): void } }).holes;
+  let hole = false; holes.forEach(h => { if (dist(h, WORMS.spot(lawn!, 'down')) < 1) hole = true; });
+  check(hole, 'на месте копки ямка — её видят все');
+  await until('встал с лопатой', () => hand()?.dig === false);
+  worm.length = 0;
+  again.send('dig');
+  await until('пустое место', () => worm.some(w => w.e === 'none'), (WORMS.DIG + 3) * 1000);
+  check(true, 'вскопанное место пустое — тут червей нет');
+  await sleep(300);
+  check((await loadItems(db, me.id)).hands.find(it => it.id === worms.id)?.worms === (d.e === 'dug' ? d.n : -1), 'сколько червей в банке — записано в базу');
+}
 await again.leave();
 await sleep(500);
 

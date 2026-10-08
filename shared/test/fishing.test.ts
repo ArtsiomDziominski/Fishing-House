@@ -96,3 +96,37 @@ test('ведро: счёт, рекорды и три последних хвос
   assert.equal(bag.total, 4); assert.equal(bag.grams, 1460); assert.equal(bag.best.roach, 300);
   assert.deepEqual(bag.recent, ['roach', 'pike', 'gold']);
 });
+
+test('червь уходит, когда рыба клюнула — поймана она или сорвалась, а рано дёрнул — червь цел', () => {
+  const events: FishingEvent[] = [], jar = { n: 3 };
+  const f = createFishing({ rnd: () => 0.1, hasRod: () => true, hasBait: () => true, hasWorms: () => jar.n > 0, useWorm: () => { jar.n--; }, hasBucket: () => true, emit: e => events.push(e), grace: HOOK_GRACE });
+  const step = (sec: number) => { for (let t = 0; t < sec; t += 0.05) f.update(0.05); };
+  f.sit(); f.press();
+  step(TIME.cast + 0.2); f.press();                    // рано дёрнул
+  assert.equal(events.at(-1)!.e, 'early');
+  assert.equal(jar.n, 3);
+  step(TIME.scare + TIME.cast + f.st.wait + 0.2);      // заброс заново и поклёвка
+  assert.equal(f.st.phase, 'bite');
+  assert.equal(jar.n, 2);
+  f.press();
+  assert.equal(events.at(-1)!.e, 'hook');
+  step(TIME.pull + TIME.fly + TIME.pause + TIME.cast + f.st.wait + 0.3);
+  assert.equal(f.st.phase, 'bite');
+  assert.equal(jar.n, 1);
+  step(3);                                             // прозевал — сорвалась: червь этой поклёвки уже ушёл, новый не тратится
+  assert.ok(events.some(e => e.e === 'miss'));
+  assert.equal(jar.n, 1);
+});
+
+test('банка опустела — рыбак больше не забрасывает и говорит почему', () => {
+  const events: FishingEvent[] = [], jar = { n: 1 };
+  const f = createFishing({ rnd: () => 0.1, hasRod: () => true, hasBait: () => true, hasWorms: () => jar.n > 0, useWorm: () => { jar.n--; }, hasBucket: () => true, emit: e => events.push(e), grace: HOOK_GRACE });
+  const step = (sec: number) => { for (let t = 0; t < sec; t += 0.05) f.update(0.05); };
+  f.sit(); f.press();
+  step(TIME.cast + f.st.wait + 0.1); f.press();
+  step(TIME.pull + TIME.fly + TIME.pause + 0.1);
+  assert.equal(f.st.phase, 'rest');
+  assert.equal(events.at(-1)!.e, 'noWorms');
+  f.press();
+  assert.equal(events.at(-1)!.e, 'noWorms', 'и забросить вручную тоже нельзя');
+});

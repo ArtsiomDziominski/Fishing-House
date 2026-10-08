@@ -2,10 +2,10 @@
      Вещь тянут мышью или пальцем на свободные клетки, R или правая кнопка мыши поворачивают её. Двойной клик или
      удержание берут вещь из рюкзака в руки, а вещь из рук убирают обратно; то же — перетащить её на рыбака или с него
      в клетку. Лёгкая вещь (и ведро) занимает одну руку, тяжёлая — обе: она в гнезде правой, а гнездо левой закрыто с подписью;
-     взять её можно только в пустые руки. Что куда встанет, решает сервер: окно сразу показывает перекладку и шлёт её, а если сервер не согласен,
+     взять её можно только в пустые руки. На банке червей написано, сколько в ней: «хватает», число или «пусто» (WORMS.label). Что куда встанет, решает сервер: окно сразу показывает перекладку и шлёт её, а если сервер не согласен,
      он присылает, как всё лежит на самом деле. -->
 <script setup lang="ts">
-import { ITEMS, ITEM_KINDS, PACKS, type Hand, type Item, type ItemKind, type Place } from '@fh/shared';
+import { ITEMS, ITEM_KINDS, PACKS, WORMS, type Hand, type Item, type ItemKind, type Place } from '@fh/shared';
 import { CELL, EDGE, backpackLayout, bothHands, drawBackpack, handSlots, slotAt, slotOf, type Drag } from '~/game/backpack-view';
 
 const emit = defineEmits<{
@@ -43,6 +43,15 @@ function cellsText(kind: ItemKind) {
 // сколько рук нужно вещи — и где она сейчас, если уже в руках
 const handsText = (kind: ItemKind, held: boolean) => (heavy(kind) ? (held ? 'в двух руках' : 'в две руки') : held ? 'в руке' : 'в одну руку');
 
+// Сколько червей в банке — словами (у банки без счёта он полный: так её завела база).
+const wormsText = (it: Item) => WORMS.label(it.worms ?? 0);
+// Банки червей и где они на холсте — в рюкзаке или в гнезде руки; ту, что тянут, не подписываем.
+const jars = computed(() => {
+  const o = lay.value.grid, out: { id: number; text: string; empty: boolean; r: { x: number; y: number; w: number; h: number } }[] = [];
+  for (const it of game.items) if (ITEMS.isBait(it.kind)) out.push({ id: it.id, text: wormsText(it), empty: (it.worms ?? 1) <= 0, r: { x: o.x + EDGE + it.x * CELL, y: o.y + EDGE + it.y * CELL, w: CELL, h: CELL } });
+  for (const { it, at } of handSlots(lay.value, game.hands)) if (ITEMS.isBait(it.kind)) out.push({ id: it.id, text: wormsText(it), empty: (it.worms ?? 1) <= 0, r: { x: at.x, y: at.y + ((at.h + CELL) >> 1) - 2, w: at.w, h: 8 } });
+  return out.filter(j => drag.value?.id !== j.id);
+});
 // Где гнездо руки на холсте — для подписей поверх него (в арт-пикселях; CSS умножает на k).
 const slotStyle = (side: Hand) => { const q = slotOf(lay.value, side); return { '--x': q.x, '--y': q.y, '--lw': q.w, '--lh': q.h }; };
 
@@ -256,10 +265,13 @@ onBeforeUnmount(() => { removeEventListener('keydown', key, { capture: true }); 
       <!-- клавиша каждой руки над её гнездом; с тяжёлой вещью гнездо левой руки закрыто, и на нём сказано почему -->
       <span v-for="side in (['left', 'right'] as const)" :key="side" class="key" :style="slotStyle(side)">{{ side === 'left' ? 'Q' : 'E' }}</span>
       <span v-if="bothHands(game.hands)" class="busy" :style="slotStyle('left')">держит двумя руками</span>
+      <!-- сколько червей в банке — прямо на ней -->
+      <span v-for="j in jars" :key="'jar' + j.id" class="jar" :class="{ empty: j.empty }" :style="{ '--x': j.r.x, '--y': j.r.y, '--lw': j.r.w, '--lh': j.r.h }">{{ j.text }}</span>
     </div>
     <footer>
       <template v-if="shown">
         <div class="what"><b>{{ ITEMS.title(shown) }}</b><span class="cells">{{ inHand(shown.id) ? handsText(shown.kind, true) : cellsText(shown.kind) + ' · ' + handsText(shown.kind, false) }}</span></div>
+        <p v-if="ITEMS.isBait(shown.kind)" class="text">В банке: <b class="count" :class="{ empty: (shown.worms ?? 1) <= 0 }">{{ wormsText(shown) }}</b><template v-if="(shown.worms ?? 1) <= 0"> — накопай лопатой</template></p>
         <p class="text">{{ ITEMS.info(shown.kind).text }}</p>
         <div v-if="selected === shown.id && !drag" class="buttons">
           <button v-if="inHand(shown.id) && ITEMS.packable(shown.kind)" type="button" @click="blur($event); stow(shown.id)">В рюкзак</button>
@@ -332,6 +344,15 @@ canvas.dragging { cursor: grabbing; }
   pointer-events: none;
 }
 .key { display: flex; align-items: flex-end; justify-content: center; padding-bottom: calc(3px * var(--k)); opacity: 0.7; }
+.jar {
+  position: absolute; left: calc(var(--x) * var(--k) * 1px); top: calc(var(--y) * var(--k) * 1px);
+  width: calc(var(--lw) * var(--k) * 1px); height: calc(var(--lh) * var(--k) * 1px);
+  display: flex; align-items: flex-end; justify-content: center;
+  font: 400 calc(3px * var(--k) + 3px)/1 var(--pixel); color: var(--paper); text-shadow: 0 1px 0 #240702, 1px 0 0 #240702, -1px 0 0 #240702, 0 -1px 0 #240702;
+  pointer-events: none;
+}
+.jar.empty, .count.empty { color: #e88a6a; }
+.count { font-weight: 600; color: var(--paper); }
 .busy { display: grid; place-items: center; writing-mode: vertical-rl; transform: rotate(180deg); letter-spacing: 0.04em; }
 footer { display: grid; grid-template-columns: minmax(0, 1fr); gap: 4px; min-height: 58px; align-content: start; }
 .what { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 10px; }

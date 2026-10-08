@@ -62,6 +62,53 @@ const FISH_HELD = [
   '.oco.',
   '..o..',
 ];
+// Лопата: ручка вверху, черенок — в кулаке, штык смотрит вниз, к земле (так её и несут). L, M, D — светлая, средняя и тёмная
+// сталь штыка (у старой — ржавчина). Нарисована штыком вверх, как в рюкзаке, — переворачивает её down; сбоку штык
+// выносят вперёд (lean меньше нуля: наклон растёт вниз от кулака).
+const down = (map: string[]) => [...map].reverse();
+const SPADE = [
+  '..o..',
+  '.oLo.',
+  'oLMDo',
+  'oLMDo',
+  'oLMDo',
+  'oLMDo',
+  '.oDo.',
+  '.owo.',
+  '.owo.',
+  '.owo.',
+  '.owo.',
+  '.owo.',
+  '.owo.',
+  '.owo.',
+  '.owo.',
+  '.oko.',
+  'okkko',
+  'oo.oo',
+  '.ooo.',
+];
+const SCOOP = [
+  '.ooooo.',
+  'oLLLLLo',
+  'oLMMMDo',
+  'oLMMMDo',
+  'oLMMMDo',
+  '.oDDDo.',
+  '..oDo..',
+  '..owo..',
+  '..owo..',
+  '..owo..',
+  '..owo..',
+  '..owo..',
+  '..owo..',
+  '..owo..',
+  '..owo..',
+  '..oko..',
+  '.okkko.',
+  '.oo.oo.',
+  '..ooo..',
+];
+const SPADE_DOWN = down(SPADE), SCOOP_DOWN = down(SCOOP);
 // Свёрнутая сеть висит на руке: у накидки по краю грузила, у невода — поплавки.
 const BUNDLE: [number, number] = [3, -1];
 
@@ -141,6 +188,9 @@ const HELD: Record<Exclude<ItemKind, 'bucket'>, HeldArt> = {
       '.o.....',
     ],
   },
+  'shovel-old': { grip: [2, 3], lean: -0.6, pal: { L: 'c9784a', M: 'a35a2a', D: '6e3a1a' }, map: SPADE_DOWN },
+  'shovel-spade': { grip: [2, 3], lean: -0.6, pal: { L: 'e4e8e4', M: 'b5b9b8', D: '6a6a78' }, map: SPADE_DOWN },
+  'shovel-scoop': { grip: [3, 3], lean: -0.6, pal: { L: 'e4e8e4', M: 'b5b9b8', D: '6a6a78' }, map: SCOOP_DOWN },
   'lamp': {
     grip: [2, -1],
     map: [
@@ -276,4 +326,10 @@ export function groundSprite(kind: string, lit = true): GroundSprite | null {
   }
   lying.set(key, s);
   return s;
+}
+// Цвета штыка лопаты этого вида (L — светлая сторона, M — середина, D — тёмная), #rrggbb; не лопата — null. Ими движок
+// рисует лопату, которой копают (drawDigging): она там не висит в кулаке, а ходит — втыкается, поддевает, бросает.
+export function shovelColors(kind: string) {
+  const a = (HELD as Record<string, HeldArt | undefined>)[kind];
+  return (a?.map === SPADE_DOWN || a?.map === SCOOP_DOWN) && a.pal ? { L: '#' + a.pal.L, M: '#' + a.pal.M, D: '#' + a.pal.D, wide: a.map === SCOOP_DOWN } : null;
 }

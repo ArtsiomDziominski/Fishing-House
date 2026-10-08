@@ -1,6 +1,6 @@
 // Картинки вещей рюкзака — пиксельные карты, как у рыб (FISH в shared/src/fish.ts): буква — цвет из pal, точка — пусто.
 // Каждая нарисована 1:1 в арт-пикселях под свой размер в клетках (клетка 24×24): удочка и невод 4×1 — до 96×24,
-// накидка 2×2 — до 48×48, сачок и топор 2×1 — до 48×24, мелочь — до 24×24, ведро 4×4 — до 96×96 (его карту собрал скрипт
+// накидка 2×2 — до 48×48, лопаты 3×1 — до 72×24, сачок и топор 2×1 — до 48×24, мелочь — до 24×24, ведро 4×4 — до 96×96 (его карту собрал скрипт
 // по кругам и эллипсам — жестяное ведро с водой, как bucket.png, только крупнее). В клетках рисуются по центру; повёрнутая
 // вещь — та же картинка, повёрнутая на четверть оборота по часовой. Рыба из ведра (fish, fish-fried) — 1×1, спрайтом своего вида.
 
@@ -233,6 +233,64 @@ export const ITEM_ART: Record<ItemKind, ItemArt> = {
       '........................oSSsssssssssssSSo',
       '.........................ooSSSSSSSSSSSoo.',
       '...........................ooooooooooo...',
+    ],
+  },
+  'shovel-old': {
+    pal: { M: 'b16f38', R: '6e3a1a', a: 'c9784a', k: '432115', o: '240702', r: 'a35a2a', w: 'c98a4b' },
+    map: [
+      '..............................................ooooooooooo......',
+      '.oooooooo....................................oaaaaaaaaaaao.....',
+      'owwwwwwwMo...................................orrrrrrrrrrrao....',
+      'owkoooooMo..................................oorrrrrrrrrrrrao...',
+      'owko...oMoooooooooooooooooooooooooooooooooooRRrrrrRrrrrrrrrao..',
+      'owko...oMwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwRRrrrrrrrrrrrrrrao.',
+      'oMko...oMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMRRrrrrrrrrrrrRrrrRo',
+      'oMko...oMkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkRRrrrrrrrRrrrrrrRo.',
+      'oMko...oMoooooooooooooooooooooooooooooooooooRRrrrrrrrrrrrrrRo..',
+      'oMkoooooMo..................................oorrrrrrrrrrrrRo...',
+      'oMkkkkkkMo...................................orrrrrrrrrrrRo....',
+      '.oooooooo....................................oRRRRRRRRRRRo.....',
+      '..............................................ooooooooooo......',
+    ],
+  },
+  'shovel-spade': {
+    pal: { M: 'b16f38', S: 'e4e8e4', k: '432115', o: '240702', s: 'b5b9b8', w: 'c98a4b', z: '6a6a78' },
+    map: [
+      '..............................................ooooooooooooo......',
+      '.oooooooo....................................oSSSSSSSSSSSSSo.....',
+      'owwwwwwwMo...................................osssssssssssssSo....',
+      'owkoooooMo..................................oossssssssssssssSo...',
+      'owko...oMooooooooooooooooooooooooooooooooooozzsssssssssssssssSo..',
+      'owko...oMwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwzzssssssssssssssssSo.',
+      'oMko...oMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMzzssssssssssssssssszo',
+      'oMko...oMkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkzzsssssssssssssssszo.',
+      'oMko...oMooooooooooooooooooooooooooooooooooozzssssssssssssssszo..',
+      'oMkoooooMo..................................oosssssssssssssszo...',
+      'oMkkkkkkMo...................................ossssssssssssszo....',
+      '.oooooooo....................................ozzzzzzzzzzzzzo.....',
+      '..............................................ooooooooooooo......',
+    ],
+  },
+  'shovel-scoop': {
+    pal: { M: '975220', S: 'e4e8e4', k: '642d18', o: '240702', s: 'b5b9b8', w: 'b16f38', z: '6a6a78' },
+    map: [
+      '............................................oooooooooooooooooooo.',
+      '...........................................oSzSSzSSzSSzSSzSSzSSzo',
+      '...........................................ossssssssssssssssssszo',
+      '.oooooooo..................................ossssssssssssssssssszo',
+      'owwwwwwwMo.................................ossssssssssssssssssszo',
+      'owkoooooMo................................oossssssssssssssssssszo',
+      'owko...oMooooooooooooooooooooooooooooooooozzssssssssssssssssssszo',
+      'owko...oMwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwzzssssssssssssssssssszo',
+      'oMko...oMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMzzssssssssssssssssssszo',
+      'oMko...oMkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkzzssssssssssssssssssszo',
+      'oMko...oMooooooooooooooooooooooooooooooooozzssssssssssssssssssszo',
+      'oMkoooooMo................................oossssssssssssssssssszo',
+      'oMkkkkkkMo.................................ossssssssssssssssssszo',
+      '.oooooooo..................................ossssssssssssssssssszo',
+      '...........................................ossssssssssssssssssszo',
+      '...........................................ozzzzzzzzzzzzzzzzzzzzo',
+      '............................................oooooooooooooooooooo.',
     ],
   },
   'bucket': {

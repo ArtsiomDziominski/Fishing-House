@@ -9,6 +9,7 @@ export * from './items.ts';
 export * from './daytime.ts';
 export * from './hunger.ts';
 export * from './scraps.ts';
+export * from './worms.ts';
 export * from './weather.ts';
 export * from './campfire.ts';
 export * from './rules.ts';

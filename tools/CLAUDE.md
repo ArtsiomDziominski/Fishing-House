@@ -2,6 +2,10 @@
 
 `npm run build:world` (`build-world.mjs`, нужен `sharp`: `npm i --no-save sharp`) собирает из `art/reference.webp` карту, проходимость и спрайты. По шагам — скилл `build-world`.
 
+## Где копать червей
+
+`npm run build:dig` (`build-dig.mjs`, тоже `sharp`) после `build:world` пересобирает `shared/src/dig-data.ts` — маску травы по `world.png`: точка годится, если вокруг почти всё зелёное и вода не ближе 12 px. `-- --debug файл.png` — посмотреть маску. Руками не править.
+
 ## Что пишет сборка
 
 - `shared/src/world-data.ts` — проходимость и «глубина» предметов;

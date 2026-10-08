@@ -21,7 +21,7 @@
 - **`@fh/shared`** работает и в браузере, и в Node. **`@fh/shared/server`** — только для серверов (база, билеты, `node:crypto`); в код `app/app/` его не импортировать, кроме `import type`.
 - **Вход**: `nuxt-auth-utils`, сессия в зашифрованной cookie: `user = { id, name }`, где `id` — публичный id игрока (10 символов `[a-z0-9]`). Пароли — `hashPassword`/`verifyPassword` (scrypt).
 - **В игру**: страница `/play` берёт у сайта билет (`POST /api/game/ticket`, HMAC общим `GAME_SECRET`, живёт минуту) и входит в комнату `pier` на Colyseus. `onAuth` комнаты проверяет билет и кладёт `id` игрока в `client.auth.id` — по нему `UniqueSessionPlugin` выбивает старую вкладку (причина `replaced`).
-- **Кто главный**: сервер. Клиент ходит сам и шлёт место раз в 0,1 с; сервер проверяет проходимость и скорость (запас хода) и при несогласии шлёт `self`. Рыбалку целиком ведёт сервер (`createFishing` в `shared/src/fishing.ts`): клюёт, кто клюнул, успел ли подсечь (+`HOOK_GRACE` на задержку сети). Забросить можно только с удочкой в одной руке (`ITEMS.isRod`) и банкой червей в другой (`ITEMS.isBait`; обе берут из рюкзака) и с ведром — на земле у места рыбака (или в руке, но рук на всё не хватит); убрал удочку или червей — рыбалка останавливается. Клиент лишь показывает фазы (`app/app/game/fishing-view.ts`).
+- **Кто главный**: сервер. Клиент ходит сам и шлёт место раз в 0,1 с; сервер проверяет проходимость и скорость (запас хода) и при несогласии шлёт `self`. Рыбалку целиком ведёт сервер (`createFishing` в `shared/src/fishing.ts`): клюёт, кто клюнул, успел ли подсечь (+`HOOK_GRACE` на задержку сети). Забросить можно только с удочкой в одной руке (`ITEMS.isRod`) и банкой червей в другой (`ITEMS.isBait`; обе берут из рюкзака) и с ведром — на земле у места рыбака (или в руке, но рук на всё не хватит); убрал удочку или червей — рыбалка останавливается. Червь уходит, когда рыба клюнула; пустая банка — не забросить; пополняют её лопатой на траве (`WORMS` в `shared/src/worms.ts`). Клиент лишь показывает фазы (`app/app/game/fishing-view.ts`).
 - **Что видят другие** — только состояние комнаты (`game-server/src/state.ts`). Свой улов, вещи и рыбалку игрок получает личными сообщениями (`ServerMessages` в `shared/src/protocol.ts`).
 - **Карта** 640×360 арт-пикселей — ровно 16:9, она же кадр игры: экран стоит на месте, камеры и масштаба нет. В её середине — картинка-образец (`World.pic` — где она стоит). Разметка в `tools/world-shapes.mjs` — в координатах картинки, всё в игре и в `world-data.ts` — в координатах карты; числа, снятые с картинки прямо в коде (как `bankY` в движке), сдвигать на `World.pic`.
 - **Пока только картинка**: время суток, погода, река, лодки, птицы и звери на рыбалку не влияют. Только рыбу, выложенную на землю, уносит чайка или съедает кот (или она тает за минуту) — это решает сервер (`SCRAPS` в `shared/src/scraps.ts`).
@@ -37,6 +37,7 @@
 | Ведро (вещь), улов, расстояния | `rules.ts` (`bucketNearSeat`), `ITEMS.isBucket`, `Bag` в `protocol.ts` | `bucketFor`, `sit`, `onFishing` | `drawBucket` в движке, `components/GameCatch.vue` |
 | Дом | `house.ts` | — | `game/house.ts` |
 | Костёр (гаснет в дождь) | `campfire.ts` (`FIRE.douse`) | `rest`, `kindle`, `watchRain` | `game/campfire.ts`, `fireLit`/`kindle` в движке |
+| Черви, лопаты, копка | `worms.ts` (`WORMS`), `dig-data.ts` (собирает `tools/build-dig.mjs`) | `dig`, `dug`, `useWorm`, `holes` | `digAction`, `drawHoles` в движке, `shovelColors` в `held-art.ts`, подписи банок в `GameBackpack.vue` |
 | Голод, еда, сон | `hunger.ts`, `ITEMS.isFish`/`meal`, `homePoint` | `hunger`, `fishTake`, `eat`, `cook`, `faint`, `wake` | `components/GameHunger.vue`, `GameSleep.vue`, `eatAction` в движке |
 | Рюкзак | `packs.ts` | `packOn`, `packOff`, `packKind` | `components/GamePack.vue` |
 | Вещи и руки | `items.ts` | `item*` в `PierRoom.ts` | `components/GameBackpack.vue`, `game/backpack-view.ts`, `items-art.ts`, `held-art.ts` |
@@ -63,6 +64,7 @@ npm run check:all           # тесты, типы и бот — то же го�
 npm run smoke -w game-server  # тот же бот, но через уже запущенный game-server (GAME_URL — другой адрес)
 npm run db:generate         # после правки схемы — новая миграция в shared/drizzle
 npm run build:world         # пересобрать карту и спрайты из art/reference.webp (нужен sharp)
+npm run build:dig           # после неё — где на карте можно копать червей (shared/src/dig-data.ts)
 docker compose up -d --build  # продакшен на VPS
 ```
 
@@ -73,7 +75,7 @@ docker compose up -d --build  # продакшен на VPS
 - Всё, что влияет на прогресс (улов, деньги, предметы), решает и записывает сервер. Клиенту не верить.
 - Правила, нужные и клиенту, и серверу (скорости, расстояния, таблицы рыб), — только в `shared/`.
 - Схему базы менять через `npm run db:generate` (миграции не править руками после того, как они применены где-то кроме своей машины).
-- `shared/src/world-data.ts`, картинки в `app/public/assets/` и `art/house/` генерирует `tools/build-world.mjs` — руками не править. Исключение — `bucket.png`: в репозитории лежит правленая версия, после сборки её нужно вернуть (`git checkout app/public/assets/bucket.png`).
+- `shared/src/world-data.ts`, `shared/src/dig-data.ts`, картинки в `app/public/assets/` и `art/house/` генерирует `tools/build-world.mjs` — руками не править. Исключение — `bucket.png`: в репозитории лежит правленая версия, после сборки её нужно вернуть (`git checkout app/public/assets/bucket.png`).
 - Перед коммитом: `npm run check`; если трогал сервер или протокол — `npm run smoke:own -w game-server`.
 - Новое устройство или правило записывать в `CLAUDE.md` той части, где оно живёт; сюда — только то, что касается всех.
 

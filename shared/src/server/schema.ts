@@ -48,6 +48,7 @@ export const items = pgTable('items', {
   ground: boolean('ground').notNull().default(false),              // лежит на земле, общей для всех; тогда x, y — место на карте, а player_id — кто выложил
   lit: boolean('lit').notNull().default(false),                    // горит на земле (лампа); в руке горит ли лампа — players.world.lamp
   fish: text('fish').notNull().default(''),                        // ведро на земле: хвосты последних рыб в нём, id через запятую; рыба (fish, fish-fried) — её вид
+  worms: smallint('worms').notNull().default(0),                   // банка червей: сколько в ней (новая — пустая, WORMS.MAX — полная); у других вещей ничего не значит
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 }, t => [index('items_player_idx').on(t.playerId), index('items_ground_idx').on(t.ground).where(sql`${t.ground}`)]);
 

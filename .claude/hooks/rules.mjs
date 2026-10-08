@@ -17,8 +17,8 @@ import { fileURLToPath } from 'node:url';
 
 const ROOT = fileURLToPath(new URL('../..', import.meta.url));
 const BUCKET = 'app/public/assets/bucket.png';
-// Что пишет tools/build-world.mjs. Картинки руками и так не поправить, но world-data.ts — обычный текст.
-const GENERATED = [/^shared\/src\/world-data\.ts$/, /^app\/public\/assets\/.*\.png$/, /^art\/house\//];
+// Что пишет tools/build-world.mjs (и tools/build-dig.mjs). Картинки руками и так не поправить, но world-data.ts — обычный текст.
+const GENERATED = [/^shared\/src\/(world|dig)-data\.ts$/, /^app\/public\/assets\/.*\.png$/, /^art\/house\//];
 const PACKAGES = ['shared', 'game-server', 'app'];
 const CODE = /\.(ts|vue|mjs|js|json)$/;
 

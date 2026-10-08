@@ -11,8 +11,8 @@
 
 import type { Room } from '@colyseus/sdk';
 import {
-  World, FISH, ITEMS, HUNGER, SCRAPS, PACKS, PACK_KINDS, MOVE_EVERY, SPEED, CARRY_SPEED, RUN, REACH, seat, nearSeat, standPoint, dist, nearFire, faceFire, bucketNearSeat, packInReach, dayHour, dayPart, clockText, skyAt, weatherText,
-  type Bag, type Catch, type ClientMessages, type Dir, type GroundView, type Hand, type PackKind, type PlayerView, type ScrapEnd, type ServerMessages, type Sky, type WeatherKind, type WorldState,
+  World, FISH, ITEMS, HUNGER, SCRAPS, WORMS, PACKS, PACK_KINDS, MOVE_EVERY, SPEED, CARRY_SPEED, RUN, REACH, seat, nearSeat, standPoint, dist, nearFire, faceFire, bucketNearSeat, packInReach, dayHour, dayPart, clockText, skyAt, weatherText,
+  type Bag, type Catch, type ClientMessages, type Dir, type GroundView, type Hand, type HoleView, type PackKind, type PlayerView, type ScrapEnd, type ServerMessages, type Sky, type WeatherKind, type WorldState,
 } from '@fh/shared';
 import { HERO } from './hero.ts';
 import { createFishingView, drawBite, drawFishing, createRod, rodAngle, type FishArt } from './fishing-view.ts';
@@ -25,15 +25,16 @@ import { createNightView } from './night-view.ts';
 import { createSoundView } from './sound.ts';
 import { createFireView } from './campfire.ts';
 import { LIGHT, createLightView, type LightSpot } from './light.ts';
-import { crumbColors, eatenSprite, groundSprite, heldPlace, heldSprite } from './held-art.ts';
+import { crumbColors, eatenSprite, groundSprite, heldPlace, heldSprite, shovelColors } from './held-art.ts';
 import { createWildlifeView } from './wildlife.ts';
 import { createHouseView } from './house.ts';
 import { createPetsView } from './pets.ts';
 
 // left и right — что сделает левая рука (Q) и правая (E): положить, что в ней (и ведро тоже), или поднять то, что рядом;
 // pack — надеть или снять рюкзак (B); open — рюкзак на спине или рядом: в него можно заглянуть (I);
-// light — зажечь или погасить лампу (L), когда она в руке или стоит на земле рядом; eat — еда (X): съесть рыбу из рук или достать её из ведра
-export interface Actions { left: string | null; right: string | null; pack: string | null; fish: string | null; hot: boolean; stand: boolean; open: boolean; light: string | null; eat: string | null }
+// light — зажечь или погасить лампу (L), когда она в руке или стоит на земле рядом; eat — еда (X): съесть рыбу из рук или достать её из ведра;
+// dig — копать червей (G), когда в руке лопата
+export interface Actions { left: string | null; right: string | null; pack: string | null; fish: string | null; hot: boolean; stand: boolean; open: boolean; light: string | null; eat: string | null; dig: string | null }
 // Голод для интерфейса: food — сытость 0..100; until — когда герой проснётся (мс, наши часы; 0 — не спит);
 // lost — сколько рыб пропало из ведра, пока он спал (null — ещё неизвестно).
 export interface HungerInfo { food: number; until: number; lost: number | null }
@@ -57,11 +58,13 @@ export interface GameUI {
   debug(text: string | null): void;                     // строка отладки вместо подсказки; null — убрать
   online(players: { pid: string; name: string }[]): void;
   hunger(info: HungerInfo): void;
+  worms(id: number, n: number): void;                   // в банке id теперь n червей (клюнула рыба или накопал)
 }
 
 export interface GameHandle {
   handAction(side: Hand): void; packAction(): void; lampAction(): void; setPack(kind: PackKind): void; fishAction(): void; standUp(): void; destroy(): void;
   eatAction(): void;                                    // X: съесть рыбу из рук, а нет её — достать из ведра
+  digAction(): void;                                    // G: копать червей — лопата в одной руке, банка в другой
   takeFish(species: string): void;                      // достать из ведра рыбу этого вида в свободную руку
   setClock(hour: number | null): void;                  // перевести часы причала на этот час (на сервере, у всех); null — настоящее время
   setWeather(kind: WeatherKind | null, wind: boolean | null): void;   // выставить погоду и ветер (на сервере, у всех); null — по расписанию
@@ -73,8 +76,8 @@ interface Hero { x: number; y: number; dir: Dir; sitting: boolean; rest: boolean
 interface Ghost { x: number; y: number; anim: number; moving: boolean; blink: number; seen: number }
 // pack — вид рюкзака на спине или null, если герой налегке
 // carrying — в какой руке ведро (null — ведра в руках нет); hands — виды других вещей в руках: в правой и в левой; lit — его лампа горит
-// eat — что он ест, какой рукой и сколько секунд уже (el)
-interface Drawn { x: number; y: number; dir: Dir; rest: boolean; moving: boolean; anim: number; carrying: Hand | null; pack: PackKind | null; hands: string[]; lit: boolean; recent: ArrayLike<string>; blink: number; eat: { kind: string; left: boolean; el: number } | null }
+// eat — что он ест, какой рукой и сколько секунд уже (el); dig — сколько секунд он уже копает (null — не копает)
+interface Drawn { x: number; y: number; dir: Dir; rest: boolean; moving: boolean; anim: number; carrying: Hand | null; pack: PackKind | null; hands: string[]; lit: boolean; recent: ArrayLike<string>; blink: number; eat: { kind: string; left: boolean; el: number } | null; dig: number | null }
 
 const W = World.W, H = World.H, FW = HERO.FW, FH = HERO.FH;
 const ANCHOR = 9;                     // столбец кадра героя над точкой опоры
@@ -96,7 +99,7 @@ export async function startGame(canvas: HTMLCanvasElement, room: Room, ui: GameU
   const send = <K extends keyof ClientMessages>(type: K, ...msg: ClientMessages[K] extends void ? [] : [ClientMessages[K]]) => room.send(type as string, msg[0]);
 
   const frame = makeCanvas(W, H), fctx = ctx2d(frame);                        // кадр мира целиком
-  const CW = 41, CX = (CW - FW) >> 1, CH = FH + 6;                            // клетка героя: кадр по центру, по бокам место под ведро
+  const CW = 41, CX = (CW - FW) >> 1, CH = FH + 9;                            // клетка героя: кадр по центру, по бокам место под ведро, внизу — под ямку
   const cell = makeCanvas(CW, CH), cctx = ctx2d(cell);
   const TOP = 3;                                                             // запас над ведром под хвосты рыб
   const pail = makeCanvas(B.w, B.h + TOP), pctx = ctx2d(pail);               // клетка ведра на земле
@@ -136,6 +139,7 @@ export async function startGame(canvas: HTMLCanvasElement, room: Room, ui: GameU
     room.onMessage('fish', (m: ServerMessages['fish']) => receive(['fish', m])),
     room.onMessage('hunger', (m: ServerMessages['hunger']) => receive(['hunger', m])),
     room.onMessage('food', (m: ServerMessages['food']) => receive(['food', m])),
+    room.onMessage('worms', (m: ServerMessages['worms']) => receive(['worms', m])),
     room.onMessage('clock', (m: ServerMessages['clock']) => { skew = m.now - Date.now(); pier = { canSet: m.canSet, moved: m.moved }; }),
     room.onMessage('weather', (m: ServerMessages['weather']) => { weather = m; }),
   ];
@@ -154,7 +158,7 @@ export async function startGame(canvas: HTMLCanvasElement, room: Room, ui: GameU
   // Кадры героя: налегке и с рюкзаком каждого вида, с ведром и без. Набор собирается, когда впервые понадобился.
   const frameSets = new Map<string, Record<Dir, HTMLCanvasElement[]>>();
   // rest — кадры сидящего у костра; eat — без руки, которая подносит рыбу ко рту
-  function heroFrames(carry: Hand | null, kind: PackKind | null, rest = false, eat: Hand | null = null) {
+  function heroFrames(carry: Hand | null, kind: PackKind | null, rest = false, eat: Hand | 'both' | null = null) {
     const key = (carry || '-') + (kind || '') + (rest ? '~' : '') + (eat ? '^' + eat : '');
     let set = frameSets.get(key);
     if (!set) {
@@ -366,6 +370,7 @@ export async function startGame(canvas: HTMLCanvasElement, room: Room, ui: GameU
     if (type === 'self') applySelf(m);
     else if (type === 'bag') { bag = m; pendingBag = null; ui.bag(bag); }
     else if (type === 'hunger') hungerNews(m);
+    else if (type === 'worms') wormsNews(m);
     else if (type === 'food') {
       const name = ITEMS.title({ kind: m.e === 'cooked' || !m.raw ? 'fish-fried' : 'fish', fish: m.fish });
       if (m.e === 'cooked') { sound.cue('catch'); ui.toast(`${name} — готово! Съесть — X`, 'good', m.fish); }
@@ -376,6 +381,7 @@ export async function startGame(canvas: HTMLCanvasElement, room: Room, ui: GameU
         : ownHands().some(ITEMS.isBait) ? 'Нужна удочка: возьми её из рюкзака в другую руку' : 'Нужны удочка и черви — по одной в каждую руку. Они в рюкзаке';
       ui.toast(pailBySeat() ? want : `${want}, а ведро поставь рядом на настил`, 'bad');
     }
+    else if (m.e === 'noWorms') ui.toast('Черви кончились — накопай ещё: лопату в одну руку, банку в другую, и копай на траве (G)', 'bad');
     else if (m.e === 'needBucket') ui.toast('Рыбу некуда класть: руки заняты удочкой и червями, поставь ведро рядом на настил');
     else {
       if (m.e === 'early') ui.toast('Рано дёрнул — рыба ушла', 'bad');
@@ -423,6 +429,41 @@ export async function startGame(canvas: HTMLCanvasElement, room: Room, ui: GameU
     return firstFish() && pailNear() && handFree() ? 'Достать рыбу из ведра' : null;
   };
 
+  // ---------- черви ----------
+  // Копать (G): стоя, лопата в одной руке, банка в другой, перед героем трава. Решает сервер; что видно и так, говорим сразу.
+  // Пока копает (digging — сколько ещё секунд), герой стоит на месте: ушёл бы — сервер не дал бы червей.
+  let digging = 0;
+  const shovelInHand = () => ownHands().find(WORMS.isShovel) ?? null;
+  function digAction() {
+    if (!ready || asleep() || digging > 0) return;
+    if (hero.sitting || hero.rest) { ui.toast('Сначала встань — копают стоя', 'bad'); return; }
+    if (!shovelInHand()) { ui.toast('Нужна лопата в руке — она в рюкзаке', 'bad'); return; }
+    if (!ownHands().some(ITEMS.isBait)) { ui.toast('Червей класть некуда — возьми банку в другую руку', 'bad'); return; }
+    if (!WORMS.canDig(WORMS.spot(hero, hero.dir))) { ui.toast('Здесь не копают — только на траве, не у воды и не на тропинках', 'bad'); return; }
+    flushMove(); hero.path = null; hero.then = null; marker = null;
+    send('dig'); digging = WORMS.DIG;
+  }
+  const wormWord = (n: number) => (n % 10 === 1 && n % 100 !== 11 ? 'червь' : [2, 3, 4].includes(n % 10) && ![12, 13, 14].includes(n % 100) ? 'червя' : 'червей');
+  function wormsNews(m: ServerMessages['worms']) {
+    if (m.e === 'used') {
+      ui.worms(m.id, m.n);
+      if (m.n === WORMS.LOW) ui.toast(`В банке осталось ${m.n} червей`);
+      else if (m.n === 0) ui.toast('Черви кончились — накопай лопатой на траве у причала', 'bad');
+      return;
+    }
+    digging = 0;
+    if (m.e === 'dug') {
+      ui.worms(m.id, m.n);
+      const full = m.n >= WORMS.MAX ? (m.lost ? ` Банка полна — ${m.lost} ${wormWord(m.lost)} уполз${m.lost === 1 ? '' : 'ли'}` : ' Банка полна') : '';
+      ui.toast(`Выкопал: ${m.got} ${wormWord(m.got)}${m.wet ? ' — после дождя их больше' : ''}.${full}`, 'good');
+    }
+    else if (m.e === 'none') ui.toast('Тут червей нет — здесь уже копали. Попробуй в другом месте', 'bad');
+    else if (m.e === 'full') ui.toast('Банка полна — червей хватает', 'bad');
+    else if (m.e === 'ground') ui.toast('Здесь не копают — только на траве, не у воды и не на тропинках', 'bad');
+    else if (m.e === 'jar') ui.toast('Червей класть некуда — возьми банку в другую руку', 'bad');
+    else if (m.e === 'shovel') ui.toast('Нужна лопата в руке — она в рюкзаке', 'bad');
+  }
+
   // ---------- другие игроки ----------
   const players = () => (room.state as { players?: { forEach(cb: (p: PlayerView, sid: string) => void): void } } | undefined)?.players;
   function updateGhosts(dt: number) {
@@ -457,6 +498,7 @@ export async function startGame(canvas: HTMLCanvasElement, room: Room, ui: GameU
     wx.update(dt, weather); river.update(dt, wx.st.rain);
     if (!ready) return;
     if (asleep()) { keys.clear(); hero.path = null; }   // спящий не ходит
+    if (digging > 0) { digging = Math.max(0, digging - dt); keys.clear(); hero.path = null; }   // копает — стоит на месте
     let dx = 0, dy = 0, passed = false;
     for (const code of keys) { dx += DIRS[code]![0]; dy += DIRS[code]![1]; }
     const running = shift || (!dx && !dy && hero.run && !!hero.path);   // клавишами бежим с Shift, по клику — с Shift или двойным кликом
@@ -577,6 +619,7 @@ export async function startGame(canvas: HTMLCanvasElement, room: Room, ui: GameU
       open: packInReach(hero, pack),
       light: lampOn() === null ? null : lampOn() ? 'Погасить лампу' : 'Зажечь лампу',
       eat: asleep() ? null : eatText(),
+      dig: !asleep() && !hero.sitting && shovelInHand() ? 'Копать червей' : null,
     };
     const key = JSON.stringify(a); if (key === actionsKey) return; actionsKey = key;
     ui.actions(a);
@@ -708,6 +751,45 @@ export async function startGame(canvas: HTMLCanvasElement, room: Room, ui: GameU
       }
     }
   }
+  // Как копают червей через el секунд от начала (WORMS.DIG на всё): лопата поднимается (0..0,25 с), втыкается в землю,
+  // поддевает её, поднимается с комом и бросает его в сторону — он падает рядом с ямкой. tip — где штык относительно
+  // ямки, hand — на сколько опускается кулак, hole — ямка уже есть, clod — ком на штыке, fly — ком в полёте (0..1), landed — упал.
+  function digPose(el: number) {
+    const k = (a: number, b: number) => clamp((el - a) / (b - a), 0, 1), lerp = (u: number, v: number, w: number) => u + (v - u) * w;
+    let tip: [number, number], hand = 0;
+    if (el < 0.25) tip = [0, lerp(-4, -8, k(0, 0.25))];
+    else if (el < 0.45) { tip = [0, lerp(-8, 1, k(0.25, 0.45))]; hand = Math.round(2 * k(0.25, 0.45)); }
+    else if (el < 0.75) { tip = [0, lerp(1, 0, k(0.45, 0.75))]; hand = 2 - Math.round(3 * k(0.45, 0.75)); }
+    else if (el < 1.05) tip = [lerp(0, 2, k(0.75, 1.05)), lerp(0, -7, k(0.75, 1.05))];
+    else tip = [lerp(2, 0, k(1.05, 1.4)), lerp(-7, -4, k(1.05, 1.4))];
+    return { tip, hand, hole: el >= 0.45, clod: el >= 0.6 && el < 0.95, fly: el >= 0.95 && el < 1.3 ? k(0.95, 1.3) : null, landed: el >= 1.3 };
+  }
+  // Ямка с комом земли рядом. (x, y) — середина ямки; a — насколько она видна (зарастает — бледнеет).
+  const PILE = 5;                                       // ком ложится справа от ямки
+  function drawHole(c: CanvasRenderingContext2D, x: number, y: number, pile: boolean, a = 1) {
+    c.globalAlpha = a;
+    c.fillStyle = '#6b4423'; c.fillRect(x - 3, y - 1, 7, 3); c.fillRect(x - 2, y - 2, 5, 5);   // разрытый край
+    c.fillStyle = '#2e1b0e'; c.fillRect(x - 2, y - 1, 5, 2); c.fillRect(x - 1, y - 1, 3, 3);   // темнота в ямке
+    if (pile) { c.fillStyle = '#7a4a28'; c.fillRect(x + PILE - 1, y - 1, 4, 2); c.fillRect(x + PILE, y - 2, 2, 1); c.fillStyle = '#a5683a'; c.fillRect(x + PILE, y - 2, 1, 1); }
+    c.globalAlpha = 1;
+  }
+  // Лопата, которой копают, — в кадре героя: черенок от кулака (hx, hy) к штыку (px, py), штык вдоль черенка.
+  function drawShovel(kind: string, hx: number, hy: number, px: number, py: number, clod: boolean) {
+    const col = shovelColors(kind) ?? { L: '#e4e8e4', M: '#b5b9b8', D: '#6a6a78', wide: false };
+    const d = Math.max(1, Math.hypot(px - hx, py - hy)), ux = (px - hx) / d, uy = (py - hy) / d, n = Math.round(d);
+    for (let i = 0; i <= n - 4; i++) {                 // черенок: дерево с тёмной кромкой
+      const x = Math.round(hx + ux * i), y = Math.round(hy + uy * i);
+      cctx.fillStyle = '#432115'; cctx.fillRect(x + 1, y, 1, 1);
+      cctx.fillStyle = '#c98a4b'; cctx.fillRect(x, y, 1, 1);
+    }
+    const half = col.wide ? 2 : 1;
+    for (let i = 0; i < 4; i++) for (let j = -half; j <= half; j++) {   // штык: поперёк — светлая, средняя и тёмная сторона
+      if (i === 0 && Math.abs(j) === half && !col.wide) continue;       // остриё
+      const x = Math.round(px - ux * i - uy * j), y = Math.round(py - uy * i + ux * j);
+      cctx.fillStyle = j < 0 ? col.L : j > 0 ? col.D : col.M; cctx.fillRect(x, y, 1, 1);
+    }
+    if (clod) { cctx.fillStyle = '#7a4a28'; cctx.fillRect(Math.round(px - ux * 2) - 1, Math.round(py - uy * 2) - 2, 3, 2); }
+  }
   function drawHero(a: Drawn, t: number) {
     const hx = Math.round(a.x), hy = Math.round(a.y);
     const eat = a.eat && a.eat.el < EAT_SHOW ? a.eat : null, happy = !!eat && eatPose(eat.el).happy && a.dir !== 'up';
@@ -715,12 +797,54 @@ export async function startGame(canvas: HTMLCanvasElement, room: Room, ui: GameU
     cctx.clearRect(0, 0, CW, CH);
     cctx.fillStyle = 'rgba(18, 22, 10, 0.3)';         // тень под ногами
     cctx.fillRect(CX + 4, FH - 2, 11, 1); cctx.fillRect(CX + 2, FH - 1, 15, 2); cctx.fillRect(CX + 4, FH + 1, 11, 1);
+    // копает: ямка перед ним (её же потом рисует земля — state.holes), лопата ходит сама, а не висит в кулаке
+    const dig = a.dig !== null && a.dig < WORMS.DIG ? digPose(a.dig) : null, digHand = dig ? a.hands.findIndex(k => WORMS.isShovel(k || '')) : -1;
+    const spot = WORMS.spot({ x: CX + ANCHOR, y: FH - 1 }, a.dir);
+    if (dig && digHand >= 0 && dig.hole) drawHole(cctx, spot.x, spot.y, dig.landed);
     // вещи в руках: первая — в правой, вторая — в левой, и руки настоящие — с той стороны, куда он смотрит (HERO.hand).
     // Они сбоку от тела и видны с любой стороны, поэтому рисуются поверх героя; только сбоку дальняя рука — по ту
     // сторону тела, и вещь в ней (и ведро) рисуется до него: тело её закрывает. Ведро висит на своей руке (rigs)
     const side = a.dir === 'left' || a.dir === 'right';
     const grip = (kind: string, i: number) => (i || (a.dir === 'left' && ITEMS.weight(kind) > 1) ? HERO.hand2 : HERO.hand);   // тяжёлую держат обеими — видна в ближней
-    const held = [a.hands[0], a.hands[1]].map((kind, i) => { const art = heldSprite(kind || '', a.lit); return art && { art, at: grip(kind || '', i)(a.dir, f, a.rest) }; });
+    const held = [a.hands[0], a.hands[1]].map((kind, i) => { const art = dig && digHand >= 0 ? null : heldSprite(kind || '', a.lit); return art && { art, at: grip(kind || '', i)(a.dir, f, a.rest) }; });
+    // Копают двумя руками: нижняя держит черенок посередине, верхняя — у ручки. Спереди и со спины лопата перед телом,
+    // сбоку — у ближней руки. Банку на это время ставят у ног (jar), обе руки рисует игра (HERO.eatArm), в кадре их нет.
+    const twoHands = (() => {
+      if (!dig || digHand < 0) return null;
+      const front = a.dir === 'down' || a.dir === 'up';
+      const low = front ? { x: CX + ANCHOR + (a.dir === 'down' ? 1 : -1), y: 24 + dig.hand } : { x: CX + ANCHOR + (a.dir === 'left' ? -4 : 4), y: 25 + dig.hand };   // сбоку — перед грудью
+      const px = spot.x + dig.tip[0], py = spot.y + dig.tip[1], d = Math.max(1, Math.hypot(px - low.x, py - low.y));
+      const ux = (px - low.x) / d, uy = (py - low.y) / d;
+      const high = { x: Math.round(low.x - ux * 6), y: Math.round(low.y - uy * 6) }, top = { x: Math.round(low.x - ux * 9), y: Math.round(low.y - uy * 9) };
+      // нижняя рука — та, что держала лопату, верхняя — другая
+      const lowSide: Hand = digHand === 0 ? 'right' : 'left', highSide: Hand = lowSide === 'right' ? 'left' : 'right';
+      return { low, high, top, px, py, lowSide, highSide };
+    })();
+    const shovel = () => {                              // лопата в работе и ком земли, летящий в сторону
+      if (!dig || !twoHands) return;
+      const { top, px, py } = twoHands;
+      drawShovel(a.hands[digHand]!, top.x, top.y, px, py, dig.clod);
+      cctx.fillStyle = '#432115'; cctx.fillRect(top.x - 1, top.y - 1, 3, 1);   // ручка поперёк черенка
+      if (dig.fly !== null) {
+        const u = dig.fly, x = Math.round(spot.x + 2 + (PILE - 2) * u), y = Math.round(spot.y - 7 + 7 * u - 10 * u * (1 - u));
+        cctx.fillStyle = '#7a4a28'; cctx.fillRect(x - 1, y - 1, 3, 2);
+      }
+    };
+    const arms = () => {                               // обе руки на черенке: дальняя (сбоку) — за телом, у неё виден только кулак
+      if (!twoHands) return;
+      for (const [side, p] of [[twoHands.highSide, twoHands.high], [twoHands.lowSide, twoHands.low]] as [Hand, { x: number; y: number }][]) {
+        const fx = p.x - CX, fy = p.y, key = 'dig' + a.dir + side + fx + ',' + fy;
+        let arm = eatArms.get(key);
+        if (!arm) { arm = fromPixels(HERO.eatArm(a.dir, side, fx, fy)); eatArms.set(key, arm); }
+        cctx.drawImage(arm, CX, 0);
+      }
+    };
+    const jar = () => {                                // банка, пока копают, стоит у ног — с той стороны, где была рука
+      if (!twoHands) return;
+      const k = a.hands.findIndex(h => h && ITEMS.isBait(h)), art = k >= 0 ? groundSprite(a.hands[k]!) : null; if (!art) return;
+      const out = (k === 0 ? HERO.hand : HERO.hand2)(a.dir, 0).out;
+      cctx.drawImage(art.img, CX + ANCHOR + out * 8 - (art.w >> 1), FH - art.h);
+    };
     const put = (far: boolean) => { for (const h of held) if (h && h.at.far === far) { const p = heldPlace(h.art, h.at, side, FH - 1); cctx.drawImage(p.img, CX + p.x, p.y); } };
     const rig = a.carrying && rigs[a.dir + ':' + a.carrying];
     const pail = () => {                              // ведро в руке качается вместе с плечом
@@ -735,10 +859,14 @@ export async function startGame(canvas: HTMLCanvasElement, room: Room, ui: GameU
     const eatSide: Hand | null = eat ? (eat.left ? 'left' : 'right') : null;
     const eatFrom = eatSide && (eatSide === 'left' ? HERO.hand2 : HERO.hand)(a.dir, 0, a.rest);
     if (rig && rig.far) pail();
+    if (a.dir === 'up') shovel();                       // со спины лопату закрывает герой
+    jar();
     put(true);
-    cctx.drawImage(heroFrames(a.carrying, a.pack, a.rest, eatFrom && !eatFrom.far ? eatSide : null)[a.dir][f]!, CX, 0);
+    cctx.drawImage(heroFrames(a.carrying, a.pack, a.rest, twoHands ? 'both' : eatFrom && !eatFrom.far ? eatSide : null)[a.dir][twoHands ? 0 : f]!, CX, 0);
     put(false);
     if (rig && !rig.far) pail();
+    if (a.dir !== 'up') shovel();
+    arms();
     if (eat && eatSide && eatFrom) drawEating(eat, eatSide, eatFrom, a);
     blit(cell, cctx, hx - ANCHOR - CX, hy - (FH - 1), hy);
   }
@@ -836,6 +964,22 @@ export async function startGame(canvas: HTMLCanvasElement, room: Room, ui: GameU
     const now = new Set<string>();
     players()?.forEach((p, sid) => { if (!p.eat) return; now.add(sid); if (!eatStart.has(sid)) eatStart.set(sid, t); });
     for (const sid of eatStart.keys()) if (!now.has(sid)) eatStart.delete(sid);
+  }
+  // Кто копает — так же по полю dig: с какого мгновения кадра мы это видим.
+  const digStart = new Map<string, number>();
+  function trackDiggers(t: number) {
+    const now = new Set<string>();
+    players()?.forEach((p, sid) => { if (!p.dig) return; now.add(sid); if (!digStart.has(sid)) digStart.set(sid, t); });
+    for (const sid of digStart.keys()) if (!now.has(sid)) digStart.delete(sid);
+  }
+  const digOf = (p: PlayerView | null, sid: string, t: number) => { const t0 = digStart.get(sid); return p?.dig && t0 !== undefined ? t - t0 : null; };
+  // Ямки от лопат — общие для всех (holes в состоянии комнаты): лежат на земле под всеми и бледнеют последнюю минуту, пока зарастают.
+  function drawHoles() {
+    const now = Date.now() + skew;
+    (room.state as { holes?: { forEach(cb: (h: HoleView) => void): void } } | undefined)?.holes?.forEach(h => {
+      const left = WORMS.REST * 1000 - (now - h.at); if (left <= 0) return;
+      drawHole(fctx, h.x, h.y, true, Math.min(1, left / 60_000));
+    });
   }
   const eatOf = (p: PlayerView | null, sid: string, t: number): Drawn['eat'] => {
     const t0 = eatStart.get(sid); return p?.eat && t0 !== undefined ? { kind: p.eat, left: p.eatLeft, el: t - t0 } : null;
@@ -956,13 +1100,13 @@ export async function startGame(canvas: HTMLCanvasElement, room: Room, ui: GameU
   }
 
   function render(t: number) {
-    trackEaters(t); trackScraps(t); trackFire(t);
+    trackEaters(t); trackDiggers(t); trackScraps(t); trackFire(t);
     const sky = skyAt(hourNow());
     fctx.drawImage(img.world, 0, 0); home.draw(fctx);
     if (sky.lights && World.lights) {                  // на карте свет погашен; горящие окна и фонарь — отдельной картинкой поверх
       fctx.globalAlpha = sky.lights; fctx.drawImage(img.lights, World.lights.x, World.lights.y); fctx.globalAlpha = 1;
     }
-    river.draw(fctx); drawSparkles(t, 1 - 0.9 * wx.st.clouds); drawSmoke(t, wx.st.wind);
+    river.draw(fctx); drawSparkles(t, 1 - 0.9 * wx.st.clouds); drawSmoke(t, wx.st.wind); drawHoles();
     // кто дальше от зрителя, тот рисуется раньше
     const queue: { y: number; draw: () => void }[] = [];
     for (const b of boats) queue.push({ y: b.y, draw: () => b.draw(fctx, t) });
@@ -985,7 +1129,7 @@ export async function startGame(canvas: HTMLCanvasElement, room: Room, ui: GameU
     let seatPail: ArrayLike<string> | null = hero.sitting && ownPail() ? bag.recent : null;   // ведро в руке сидящего — рядом на настиле
     if (ready) {
       const me = ownView() ?? { hand: '', off: '' };
-      if (!hero.sitting) queue.push({ y: hero.y, draw: () => drawHero({ ...hero, carrying: pailHand(me), pack: pack.worn ? pack.kind : null, hands: otherHands(me), lit: !!ownView()?.lamp, recent: bag.recent, blink: 0, eat: eatOf(ownView(), room.sessionId, t) }, t) });
+      if (!hero.sitting) queue.push({ y: hero.y, draw: () => drawHero({ ...hero, carrying: pailHand(me), pack: pack.worn ? pack.kind : null, hands: otherHands(me), lit: !!ownView()?.lamp, recent: bag.recent, blink: 0, eat: eatOf(ownView(), room.sessionId, t), dig: digOf(ownView(), room.sessionId, t) }, t) });
       if (!pack.worn) queue.push({ y: pack.y, draw: () => drawPack(pack) });
     }
     players()?.forEach((p, sid) => {
@@ -993,7 +1137,7 @@ export async function startGame(canvas: HTMLCanvasElement, room: Room, ui: GameU
       const g = ghosts.get(sid); if (!g) return;
       const worn = p.wearing ? packKind(p.pack) : null;
       if (p.sitting) { if (!someoneSits) seatPack = worn; someoneSits = true; seatRod ??= ITEMS.isRod(p.hand) ? p.hand : ITEMS.isRod(p.off) ? p.off : null; if (!seatPail && pailHand(p)) seatPail = p.recent; }
-      else queue.push({ y: g.y, draw: () => drawHero({ x: g.x, y: g.y, dir: p.dir, rest: p.rest, moving: g.moving, anim: g.anim, carrying: pailHand(p), pack: worn, hands: otherHands(p), lit: p.lamp, recent: p.recent, blink: g.blink, eat: eatOf(p, sid, t) }, t) });
+      else queue.push({ y: g.y, draw: () => drawHero({ x: g.x, y: g.y, dir: p.dir, rest: p.rest, moving: g.moving, anim: g.anim, carrying: pailHand(p), pack: worn, hands: otherHands(p), lit: p.lamp, recent: p.recent, blink: g.blink, eat: eatOf(p, sid, t), dig: digOf(p, sid, t) }, t) });
       if (!p.wearing) queue.push({ y: p.py - 0.5, draw: () => drawPack({ x: p.px, y: p.py, kind: packKind(p.pack) }) });
     });
     if (seatPail) { const recent = seatPail; queue.push({ y: SEAT_PAIL.y, draw: () => drawBucket({ ...SEAT_PAIL, recent }) }); }
@@ -1047,6 +1191,7 @@ export async function startGame(canvas: HTMLCanvasElement, room: Room, ui: GameU
     else if (ev.code === 'KeyB') packAction();
     else if (ev.code === 'KeyL') lampAction();
     else if (ev.code === 'KeyX') eatAction();
+    else if (ev.code === 'KeyG') digAction();
     else if (ev.code === 'Escape') standUp();
     else if (ev.code === 'F2') { debug = !debug; if (!debug) ui.debug(null); ev.preventDefault(); }
   });
@@ -1055,6 +1200,7 @@ export async function startGame(canvas: HTMLCanvasElement, room: Room, ui: GameU
   on<PointerEvent>(canvas, 'pointerdown', ev => {
     if (ev.button > 0 || !ready || asleep()) return;
     ev.preventDefault();
+    if (digging > 0) return;                           // копает — не уходит
     const p = toWorld(ev);
     const dbl = ev.timeStamp - lastDown.t < 350 && Math.hypot(p.x - lastDown.x, p.y - lastDown.y) <= 12;
     lastDown = dbl ? { t: -1e9, x: 0, y: 0 } : { t: ev.timeStamp, x: p.x, y: p.y };
@@ -1088,12 +1234,12 @@ export async function startGame(canvas: HTMLCanvasElement, room: Room, ui: GameU
   raf = requestAnimationFrame(tick);
 
   // для отладки из консоли; step(dt, n) прокручивает игру вручную
-  (window as any).FH_GAME = { hero, pack, view, keys, ghosts, fishing, room, sitDown, standUp, walkTo, putOn, takeOff, setPack, fishAction, handAction, packAction,
+  (window as any).FH_GAME = { hero, pack, view, keys, ghosts, fishing, room, sitDown, standUp, walkTo, putOn, takeOff, setPack, fishAction, handAction, packAction, digAction,
     step: (dt: number, n = 1) => { for (let i = 0; i < n; i++) update(dt); render(performance.now() / 1000); },
     hourNow, setClock, setWeather, wx, river, setHour: (hour: number | null) => { fixedHour = hour ?? NaN; } };   // setHour(22) останавливает время на этом часе, setHour(null) — пускает снова
 
   return {
-    handAction, packAction, lampAction, setPack, fishAction, standUp, eatAction, takeFish, setClock, setWeather, setSound: sound.setOn,
+    handAction, packAction, lampAction, setPack, fishAction, standUp, eatAction, digAction, takeFish, setClock, setWeather, setSound: sound.setOn,
     destroy() {
       sound.destroy();
       alive = false; cancelAnimationFrame(raf);
