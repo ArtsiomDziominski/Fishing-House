@@ -17,13 +17,13 @@ import { Room, definePlugins, type Client } from 'colyseus';
 import { UniqueSessionPlugin } from 'colyseus/plugins/unique-session';
 import { z } from 'zod';
 import {
-  World, FISH, ITEMS, HUNGER, DIRS, PACK_KINDS, ITEM_KINDS, WEATHERS, ROOM_SIZE, SPEED, RUN, REACH, PUT_REACH, nearFire, faceFire, HOOK_GRACE,
+  World, FISH, ITEMS, HUNGER, SCRAPS, FIRE, DIRS, PACK_KINDS, ITEM_KINDS, WEATHERS, ROOM_SIZE, SPEED, RUN, REACH, PUT_REACH, nearFire, faceFire, HOOK_GRACE,
   createFishing, addToBag, nearSeat, bucketNearSeat, standPoint, homePoint, startState, packInReach, dist, seat,
-  type Bag, type Fishing, type FishingEvent, type Item, type ItemKind, type ServerMessages, type WorldState,
+  type Bag, type Catch, type Fishing, type FishingEvent, type Item, type ItemKind, type ScrapEnd, type ServerMessages, type WorldState,
 } from '@fh/shared';
 import {
   verifyTicket, loadPlayer, loadBag, saveWorld, recordCatch, loseCatches, loadItems, loadGround, addItem, placeItems, dropItem, claimItem, lightItem, fishItem,
-  takeFish, cookItems, eatItem, type Dropped, type Stored, type Ticket,
+  takeFish, cookItems, eatItem, scrapItem, type Dropped, type Stored, type Ticket,
 } from '@fh/shared/server';
 import { db } from './db.ts';
 import { Sky } from './sky.ts';
@@ -36,11 +36,14 @@ const RECONNECT = 20;               // секунд ждём игрока, у к
 const SLACK = 4;                    // арт-пикселей прощаем на округления и рывки сети
 const BUDGET_MAX = 26 * RUN;        // запас хода копится, пока сообщения идут пачкой, но не больше этого
 const GROUND = 'ground';            // канал presence, по которому копии причала сообщают друг другу, что на земле
+const BLAZE = 'fire';               // костёр: ключ presence (горит — 'lit', погас — 'out') и канал, по которому о нём сообщают
 
 // Вещь на земле — по мнению сервера. ready — уже записана в базу: до того её не поднять (её место в базе ещё старое).
-type Ground = Dropped & { ready: boolean };
-// Что копии причала сообщают друг другу о земле: вещь легла, её подняли, лампу на ней зажгли или погасили, в ведро легла рыба.
-type GroundNews = { e: 'put'; it: Dropped } | { e: 'gone'; id: number } | { e: 'lit'; id: number; on: boolean } | { e: 'fish'; id: number; fish: string };
+// end — у рыбы: за ней пришла чайка или кот, или она тает (SCRAPS); нет — лежит.
+type Ground = Dropped & { ready: boolean; end?: ScrapEnd };
+// Что копии причала сообщают друг другу о земле: вещь легла, её подняли, лампу на ней зажгли или погасили, в ведро легла рыба,
+// за рыбой на земле пришли (или она тает).
+type GroundNews = { e: 'put'; it: Dropped } | { e: 'gone'; id: number } | { e: 'lit'; id: number; on: boolean } | { e: 'fish'; id: number; fish: string } | { e: 'end'; id: number; by: ScrapEnd };
 
 interface Session {
   sid: string;                      // sessionId соединения: по нему находим клиента (this.clients.getById)
@@ -48,6 +51,7 @@ interface Session {
   name: string;
   world: WorldState;                // где игрок на самом деле — по мнению сервера
   bag: Bag;
+  unrecorded: Catch[];              // пойманы и уже в ведре, но ещё ждут записи в базу (в очереди writes)
   items: Item[];                    // вещи в рюкзаке — по мнению сервера
   hands: Item[];                    // вещи в руках: правая, потом левая (left), или одна тяжёлая; их x, y, rot — где они лежали в рюкзаке
   unsynced: Set<number>;            // вещи, которые при входе пришлось переложить, а в базе они ещё на старом месте
@@ -58,6 +62,7 @@ interface Session {
   dirty: boolean;                   // место изменилось с прошлого сохранения
   fed: number;                      // сытость, о которой игрок уже знает (целая); -1 — ещё не сообщали
   cook: number;                     // сколько секунд рыба в руках жарится у костра
+  eat: { kind: string; left: boolean; until: number } | null;   // что ест сейчас, какой рукой и до какого мгновения (мс), — это видят все
 }
 
 const point = z.object({ x: z.number().finite(), y: z.number().finite() });
@@ -71,6 +76,7 @@ const itemStowMsg = z.object({ id: z.number().int(), at: z.object({ x: cell, y: 
 const itemPutMsg = point.extend({ left: z.boolean().optional() });
 const itemPickMsg = z.object({ id: z.number().int(), left: z.boolean().optional() });
 const itemGiveMsg = z.object({ kind: z.enum(ITEM_KINDS).refine(kind => !ITEMS.isFish(kind)) });   // рыбу дают только из ведра: у неё есть вид
+const scrapMsg = z.object({ id: z.number().int(), by: z.enum(SCRAPS.ENDS as [ScrapEnd, ...ScrapEnd[]]) });
 const fishTakeMsg = z.object({ species: z.string().max(24), left: z.boolean().optional() });
 const eatMsg = z.object({ left: z.boolean().optional() });
 const lampMsg = z.object({ on: z.boolean(), id: z.number().int().optional() });
@@ -91,29 +97,38 @@ export class PierRoom extends Room<{ state: PierState; client: Client<{ auth: Au
 
   private sessions = new Map<string, Session>();
   private ground = new Map<number, Ground>();   // всё, что лежит на земле; в состоянии комнаты — то же (state.ground)
+  private fates = new Map<number, { clear(): void }>();   // рыба на земле: когда за ней придут (SCRAPS.fate), потом — когда её не станет
   private unsaved = 0;                // счётчик временных (отрицательных) id вещей, ещё не записанных в базу
   private offSky = () => {};          // отписка от часов и погоды причала
+  private douse: { clear(): void } | null = null;   // дождь идёт — когда погаснет костёр
 
   async onCreate() {
     this.setPatchRate(PATCH);
     // Земля: сначала слушаем новости соседних копий, потом читаем, что на ней уже лежит, — так ничего не пропустим.
     await this.presence.subscribe(GROUND, this.onGroundNews);
     for (const it of await loadGround(db)) if (!this.ground.has(it.id)) this.setGround({ ...it, ready: true });
-    // Сменилась погода или часы причала перевели (в разработке) — сообщаем сразу всем, кто в комнате.
-    this.offSky = Sky.onChange(what => { if (what === 'clock') this.broadcast('clock', Sky.clock()); else this.broadcast('weather', Sky.weather()); });
+    // Костёр тоже один на все копии: так же сначала слушаем, потом читаем, горит ли он.
+    this.state.fire = true;
+    await this.presence.subscribe(BLAZE, this.onFireNews);
+    if (await this.presence.get(BLAZE) === 'out') this.state.fire = false;
+    this.watchRain();
+    // Сменилась погода или часы причала перевели (в разработке) — сообщаем сразу всем, кто в комнате; пошёл дождь — костёр гаснет.
+    this.offSky = Sky.onChange(what => { if (what === 'clock') this.broadcast('clock', Sky.clock()); else { this.broadcast('weather', Sky.weather()); this.watchRain(); } });
     this.onMessage('clock', clockMsg, (_client, m) => { if (Sky.canSet) Sky.setHour(m.hour); });
     this.onMessage('weather', weatherMsg, (_client, m) => { if (Sky.canSet) Sky.setWeather(m.kind, m.wind); });
     this.setSimulationInterval(dt => this.tick(dt / 1000), TICK);
     this.clock.setInterval(() => this.saveAll(false), AUTOSAVE);
 
-    // Спящий от голода ничего не делает: экран у него чёрный, а что пришло — отголоски прежних нажатий. Ему — где он на самом деле.
+    // Спящий от голода ничего не делает: экран у него чёрный, а что пришло — отголоски прежних нажатий. Ему — где он
+    // на самом деле и как лежат его вещи (вдруг окно рюкзака успело что-то переложить).
     const awake = <M>(fn: (client: Client, m: M) => void) => (client: Client, m: M) => {
       const s = this.sessions.get(client.sessionId);
-      if (s?.world.sleep) this.reject(client, s); else fn(client, m);
+      if (s?.world.sleep) { this.reject(client, s); this.tellItems(client, s); } else fn(client, m);
     };
     this.onMessage('move', moveMsg, awake((client, m) => this.move(client, m.x, m.y, m.dir)));
     this.onMessage('sit', awake(client => this.sit(client)));
     this.onMessage('rest', awake(client => this.rest(client)));
+    this.onMessage('kindle', awake(client => this.kindle(client)));
     this.onMessage('stand', awake(client => this.withSession(client, s => this.standUp(s))));
     this.onMessage('press', awake(client => this.withSession(client, s => { if (s.world.sitting) s.fishing.press(); })));
     this.onMessage('packOn', awake(client => this.packOn(client)));
@@ -129,6 +144,7 @@ export class PierRoom extends Room<{ state: PierState; client: Client<{ auth: Au
     this.onMessage('fishTake', fishTakeMsg, awake((client, m) => this.fishTake(client, m.species, m.left)));
     this.onMessage('eat', eatMsg, awake((client, m) => this.eat(client, m.left)));
     this.onMessage('itemGive', itemGiveMsg, (client, m) => { if (Sky.canSet) this.itemGive(client, m.kind); });
+    this.onMessage('scrap', scrapMsg, (_client, m) => { if (Sky.canSet && ITEMS.isFish(this.ground.get(m.id)?.kind ?? '')) this.ending(m.id, m.by, true); });
   }
 
   // Билет выдаёт сайт после входа (POST /api/game/ticket); без него в комнату не пустит.
@@ -145,10 +161,11 @@ export class PierRoom extends Room<{ state: PierState; client: Client<{ auth: Au
     if (world.sleep && world.sleep <= Date.now()) this.rise(world);   // уснул от голода и ушёл — выспался, пока его не было
     // вещи — в сетку нынешнего рюкзака. Кого пришлось переложить, тех в базе не трогаем, пока игрок сам не возьмётся
     // за рюкзак: вдруг запись мира отстала (вкладку перезагрузили, а прежний вход ещё сохраняется) и разложено всё верно
-    // в руках — каждая вещь в своей руке, пока рука свободна (тяжёлая — обе); лишнее считается лежащим в рюкзаке
+    // в руках — каждая вещь в своей руке, пока рука свободна (тяжёлая — обе); лишнее считается лежащим в рюкзаке.
+    // Сырой рыбе в рюкзаке не место: руку она занимает первой, а своя занята — другую
     const stored = await loadItems(db, auth.pid), hands: Item[] = [], extra: Item[] = [];
-    for (const it of stored.hands) {
-      const at = ITEMS.handFor(hands, it.kind, ITEMS.sideOf(it));
+    for (const it of [...stored.hands].sort((a, b) => Number(ITEMS.packable(a.kind)) - Number(ITEMS.packable(b.kind)))) {
+      const at = ITEMS.handFor(hands, it.kind, ITEMS.sideOf(it)) ?? (ITEMS.packable(it.kind) ? null : ITEMS.handFor(hands, it.kind));
       if (at) hands.push({ ...it, left: at === 'left' }); else extra.push(ITEMS.unheld(it));
     }
     ITEMS.inOrder(hands);
@@ -156,7 +173,7 @@ export class PierRoom extends Room<{ state: PierState; client: Client<{ auth: Au
     const view = new PlayerState();
     view.pid = saved.id; view.name = saved.name;
     const s: Session = {
-      sid: client.sessionId, pid: saved.id, name: saved.name, world, bag: saved.bag, items: packed.list, hands, unsynced: new Set([...packed.moved, ...extra].map(it => it.id)), writes: Promise.resolve(), view, budget: BUDGET_MAX, dirty: false, fed: -1, cook: 0,
+      sid: client.sessionId, pid: saved.id, name: saved.name, world, bag: saved.bag, unrecorded: [], items: packed.list, hands, unsynced: new Set([...packed.moved, ...extra].map(it => it.id)), writes: Promise.resolve(), view, budget: BUDGET_MAX, dirty: false, fed: -1, cook: 0, eat: null,
       fishing: createFishing({ hasRod: () => s.hands.some(it => ITEMS.isRod(it.kind)), hasBucket: () => this.hasBucket(s), emit: ev => this.onFishing(client, s, ev), grace: HOOK_GRACE }),
     };
     if (world.sitting) s.fishing.sit();
@@ -175,6 +192,16 @@ export class PierRoom extends Room<{ state: PierState; client: Client<{ auth: Au
   async onDrop(client: Client, code?: number) {
     if (code === 1001 || code === 1005 || code === 1006) await this.allowReconnection(client, RECONNECT).catch(() => {});
   }
+  // Вернулся: личные сообщения, пока связи не было, пропали (уснул, проснулся, рыба пожарилась, погода сменилась) — всё заново.
+  onReconnect(client: Client) {
+    const s = this.sessions.get(client.sessionId); if (!s) return;
+    this.tell(client, 'clock', Sky.clock());
+    this.tell(client, 'weather', Sky.weather());
+    this.tell(client, 'self', s.world);
+    this.tell(client, 'bag', s.bag);
+    this.tellItems(client, s);
+    this.tellHunger(s);
+  }
 
   async onLeave(client: Client) {
     const s = this.sessions.get(client.sessionId);
@@ -183,7 +210,11 @@ export class PierRoom extends Room<{ state: PierState; client: Client<{ auth: Au
     if (s) await Promise.all([this.save(s, true), s.writes]);
   }
 
-  async onDispose() { this.offSky(); this.presence.unsubscribe(GROUND, this.onGroundNews); await this.saveAll(true); }
+  async onDispose() {
+    this.offSky(); this.douse?.clear();
+    this.presence.unsubscribe(GROUND, this.onGroundNews); this.presence.unsubscribe(BLAZE, this.onFireNews);
+    await this.saveAll(true);
+  }
 
   // ---------- действия игрока ----------
 
@@ -224,6 +255,25 @@ export class PierRoom extends Room<{ state: PierState; client: Client<{ auth: Au
     if (!nearFire(w)) { this.reject(client, s); return; }
     w.rest = true; w.dir = faceFire(w);
     this.syncView(s);
+  }
+
+  // Разжечь погасший костёр: стоя у огня или сидя у него, и только без дождя. Не вышло — молчим: клиент сам видит, что огня нет.
+  private kindle(client: Client) {
+    const s = this.sessions.get(client.sessionId); if (!s) return;
+    if (this.state.fire || s.world.sitting || !nearFire(s.world) || Sky.weather().kind === 'rain') return;
+    this.setFire(true);
+  }
+  // Костёр загорелся или погас — у всех копий причала (и у себя: свои новости применяются так же), и это запомнено для тех,
+  // что откроются потом.
+  private setFire(lit: boolean) { this.presence.set(BLAZE, lit ? 'lit' : 'out'); this.presence.publish(BLAZE, { lit }); }
+  private onFireNews = (n: { lit: boolean }) => { this.state.fire = n.lit; this.watchRain(); };
+  // Дождь идёт FIRE.douse секунд — костёр гаснет. Дождь кончился раньше или огня и так нет — гасить нечего.
+  private watchRain() {
+    if (Sky.weather().kind !== 'rain' || !this.state.fire) { this.douse?.clear(); this.douse = null; return; }
+    this.douse ??= this.clock.setTimeout(() => {
+      this.douse = null;
+      if (Sky.weather().kind === 'rain' && this.state.fire) this.setFire(false);
+    }, FIRE.douse * 1000);
   }
 
   private standUp(s: Session) {
@@ -435,23 +485,56 @@ export class PierRoom extends Room<{ state: PierState; client: Client<{ auth: Au
 
   // ---------- земля ----------
 
-  // Положить вещь на землю у себя: в память и в состояние комнаты (его видят все).
+  // Положить вещь на землю у себя: в память и в состояние комнаты (его видят все). Рыбе — её судьбу (doom).
   private setGround(g: Ground) {
     this.ground.set(g.id, g);
     const key = String(g.id), v = this.state.ground.get(key) ?? new GroundState();
-    v.kind = g.kind; v.x = g.x; v.y = g.y; v.lit = g.lit; v.fish = g.fish;
+    v.kind = g.kind; v.x = g.x; v.y = g.y; v.lit = g.lit; v.fish = g.fish; v.end = g.end ?? '';
     if (!this.state.ground.has(key)) this.state.ground.set(key, v);
+    this.doom(g);
   }
-  private dropGround(id: number) { this.ground.delete(id); this.state.ground.delete(String(id)); }
+  private dropGround(id: number) {
+    this.ground.delete(id); this.state.ground.delete(String(id));
+    this.fates.get(id)?.clear(); this.fates.delete(id);
+  }
 
   // Сообщить о земле всем копиям причала — и себе тоже: свои новости применяются повторно, без вреда.
   private news(n: GroundNews) { this.presence.publish(GROUND, n); }
   private onGroundNews = (n: GroundNews) => {
-    if (n.e === 'put') this.setGround({ ...n.it, ready: true });
+    if (n.e === 'put') { const was = this.ground.get(n.it.id); this.setGround({ ...n.it, ready: true, ...(was?.end && { end: was.end }) }); }
+    else if (n.e === 'end') this.ending(n.id, n.by, false);
     else if (n.e === 'gone') this.dropGround(n.id);
     else if (n.e === 'lit') { const g = this.ground.get(n.id); if (g && g.lit !== n.on) this.setGround({ ...g, lit: n.on }); }
     else { const g = this.ground.get(n.id); if (g && g.fish !== n.fish) this.setGround({ ...g, fish: n.fish }); }
   };
+
+  // ---------- рыба на земле (SCRAPS) ----------
+
+  // Рыба легла на землю — здесь, в другой копии причала (новость put) или лежала там ещё до того, как эта копия открылась:
+  // её судьба (SCRAPS.fate) отсчитывается с этого мига. Раньше всех срок подходит у той копии, где её положили, — она и решает.
+  private doom(g: Ground) {
+    if (!ITEMS.isFish(g.kind) || g.end || this.fates.has(g.id)) return;
+    const f = SCRAPS.fate(g.id);
+    this.fates.set(g.id, this.clock.setTimeout(() => this.ending(g.id, f.by, true), f.at * 1000));
+  }
+  // За рыбой пришли (или она тает): это видят все (end), а через SCRAPS.TAKE её нет — ни на земле, ни в базе. mine — решила
+  // эта копия: она сообщает остальным и убирает рыбу; остальные убирают её сами, только если новость gone так и не пришла.
+  private ending(id: number, by: ScrapEnd, mine: boolean) {
+    const g = this.ground.get(id); if (!g || g.end) return;
+    this.fates.get(id)?.clear();
+    if (!g.ready) { this.fates.set(id, this.clock.setTimeout(() => this.ending(id, by, mine), 1000)); return; }   // ещё пишется в базу
+    if (mine && by === 'cat' && [...this.ground.values()].some(o => o.end === 'cat')) by = 'gull';   // кот один, он занят — прилетит чайка
+    this.setGround({ ...g, end: by });
+    if (mine) this.news({ e: 'end', id, by });
+    this.fates.set(id, this.clock.setTimeout(() => this.scrap(id), (SCRAPS.TAKE[by] + (mine ? 0 : 3)) * 1000));
+  }
+  // Рыбы больше нет. Подняли раньше — её уже нет на земле, а в базе она теперь чья-то, и её не трогаем.
+  private scrap(id: number) {
+    this.fates.delete(id);
+    if (!this.ground.has(id)) return;
+    this.dropGround(id);
+    scrapItem(db, id).then(() => this.news({ e: 'gone', id }), err => console.error(`рыба ${id} с земли не убрана:`, err));
+  }
 
   // ---------- еда и голод ----------
 
@@ -483,7 +566,7 @@ export class PierRoom extends Room<{ state: PierState; client: Client<{ auth: Au
       try { got = await takeFish(db, s.pid, species, hand === 'left'); }
       finally {
         if (got) it.id = got.id; else s.hands = s.hands.filter(h => h !== it);   // рыбы не нашлось (вынули в другой вкладке) или база не ответила
-        s.bag = await loadBag(db, s.pid).catch(() => s.bag);
+        await this.reloadBag(s).catch(() => {});
         this.syncView(s);
         const c = this.clientOf(s);
         if (c) { this.tellItems(c, s, got ? undefined : 'empty'); this.tell(c, 'bag', s.bag); }
@@ -496,14 +579,17 @@ export class PierRoom extends Room<{ state: PierState; client: Client<{ auth: Au
     const s = this.sessions.get(client.sessionId); if (!s) return;
     const it = ITEMS.meal(s.hands, left === undefined ? undefined : left ? 'left' : 'right');
     if (!it || it.id < 0) { this.tellItems(client, s); return; }
+    if (s.eat) return;                                  // ещё жуёт прежнюю: рыба остаётся в руке
     const w = s.world, cooked = !ITEMS.isRaw(it.kind), was = w.food, fish = it.fish ?? '';
     w.food = HUNGER.eat(w.food, fish, cooked); w.starve = 0; s.dirty = true;
     s.hands = s.hands.filter(h => h !== it);
+    s.eat = { kind: it.kind, left: !!it.left, until: Date.now() + HUNGER.EAT * 1000 };   // сытость сразу, а жуёт ещё EAT секунд
     this.syncView(s);
     this.tellItems(client, s);
     this.tell(client, 'food', { e: 'ate', fish, raw: !cooked, gain: Math.round(w.food - was) });
     this.tellHunger(s);
     this.write(s, () => eatItem(db, s.pid, it.id));
+    void this.save(s, true);                             // рыбы в базе уже нет — пусть и сытость будет там сразу
   }
 
   // Голод за dt секунд: сытость тает; у костра сырая рыба в руках жарится. Сытость на нуле дольше STARVE — герой засыпает,
@@ -518,10 +604,11 @@ export class PierRoom extends Room<{ state: PierState; client: Client<{ auth: Au
     if (Math.ceil(w.food) !== s.fed) this.tellHunger(s);
   }
 
-  // Сидит у костра с сырой рыбой в руке (уже записанной в базу) — через COOK секунд она пожарится; встал — жарка сначала.
+  // Сидит у костра с сырой рыбой в руке (уже записанной в базу) — через COOK секунд она пожарится; встал или костёр погас —
+  // жарка сначала.
   private cook(s: Session, dt: number) {
     const raw = s.hands.filter(h => ITEMS.isRaw(h.kind) && h.id > 0);
-    if (!s.world.rest || !raw.length) { s.cook = 0; return; }
+    if (!s.world.rest || !raw.length || !this.state.fire) { s.cook = 0; return; }
     if ((s.cook += dt) < HUNGER.COOK) return;
     s.cook = 0;
     for (const h of raw) h.kind = 'fish-fried';
@@ -544,7 +631,7 @@ export class PierRoom extends Room<{ state: PierState; client: Client<{ auth: Au
     void this.save(s, true);                             // сон — сразу: перезайти, чтобы не спать, не выйдет
     this.write(s, async () => {
       const lost = await loseCatches(db, s.pid);
-      s.bag = await loadBag(db, s.pid);
+      await this.reloadBag(s);
       this.syncView(s);
       const c = this.clientOf(s);
       if (c) { this.tell(c, 'bag', s.bag); this.tellHunger(s, lost); }
@@ -599,7 +686,21 @@ export class PierRoom extends Room<{ state: PierState; client: Client<{ auth: Au
       this.setGround({ ...b, fish: tails });
       this.write(s, async () => { await fishItem(db, b.id, tails); this.news({ e: 'fish', id: b.id, fish: tails }); });
     }
-    recordCatch(db, s.pid, fish).catch(err => console.error(`улов ${s.pid} ${fish.id} ${fish.grams} г не записан:`, err));
+    // в очередь, как и вещи: ведро, которое как раз читается из базы (reloadBag), этой рыбы не потеряет
+    s.unrecorded.push(fish);
+    this.write(s, async () => {
+      try { await recordCatch(db, s.pid, fish); }
+      catch (err) { console.error(`улов ${s.pid} ${fish.id} ${fish.grams} г не записан:`, err); }
+      finally { s.unrecorded = s.unrecorded.filter(f => f !== fish); }
+    });
+  }
+
+  // Ведро заново из базы — только в очереди записей (write): всё, что было до этого, уже записано, а пойманное после
+  // (unrecorded) ещё нет — его добавляем сами.
+  private async reloadBag(s: Session) {
+    const bag = await loadBag(db, s.pid);
+    for (const f of s.unrecorded) addToBag(bag, f);
+    s.bag = bag;
   }
 
   private tick(dt: number) {
@@ -608,6 +709,7 @@ export class PierRoom extends Room<{ state: PierState; client: Client<{ auth: Au
       s.fishing.update(dt);
       s.budget = Math.min(BUDGET_MAX, s.budget + SPEED * RUN * 1.25 * HUNGER.pace(s.world.food) * dt);   // голодный и ходит медленнее
       this.hunger(s, dt, now);
+      if (s.eat && now >= s.eat.until) { s.eat = null; this.syncView(s); }   // доел
     }
   }
 
@@ -620,6 +722,7 @@ export class PierRoom extends Room<{ state: PierState; client: Client<{ auth: Au
     v.hand = s.hands.find(h => !h.left)?.kind ?? ''; v.off = s.hands.find(h => h.left)?.kind ?? '';
     v.lamp = w.lamp && ITEMS.lampOut(s.hands);
     v.sleep = !!w.sleep;
+    v.eat = s.eat?.kind ?? ''; v.eatLeft = !!s.eat?.left;
     const recent = s.bag.recent.filter(id => FISH.byId[id]);
     if (v.recent.length !== recent.length || recent.some((id, i) => v.recent[i] !== id)) {
       v.recent.clear(); for (const id of recent) v.recent.push(id);

@@ -286,7 +286,8 @@ export const HERO = (() => {
   }
   type Tones = Record<string, number[]> | null;
   // carry — какая рука держит ведро: правая лицом к нам — слева на экране, со спины — справа; левая — наоборот.
-  function frontFrame(dir: 'down' | 'up', f: number, blink: boolean, carry: Hand | false, pack: Tones) {
+  // eat — какая рука подносит рыбу ко рту (её рисует игра, eatArm); обе — без рукава в кадре.
+  function frontFrame(dir: 'down' | 'up', f: number, blink: boolean, carry: Hand | false, pack: Tones, eat: Hand | false = false) {
     const buf = blank();
     const step = f === 1 || f === 3, dip = step ? 1 : 0;
     const legs = LEGS[dir === 'down' ? 'front' : 'back'];
@@ -296,14 +297,15 @@ export const HERO = (() => {
     if (pack) stamp(buf, PACK[dir].map, PACK[dir].at[0], 17 + dip + PACK[dir].at[1], pack);
     // руки: противоход ногам
     const swing = f === 1 ? 1 : f === 3 ? -1 : 0;
-    const busy = !carry ? '' : (dir === 'down') === (carry === 'right') ? 'left' : 'right';   // эта сторона держит ведро и не качается
-    if (busy !== 'left') stamp(buf, ARM, 2, 18 + dip - (swing > 0 ? 0 : swing < 0 ? 1 : 0) + (swing > 0 ? 1 : 0));
-    if (busy !== 'right') stamp(buf, ARM, 14, 18 + dip - (swing < 0 ? 0 : swing > 0 ? 1 : 0) + (swing < 0 ? 1 : 0));
+    const onScreen = (h: Hand) => ((dir === 'down') === (h === 'right') ? 'left' : 'right');   // с какого бока на экране рука h
+    const busy = [carry, eat].filter((h): h is Hand => !!h).map(onScreen);   // эти руки заняты ведром или едой и не качаются
+    if (!busy.includes('left')) stamp(buf, ARM, 2, 18 + dip - (swing > 0 ? 0 : swing < 0 ? 1 : 0) + (swing > 0 ? 1 : 0));
+    if (!busy.includes('right')) stamp(buf, ARM, 14, 18 + dip - (swing < 0 ? 0 : swing > 0 ? 1 : 0) + (swing < 0 ? 1 : 0));
     stamp(buf, blink ? blinkHead(dir) : HEAD[dir], 0, dip);
     return buf;
   }
-  // carry — ведро в ближней руке (в дальней оно за телом, а ближняя рука качается как обычно).
-  function sideFrame(f: number, blink: boolean, carry: boolean, pack: Tones) {
+  // bare — ближняя рука занята: держит ведро или подносит рыбу ко рту (в дальней ведро за телом, а ближняя качается как обычно).
+  function sideFrame(f: number, blink: boolean, bare: boolean, pack: Tones) {
     const buf = blank();
     const lift = f === 2 || f === 4 ? -1 : 0;                 // на проходе тело чуть выше
     const lmap = f === 0 ? LEGS.side.stand : (f === 1 || f === 3) ? LEGS.side.stride : LEGS.side.pass;
@@ -311,7 +313,7 @@ export const HERO = (() => {
     stamp(buf, BODY.left, 0, 17 + lift + 1);
     if (pack) stamp(buf, PACK.left.map, PACK.left.at[0], 17 + lift + 1 + PACK.left.at[1], pack);   // рука — поверх рюкзака
     const armX = f === 1 ? 7 : f === 3 ? 11 : 9;              // рука вперёд / назад
-    if (!carry) stamp(buf, ARM_SIDE, armX, 19 + lift + 1);
+    if (!bare) stamp(buf, ARM_SIDE, armX, 19 + lift + 1);
     stamp(buf, blink ? blinkHead('left') : HEAD.left, 0, lift + 1);
     return buf;
   }
@@ -330,17 +332,19 @@ export const HERO = (() => {
   // carry — те же кадры без руки, занятой ведром (её рисует игра поверх ведра): 'right' или 'left'; false — ведра нет.
   // Сбоку ведро в дальней руке висит за телом, и ближняя рука остаётся на месте: смотрит влево — ближе к нам левая, вправо — правая.
   // tones — пять тонов [r, g, b] рюкзака на спине от света к тени; без них герой налегке.
-  function build(carry: Hand | false = false, tones: number[][] | null = null): Record<Dir, Pixels[]> {
+  // eat — рука, которая подносит рыбу ко рту: в кадре её нет (сбоку — только если она ближняя), её рисует игра (eatArm).
+  function build(carry: Hand | false = false, tones: number[][] | null = null, eat: Hand | false = false): Record<Dir, Pixels[]> {
     const pack: Tones = tones && withPack(tones);
     const frames: Record<Dir, Pixels[]> = { down: [], up: [], left: [], right: [] };
+    const bare = (near: Hand) => carry === near || eat === near;
     for (let f = 0; f < 5; f++) {
-      frames.down.push(frontFrame('down', f, false, carry, pack));
-      frames.up.push(frontFrame('up', f, false, carry, pack));
-      frames.left.push(sideFrame(f, false, carry === 'left', pack));
-      frames.right.push(mirror(sideFrame(f, false, carry === 'right', pack)));
+      frames.down.push(frontFrame('down', f, false, carry, pack, eat));
+      frames.up.push(frontFrame('up', f, false, carry, pack, eat));
+      frames.left.push(sideFrame(f, false, bare('left'), pack));
+      frames.right.push(mirror(sideFrame(f, false, bare('right'), pack)));
     }
-    frames.down.push(frontFrame('down', 0, true, carry, pack)); frames.up.push(frames.up[0]!);   // кадр 5 — моргнул
-    frames.left.push(sideFrame(0, true, carry === 'left', pack)); frames.right.push(mirror(sideFrame(0, true, carry === 'right', pack)));
+    frames.down.push(frontFrame('down', 0, true, carry, pack, eat)); frames.up.push(frames.up[0]!);   // кадр 5 — моргнул
+    frames.left.push(sideFrame(0, true, bare('left'), pack)); frames.right.push(mirror(sideFrame(0, true, bare('right'), pack)));
     return frames;
   }
 
@@ -382,10 +386,40 @@ export const HERO = (() => {
     const x = (flip ? FW - src.arm.at[0] - px.w : src.arm.at[0]) + back;
     return { ...px, x, y: src.arm.at[1], bucket: [(flip ? FW - 1 - 2 * ANCHOR - src.bucket[0] : src.bucket[0]) + back, src.bucket[1]], far };
   }
+  // Еда: рыбу подносят ко рту. mouth — где рот в кадре (со спины его не видно, но рука идёт туда же). eatArm — рука с рыбой:
+  // плечо на месте, предплечье тянется к кулаку (fx, fy) у лица; рыбу в кулаке рисует игра. Кадр под неё — без этой руки
+  // (build с eat). Со спины видно только плечо: остальное за телом. Сбоку дальняя рука — по ту сторону тела, у лица только кулак.
+  const MOUTH: Record<'down' | 'up' | 'left', [number, number]> = { down: [9, 13], up: [9, 13], left: [3, 13] };
+  function mouth(dir: Dir) { const [x, y] = MOUTH[dir === 'right' ? 'left' : dir]; return { x: dir === 'right' ? FW - 1 - x : x, y }; }
+  function line([x0, y0]: [number, number], [x1, y1]: [number, number]) {   // пиксели отрезка (Брезенхем)
+    const out: [number, number][] = [], dx = Math.abs(x1 - x0), dy = -Math.abs(y1 - y0), sx = x0 < x1 ? 1 : -1, sy = y0 < y1 ? 1 : -1;
+    for (let err = dx + dy; ; ) {
+      out.push([x0, y0]); if (x0 === x1 && y0 === y1) return out;
+      const e2 = 2 * err; if (e2 >= dy) { err += dy; x0 += sx; } if (e2 <= dx) { err += dx; y0 += sy; }
+    }
+  }
+  function eatArm(dir: Dir, side: Hand, fx: number, fy: number): Patch {
+    const buf = blank(), front = dir === 'down' || dir === 'up', far = !front && (dir === 'right') !== (side === 'right');
+    const flip = dir === 'right'; if (flip) fx = FW - 1 - fx;   // вправо — то же, что влево, отражённое
+    let elbow: [number, number] | null = null, thick = 1;
+    if (front) {
+      const x0 = (dir === 'down') === (side === 'right') ? 2 : 14;   // рукав на экране слева или справа, как в frontFrame
+      stamp(buf, ARM.slice(0, 4), x0, 18);
+      if (dir === 'down') elbow = [x0 + 1, 21];
+    } else if (!far) { stamp(buf, ARM_SIDE.slice(0, 5), 9, 20); elbow = [10, 24]; thick = 2; }
+    if (elbow) {                                          // предплечье: контур, поверх — рукав
+      const pts = line(elbow, [fx, fy + 1]), o = 'o'.repeat(thick + 2), z = 'Z'.repeat(thick);
+      for (const [x, y] of pts) stamp(buf, Array(thick + 2).fill(o), x - 1, y - 1);
+      for (const [x, y] of pts) stamp(buf, Array(thick).fill(z), x, y);
+    }
+    if (dir !== 'up') stamp(buf, ['.oo.', 'oyyo', 'oSyo', '.oo.'], fx - 2, fy - 1);   // кулак
+    return { w: FW, h: FH, data: flip ? mirror(buf) : buf, x: 0, y: 0 };
+  }
+
   // Рюкзак на спине сидящего рыбака: накладка и её место на спрайте fisher.png.
   function seatPack(tones: number[][]): Patch {
     return { ...pixels(PACK.left.map, withPack(tones)), x: SEAT_PACK[0], y: SEAT_PACK[1] };
   }
 
-  return { FW, FH, PAL, REST, build, seated, hand, hand2, carryRig, seatPack };
+  return { FW, FH, PAL, REST, build, seated, hand, hand2, carryRig, mouth, eatArm, seatPack };
 })();

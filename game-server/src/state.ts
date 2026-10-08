@@ -20,6 +20,8 @@ export const PlayerState = schema({
   off: t.string(),            // что в левой руке
   lamp: t.boolean(),          // лампа у него в руке зажжена и светит
   sleep: t.boolean(),         // спит от голода
+  eat: t.string(),            // что он сейчас ест: вид рыбы-вещи ('fish', 'fish-fried'); пусто — не ест
+  eatLeft: t.boolean(),       // ест левой рукой
   recent: t.array('string'),  // хвосты последних рыб — над ведром, когда оно у него в руке
 }, 'PlayerState');
 export type PlayerState = SchemaType<typeof PlayerState>;
@@ -30,12 +32,14 @@ export const GroundState = schema({
   x: t.int16(),               // где лежит на карте
   y: t.int16(),
   lit: t.boolean(),           // горит (лампа)
-  fish: t.string(),           // хвосты рыб над ведром: id через запятую
+  fish: t.string(),           // ведро — хвосты рыб над ним (id через запятую), рыба — её вид
+  end: t.string(),            // рыба: за ней пришла чайка или кот ('gull', 'cat') или она тает ('fade'); пусто — лежит
 }, 'GroundState');
 export type GroundState = SchemaType<typeof GroundState>;
 
 export const PierState = schema({
   players: t.map(PlayerState),   // ключ — sessionId соединения
   ground: t.map(GroundState),    // ключ — id вещи строкой; земля одна на все копии причала
+  fire: t.boolean(),             // костёр горит (гаснет под дождём, разжигает игрок); один на все копии причала
 }, 'PierState');
 export type PierState = SchemaType<typeof PierState>;

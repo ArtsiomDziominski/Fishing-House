@@ -201,15 +201,18 @@ export const ITEMS = (() => {
     return nearest(hero, [...ground].filter(g => g.kind === 'lamp'), slack);
   }
 
-  // Взять вещь из рюкзака в руку side. Руку не назвали — в свободную, правую первой, а заняты обе — в правую. Что было
-  // в этой руке (или тяжёлое в обеих), уходит в рюкзак: туда, где лежало, а занято — на место взятой или на первое
-  // свободное. back — они же на новых местах. Тяжёлую берут только в пустые руки — сами руки игрок не освобождает.
-  // Отказ строкой: none — такой вещи нет, hands — для тяжёлой нужны обе свободные руки, full — прежние вещи некуда деть.
-  function take(g: Grid, items: readonly Item[], hands: readonly Item[], id: number, side?: Hand): { list: Item[]; hands: Item[]; back: Item[] } | 'none' | 'hands' | 'full' {
+  // Взять вещь из рюкзака в руку side. Руку не назвали — в свободную, правую первой, а заняты обе — в правую (в ней сырая
+  // рыба — в левую). Что было в этой руке (или тяжёлое в обеих), уходит в рюкзак: туда, где лежало, а занято — на место
+  // взятой или на первое свободное. back — они же на новых местах. Тяжёлую берут только в пустые руки — сами руки игрок не освобождает.
+  // Отказ строкой: none — такой вещи нет, hands — для тяжёлой нужны обе свободные руки, full — прежние вещи некуда деть,
+  // raw — в этой руке сырая рыба, а её в рюкзак не убрать.
+  function take(g: Grid, items: readonly Item[], hands: readonly Item[], id: number, side?: Hand): { list: Item[]; hands: Item[]; back: Item[] } | 'none' | 'hands' | 'full' | 'raw' {
     const it = items.find(i => i.id === id); if (!it) return 'none';
-    const heavy = weight(it.kind) > 1, to: Hand = heavy ? 'right' : side ?? handFor(hands, it.kind) ?? 'right';
+    const rawIn = (h: Hand) => hands.some(o => sideOf(o) === h && !packable(o.kind));
+    const heavy = weight(it.kind) > 1, to: Hand = heavy ? 'right' : side ?? handFor(hands, it.kind) ?? (rawIn('right') ? 'left' : 'right');
     if (heavy && hands.length) return 'hands';
     const out = hands.filter(h => weight(h.kind) > 1 || sideOf(h) === to), keep = hands.filter(h => !out.includes(h));
+    if (out.some(o => !packable(o.kind))) return 'raw';
     const list = items.filter(i => i !== it), back: Item[] = [];
     for (const o of out) {
       const at = [{ x: o.x, y: o.y, rot: o.rot }, { x: it.x, y: it.y, rot: o.rot }].find(p => fits(g, list, o.kind, p.x, p.y, p.rot)) || spot(g, list, o.kind);

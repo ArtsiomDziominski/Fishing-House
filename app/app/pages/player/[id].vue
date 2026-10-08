@@ -1,4 +1,4 @@
-<!-- Публичный профиль: кто угодно, зная id игрока, видит его деньги, ведро и последние уловы. -->
+<!-- Публичный профиль: кто угодно, зная id игрока, видит его деньги, весь улов (и съеденный, и пропавший во сне) и последние уловы. -->
 <script setup lang="ts">
 import { FISH } from '@fh/shared';
 import type { Profile } from '@fh/shared/server';
@@ -38,12 +38,12 @@ async function copyLink() {
 
       <section class="stats">
         <div><span class="muted">Деньги</span><b>{{ money(p.money) }}</b></div>
-        <div><span class="muted">Рыб в ведре</span><b>{{ p.bag.total }}</b></div>
+        <div><span class="muted">Рыб поймано</span><b>{{ p.bag.total }}</b></div>
         <div><span class="muted">Общий вес</span><b>{{ p.bag.total ? FISH.weightText(p.bag.grams) : '—' }}</b></div>
       </section>
 
       <section>
-        <h2>Ведро</h2>
+        <h2>Улов</h2>
         <CatchList :bag="p.bag" />
       </section>
 

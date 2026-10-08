@@ -237,6 +237,12 @@ test('рыба из ведра — лёгкая вещь в одну клетк�
   const fried: Item = { ...raw, kind: 'fish-fried' };
   const r = ITEMS.stow(g, [], [fried], 50)!;
   assert.ok(r && r.hands.length === 0 && r.item.fish === 'roach', 'жареная рыба легла в рюкзак и помнит свой вид');
+  // сырую рыбу и другая вещь из рук в рюкзак не вытеснит: в ту руку не взять, а не назвали руку — встанет в другую
+  const [rod, , worms] = starter() as [Item, Item, Item], inRight: Item = { ...raw, left: false }, bucket: Item = { id: 60, kind: 'bucket', x: 0, y: 0, rot: false, left: true };
+  assert.equal(ITEMS.take(g, [rod], [inRight, bucket], rod.id, 'right'), 'raw');
+  assert.equal(ITEMS.take(g, [rod], [inRight, { ...raw, id: 51 }], rod.id), 'raw');            // сырая в обеих
+  const other = ITEMS.take(g, [rod], [inRight, { ...worms, left: true }], rod.id);
+  assert.ok(typeof other !== 'string' && other.hands.map(h => h.kind).join() === 'fish,' + rod.kind && other.back[0]?.id === worms.id, 'удочка — в левую, черви — в рюкзак, рыба осталась в правой');
 });
 
 test('рыбу зовут по её виду, а есть из рук начинают с жареной', () => {

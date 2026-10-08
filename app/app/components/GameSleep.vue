@@ -6,6 +6,8 @@ let timer: ReturnType<typeof setInterval> | undefined;
 onMounted(() => { timer = setInterval(() => { now.value = Date.now(); }, 250); });
 onBeforeUnmount(() => clearInterval(timer));
 
+// связь закрылась — чёрный экран уходит: под ним кнопки «Подключиться снова»; пока переподключаемся, он остаётся
+const inGame = computed(() => game.status === 'online' || game.status === 'reconnecting');
 const left = computed(() => Math.max(0, Math.ceil((game.hunger.until - now.value) / 1000)));
 const clock = computed(() => `${Math.floor(left.value / 60)}:${String(left.value % 60).padStart(2, '0')}`);
 // 1 рыба, 2 рыбы, 5 рыб
@@ -19,7 +21,7 @@ const lost = computed(() => {
 
 <template>
   <Transition name="sleep">
-    <div v-if="game.hunger.until" class="sleep" role="alertdialog" aria-live="assertive" aria-label="Ты уснул от голода">
+    <div v-if="game.hunger.until && inGame" class="sleep" role="alertdialog" aria-live="assertive" aria-label="Ты уснул от голода">
       <div class="zz" aria-hidden="true">z z z</div>
       <h2>Ты уснул от голода</h2>
       <p>{{ left ? `Проснёшься у своего дома, сытым, через ${clock}` : 'Просыпаешься…' }}</p>
@@ -30,7 +32,7 @@ const lost = computed(() => {
 
 <style scoped>
 .sleep {
-  position: fixed; inset: 0; z-index: 50;
+  position: fixed; inset: 0;                  /* поверх игры и рюкзака, но под окном связи — оно ниже на странице */
   display: grid; place-content: center; justify-items: center; gap: 10px; padding: 16px;
   background: #000; color: var(--paper); text-align: center;
 }

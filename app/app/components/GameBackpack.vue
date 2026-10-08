@@ -66,7 +66,7 @@ watch(grid, fit);
 // ---------- в руки и обратно ----------
 
 // Не хватает рук — прежние вещи сами уходят в рюкзак. Тяжёлую вещь берут только в пустые руки: их освобождает сам игрок.
-const TAKE_FAIL = { none: '', hands: 'Нужны обе свободные руки — сначала убери то, что в руках', full: 'Вещи из рук некуда положить — в рюкзаке тесно' };
+const TAKE_FAIL = { none: '', hands: 'Нужны обе свободные руки — сначала убери то, что в руках', full: 'Вещи из рук некуда положить — в рюкзаке тесно', raw: 'В этой руке сырая рыба, а её в рюкзак не убрать — съешь её или пожарь у костра' };
 function take(id: number, side?: Hand) {
   const r = ITEMS.take(grid.value, game.items, game.hands, id, side);
   if (typeof r === 'string') { if (TAKE_FAIL[r]) game.showToast(TAKE_FAIL[r], 'bad'); return; }
@@ -217,6 +217,8 @@ watch(() => game.packOpen, open => {
   cancel(); tap = null; selected.value = null; hover.value = null;
   if (open) fit();
 });
+// уснул от голода — окно закрывается (и клавиши рюкзака не слушаются, пока спит)
+watch(() => game.hunger.until, asleep => { if (asleep && game.packOpen) game.packOpen = false; });
 // отошёл от рюкзака, оставив его на земле, — окно закрывается
 watch(() => game.actions.open, near => {
   if (!near && game.packOpen) { game.packOpen = false; game.showToast('Рюкзак остался позади'); }
@@ -226,7 +228,7 @@ watch([() => game.items, () => game.hands], () => { if (selected.value !== null 
 
 // Клавиши ловим раньше движка: Esc при открытом рюкзаке закрывает его, а не поднимает рыбака с места.
 function key(ev: KeyboardEvent) {
-  if (ev.ctrlKey || ev.metaKey || ev.altKey) return;
+  if (ev.ctrlKey || ev.metaKey || ev.altKey || game.hunger.until) return;
   if ((ev.target as HTMLElement | null)?.closest?.('input, textarea, select')) return;
   if (ev.code === 'KeyI') { if (!ev.repeat) game.togglePack(); ev.preventDefault(); return; }
   if (!game.packOpen) return;
@@ -261,7 +263,7 @@ onBeforeUnmount(() => { removeEventListener('keydown', key, { capture: true }); 
         <p class="text">{{ ITEMS.info(shown.kind).text }}</p>
         <div v-if="selected === shown.id && !drag" class="buttons">
           <button v-if="inHand(shown.id) && ITEMS.packable(shown.kind)" type="button" @click="blur($event); stow(shown.id)">В рюкзак</button>
-          <template v-else>
+          <template v-else-if="!inHand(shown.id)">
             <button type="button" @click="blur($event); take(shown.id)">{{ heavy(shown.kind) ? 'В руки' : 'В руку' }}</button>
             <button v-if="ITEMS.turns(shown.kind)" type="button" @click="blur($event); rotate()"><kbd>R</kbd>Повернуть</button>
           </template>

@@ -102,3 +102,9 @@ export async function cookItems(db: Db, pid: string, ids: number[]): Promise<voi
 export async function eatItem(db: Db, pid: string, id: number): Promise<void> {
   await db.delete(items).where(and(eq(items.id, id), eq(items.playerId, pid)));
 }
+
+// Рыбу с земли унесла чайка, съел кот или она растаяла (SCRAPS) — вещи больше нет. Только пока она лежит на земле:
+// подняли — она уже чья-то в руке или в рюкзаке, и её не трогаем.
+export async function scrapItem(db: Db, id: number): Promise<void> {
+  await db.delete(items).where(and(eq(items.id, id), eq(items.ground, true), inArray(items.kind, ['fish', 'fish-fried'])));
+}

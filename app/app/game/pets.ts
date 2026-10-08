@@ -7,7 +7,7 @@
 // Кадры — пиксельные карты 1:1 в арт-пикселях (буква — цвет из PAL, точка — пусто), мордой вправо; влево — отражение.
 // Размер под героя 19×34: кот 12×9, собака 16×11. a — точка опоры: середина лап на нижнем ряду.
 
-import { World, DAY_LENGTH, NIGHT_HOURS, dayPart } from '@fh/shared';
+import { World, DAY_LENGTH, NIGHT_HOURS, SCRAPS, dayPart } from '@fh/shared';
 
 type Ctx = CanvasRenderingContext2D;
 interface Pt { x: number; y: number }
@@ -72,6 +72,28 @@ const CAT = {
     '.orrOrOrrwwo.',
     'oroyyyyyw.ww.',
     'o.........oo.',
+  ] },
+  eat: { a: [5, 8], rows: [                       // ест с земли: голова внизу, хвост трубой
+    '.o...........',
+    'O............',
+    'O............',
+    '.Oooooo.o..o.',
+    '.orOrOrorooro',
+    '.orOrOrorrrro',
+    '.oryyyyorrero',
+    '...rr.orryyyp',
+    '...oo.orrwwo.',
+  ] },
+  eat2: { a: [5, 8], rows: [                      // жуёт: хвост качнулся
+    '.............',
+    'oO...........',
+    '.O...........',
+    '.Oooooo.o..o.',
+    '.orOrOrorooro',
+    '.orOrOrorrrro',
+    '.oryyyyorrero',
+    '...rr.orryyyp',
+    '...oo.orrwwo.',
   ] },
 };
 const DOG = {
@@ -167,6 +189,9 @@ const NEAR = [24, 130];            // «поближе»: не ближе и н�
 const GRID = 2;                    // шаг сетки для поиска пути, арт-пикселей
 const AWAY = 26;                   // от костра, места рыбака, ведра и рюкзака держатся на таком расстоянии
 const BED = { x: 62, y: 8, gap: 20 };   // ночлег: у крыльца — на столько правее левого края дома и ниже его низа; друг от друга не ближе gap
+// Кот за рыбой: бежит к ней не медленнее trot и так, чтобы добежать за by секунд; ест, стоя лапами в side пикселях
+// от её середины, и жуёт chew раз в секунду; назад идёт от back[0] до back[1] секунд.
+const CHASE = { trot: 24, by: 2.5, side: 7, chew: 3, back: [2, 6] };
 
 const hash = (n: number, s: number) => { let h = (n * 374761393 + s * 668265263) | 0; h = (h ^ (h >>> 13)) * 1274126177 | 0; return ((h ^ (h >>> 16)) >>> 0) / 4294967296; };
 const ease = (k: number) => k * k * (3 - 2 * k);
@@ -307,7 +332,14 @@ export function petPlanner(room: Uint8Array, W: number, H: number, seed: number,
   }
   const toBed = (n: number, bed: Pt) => way('to' + n, spot(n), bed);
   const fromBed = (n: number, bed: Pt) => way('from' + n, bed, spot(n));
-  return { spots, spot, leg, ok, bedAt, toBed, fromBed };
+  // Путь между любыми точками: они встают на сетку (сдвиг не больше пикселя). Не запоминается — его запоминает тот, кто просил.
+  const snap = (p: Pt) => ({ x: Math.max(0, Math.min(W - 1, Math.round(p.x / GRID) * GRID)), y: Math.max(0, Math.min(H - 1, Math.round(p.y / GRID) * GRID)) });
+  function walk(a: Pt, b: Pt): Leg {
+    const path = route(snap(a), snap(b)), len = [0];
+    for (let i = 1; i < path.length; i++) len.push(len[i - 1]! + Math.hypot(path[i]!.x - path[i - 1]!.x, path[i]!.y - path[i - 1]!.y));
+    return { path, len, total: len[len.length - 1]! };
+  }
+  return { spots, spot, leg, ok, bedAt, toBed, fromBed, walk, snap };
 }
 interface Leg { path: Pt[]; len: number[]; total: number }
 
@@ -322,7 +354,11 @@ export function petNight(ms: number, fixed?: number) {
   return { night, still: false, sleep: sleep / 1000, wake: (d0 + NIGHT_HOURS.to * hourMs) / 1000 };
 }
 
-// at(ms) — что нарисовать в этот миг (ms — часы причала): по штуке на зверя, класть в общую очередь по y (лапы).
+// Кот за рыбой на земле (SCRAPS в shared, end 'cat'): где она лежит (x, y), когда за ней пришли (start) и когда её
+// не стало (gone; null — ещё лежит) — мс по часам причала. Кот один, и дело у него одно: новое сменяет прежнее.
+export interface Errand { id: number; x: number; y: number; start: number; gone: number | null }
+
+// Кот и собака: at(ms) — что нарисовать в этот миг (ms — часы причала): по штуке на зверя, класть в общую очередь по y (лапы).
 export function createPetsView() {
   const W = World.W, H = World.H, walk = World.walk.slice();
   const avoid = [{ x: World.fire.x, y: World.fire.y }, { x: World.seat.x, y: World.seat.y }, { x: World.bucket.baseX, y: World.bucket.baseY }, { x: World.pack.baseX, y: World.pack.baseY }];
@@ -359,63 +395,112 @@ export function createPetsView() {
     ctx.globalAlpha = 1;
   }
 
+  type Pet = typeof pets[number];
+  interface Pose { x: number; y: number; left: boolean; frame: string; lift: number; nap: boolean }
+  // Зверь на пути leg, пройдя d пикселей: u — секунд в пути (для шага), speed — его скорость; бегом (fast) — вприпрыжку.
+  // face — куда смотреть, если путь идёт прямо вверх или вниз.
+  function stride(p: Pet, leg: Leg, d: number, u: number, speed: number, fast: boolean, face: boolean): Pose {
+    const last = leg.path.length - 1; let k = 1;
+    while (k < last && leg.len[k]! < d) k++;
+    const a = leg.path[k - 1]!, b = leg.path[k]!, f = Math.min(1, (d - leg.len[k - 1]!) / Math.max(0.001, leg.len[k]! - leg.len[k - 1]!));
+    const pace = p.step * speed / p.speed, step = Math.floor(u * pace) % 2;
+    return { x: a.x + (b.x - a.x) * f, y: a.y + (b.y - a.y) * f, left: Math.abs(b.x - a.x) >= 1 ? b.x < a.x : face, frame: step ? 'walk2' : 'walk1', lift: fast ? step : 0, nap: false };
+  }
+
+  // Где зверь p (номер i) по своему распорядку в миг ms (часы причала) и что делает.
   // fixed — час, на котором время остановлено у этого игрока (?hour=22): тогда ночью звери просто спят на месте.
-  function at(ms: number, fixed?: number) {
-    const s = ms / 1000, out: { y: number; draw: (ctx: Ctx) => void }[] = [], dark = petNight(ms, fixed);
+  function routine(p: Pet, i: number, ms: number, fixed?: number): Pose {
+    const s = ms / 1000, dark = petNight(ms, fixed);
+    const shift = i * 7.3, t = s + shift, n = Math.floor(t / p.turn);
+    // bed — зверь у ночлега или идёт к нему. Вечером он доживает свой срок как обычно и с его места идёт спать;
+    // утром спит до начала первого целого срока и с ночлега идёт на место этого срока.
+    let u = t - n * p.turn, leg = p.plan.leg(n), bed = false;
+    if (p.bed && dark.still) { if (dark.night) { bed = true; u = Infinity; } }
+    else if (p.bed && dark.night) {
+      const n0 = Math.floor((dark.sleep + shift) / p.turn);
+      if (n > n0) { bed = true; leg = p.plan.toBed(n0, p.bed); u = t - (n0 + 1) * p.turn; }
+    } else if (p.bed) {
+      const n1 = Math.ceil((dark.wake + shift) / p.turn);
+      if (n < n1) { bed = true; u = Infinity; } else if (n === n1) leg = p.plan.fromBed(n1, p.bed);
+    }
+    const fast = leg.total / p.speed > p.turn * 0.7, speed = fast ? Math.min(p.run, leg.total / (p.turn * 0.7)) : p.speed;
+    const go = leg.total / speed;
+    const last = leg.path.length - 1;
+    const endFace = leg.path[last]!.x !== leg.path[last - 1]?.x ? leg.path[last]!.x < leg.path[last - 1]!.x : hash(n, p.seed + 3) < 0.5;
+    if (u < go) return stride(p, leg, u * speed, u, speed, fast, endFace);   // идёт или бежит
+    // на месте
+    const e = bed ? p.bed! : spot(p, n), v = u - go;
+    let left = endFace, frame = 'walk2', lift = 0, nap = false;
+    const r = hash(n, p.seed + 1); let act: Act = p.acts[0]![0], acc = 0;
+    for (const [a, w] of p.acts) { acc += w; if (r < acc) { act = a; break; } }
+    if (bed) {                                                       // пришёл на ночлег: сел, лёг, уснул
+      left = beds.some(b => b !== e && b.x < e.x);                   // спят мордами друг к другу
+      if (v > 0.6) frame = v < 1.8 ? 'sit' : 'lie';
+      nap = v > 3.5;
+    } else if (v > 0.6) {
+      if (act === 'jump') {                                          // прыгает на месте: подскок, пауза
+        const c = (v - 0.6) % 1.3, k = c / 0.5;
+        if (k < 1) { lift = Math.round(Math.sin(k * Math.PI) * 6); frame = lift > 1 ? 'jump' : 'walk2'; }
+        if (Math.floor((v - 0.6) / 1.3) % 3 === 2) { lift = 0; frame = 'sit'; }   // каждый третий раз — передышка
+      } else if (act === 'sniff') {                                  // нюхает землю, иногда поднимает голову и переступает
+        const c = Math.floor(v * 1.5);
+        frame = hash(n * 64 + c, p.seed + 4) < 0.7 ? 'sniff' : 'walk2';
+        if (hash(n * 64 + Math.floor(v / 3), p.seed + 5) < 0.3) left = !left;
+      } else if (act === 'lie') {
+        frame = v < 1.2 ? 'sit' : 'lie';
+        nap = v > 3 && p.art === CAT;
+      } else frame = 'sit';
+    }
+    return { x: e.x, y: e.y, left, frame, lift, nap };
+  }
+
+  // Дело кота — рыба на земле (Errand): откуда и как он бежит, где ест, как возвращается. ok — дойти до рыбы можно
+  // (рядом с ней есть где встать); нет — кот не идёт, рыбу показывают без него.
+  interface Job { id: number; ok: boolean; spot: Pt; left: boolean; go: Leg; speed: number; arrive: number; back: { leg: Leg; dur: number; at: number } | null }
+  let job: Job | null = null, catAt: Pose | null = null, eating: { id: number; side: -1 | 1; eaten: number } | null = null;
+  // Кот бросает свои дела и бежит к рыбе — оттуда, где он сейчас (catAt: и с прогулки, и с полпути назад от прежней рыбы).
+  // Ест, пока рыба лежит; её не стало (съел или подняли) — идёт туда, где был бы по распорядку, и дальше живёт как жил.
+  // null — дела нет или оно кончилось: кот там, где по распорядку.
+  function chase(p: Pet, i: number, e: Errand, ms: number, fixed: number | undefined, now: Pose): Pose | null {
+    if (job?.id !== e.id) {
+      const from = catAt ?? now, at = (sd: number) => p.plan.snap({ x: e.x + sd * CHASE.side, y: e.y });   // где встать с этого бока
+      const sides = ([-1, 1] as const).filter(sd => p.plan.ok(at(sd).x, at(sd).y));
+      sides.sort((a, b) => Math.abs(at(a).x - from.x) - Math.abs(at(b).x - from.x));   // с ближнего бока
+      const side = e.gone === null ? sides[0] : undefined;           // рыбу подняли раньше, чем мы её увидели, — бежать не к чему
+      const place = at(side ?? 0), go = p.plan.walk(from, place), speed = Math.max(CHASE.trot, go.total / CHASE.by);
+      job = { id: e.id, ok: side !== undefined, spot: place, left: side === 1, go, speed, arrive: go.total / speed, back: null };
+    }
+    if (!job.ok) return null;
+    const el = (ms - e.start) / 1000, gone = e.gone === null ? Infinity : (e.gone - e.start) / 1000;
+    if (el < Math.min(job.arrive, gone)) return stride(p, job.go, el * job.speed, el, job.speed, job.speed > p.speed * 1.5, job.left);   // бежит к рыбе
+    if (el < gone) {                                                 // ест
+      eating = { id: e.id, side: job.left ? 1 : -1, eaten: Math.min(1, (el - job.arrive) / Math.max(0.5, SCRAPS.TAKE.cat - job.arrive)) };
+      return { ...job.spot, left: job.left, frame: Math.floor((el - job.arrive) * CHASE.chew) % 2 ? 'eat2' : 'eat', lift: 0, nap: false };
+    }
+    if (!job.back) {                                                 // рыбы нет — назад, туда, где был бы к тому времени
+      const from = gone < job.arrive ? stride(p, job.go, gone * job.speed, 0, job.speed, false, job.left) : job.spot;
+      let dur = CHASE.back[0]!, leg = p.plan.walk(from, routine(p, i, e.gone! + dur * 1000, fixed));
+      dur = Math.max(CHASE.back[0]!, Math.min(CHASE.back[1]!, leg.total / p.run));
+      leg = p.plan.walk(from, routine(p, i, e.gone! + dur * 1000, fixed));
+      job.back = { leg, dur, at: gone };
+    }
+    const u = el - job.back.at, speed = job.back.leg.total / job.back.dur;
+    return u < job.back.dur ? stride(p, job.back.leg, u * speed, u, speed, speed > p.speed * 1.5, job.left) : null;
+  }
+
+  // at(ms) — что нарисовать в этот миг (ms — часы причала): по штуке на зверя, класть в общую очередь по y (лапы).
+  // errand — рыба на земле, за которой пришёл кот (null — не пришёл); как он её ест, говорит eat().
+  function at(ms: number, fixed?: number, errand: Errand | null = null) {
+    const s = ms / 1000, out: { y: number; draw: (ctx: Ctx) => void }[] = [];
+    eating = null;
     pets.forEach((p, i) => {
       if (!p.plan.spots.length) return;
-      const shift = i * 7.3, t = s + shift, n = Math.floor(t / p.turn);
-      // bed — зверь у ночлега или идёт к нему. Вечером он доживает свой срок как обычно и с его места идёт спать;
-      // утром спит до начала первого целого срока и с ночлега идёт на место этого срока.
-      let u = t - n * p.turn, leg = p.plan.leg(n), bed = false;
-      if (p.bed && dark.still) { if (dark.night) { bed = true; u = Infinity; } }
-      else if (p.bed && dark.night) {
-        const n0 = Math.floor((dark.sleep + shift) / p.turn);
-        if (n > n0) { bed = true; leg = p.plan.toBed(n0, p.bed); u = t - (n0 + 1) * p.turn; }
-      } else if (p.bed) {
-        const n1 = Math.ceil((dark.wake + shift) / p.turn);
-        if (n < n1) { bed = true; u = Infinity; } else if (n === n1) leg = p.plan.fromBed(n1, p.bed);
+      let pose = routine(p, i, ms, fixed);
+      if (p.art === CAT) {
+        if (errand) pose = chase(p, i, errand, ms, fixed, pose) ?? pose; else job = null;
+        catAt = pose;
       }
-      const fast = leg.total / p.speed > p.turn * 0.7, speed = fast ? Math.min(p.run, leg.total / (p.turn * 0.7)) : p.speed;
-      const go = leg.total / speed;
-      let x: number, y: number, left: boolean, frame: string, lift = 0, nap = false;
-      const last = leg.path.length - 1;
-      const endFace = leg.path[last]!.x !== leg.path[last - 1]?.x ? leg.path[last]!.x < leg.path[last - 1]!.x : hash(n, p.seed + 3) < 0.5;
-      if (u < go) {                                                    // идёт или бежит
-        const d = u * speed; let k = 1;
-        while (k < last && leg.len[k]! < d) k++;
-        const a = leg.path[k - 1]!, b = leg.path[k]!, f = (d - leg.len[k - 1]!) / Math.max(0.001, leg.len[k]! - leg.len[k - 1]!);
-        x = a.x + (b.x - a.x) * f; y = a.y + (b.y - a.y) * f;
-        left = Math.abs(b.x - a.x) >= 1 ? b.x < a.x : endFace;
-        const pace = p.step * speed / p.speed;
-        frame = Math.floor(u * pace) % 2 ? 'walk2' : 'walk1';
-        if (fast) lift = Math.floor(u * pace) % 2;                     // бегом — вприпрыжку
-      } else {                                                         // на месте
-        const e = bed ? p.bed! : spot(p, n), v = u - go;
-        x = e.x; y = e.y; left = endFace;
-        const r = hash(n, p.seed + 1); let act: Act = p.acts[0]![0], acc = 0;
-        for (const [a, w] of p.acts) { acc += w; if (r < acc) { act = a; break; } }
-        frame = 'walk2';
-        if (bed) {                                                     // пришёл на ночлег: сел, лёг, уснул
-          left = beds.some(b => b !== e && b.x < e.x);                 // спят мордами друг к другу
-          if (v > 0.6) frame = v < 1.8 ? 'sit' : 'lie';
-          nap = v > 3.5;
-        } else if (v > 0.6) {
-          if (act === 'jump') {                                        // прыгает на месте: подскок, пауза
-            const c = (v - 0.6) % 1.3, k = c / 0.5;
-            if (k < 1) { lift = Math.round(Math.sin(k * Math.PI) * 6); frame = lift > 1 ? 'jump' : 'walk2'; }
-            if (Math.floor((v - 0.6) / 1.3) % 3 === 2) { lift = 0; frame = 'sit'; }   // каждый третий раз — передышка
-          } else if (act === 'sniff') {                                // нюхает землю, иногда поднимает голову и переступает
-            const c = Math.floor(v * 1.5);
-            frame = hash(n * 64 + c, p.seed + 4) < 0.7 ? 'sniff' : 'walk2';
-            if (hash(n * 64 + Math.floor(v / 3), p.seed + 5) < 0.3) left = !left;
-          } else if (act === 'lie') {
-            frame = v < 1.2 ? 'sit' : 'lie';
-            nap = v > 3 && p.art === CAT;
-          } else frame = 'sit';
-        }
-      }
-      const art = p.sheet[frame]!, fx = x, fy = y, fl = left, fz = lift, sleepy = nap;
+      const art = p.sheet[pose.frame]!, { x: fx, y: fy, left: fl, lift: fz, nap: sleepy } = pose;
       out.push({ y: fy, draw: ctx => {
         put(ctx, art, fx, fy, fl, fz, p.shadow);
         if (sleepy) zzz(ctx, fl ? fx - 10 : fx, fy, s);
@@ -423,6 +508,11 @@ export function createPetsView() {
     });
     return out;
   }
-  const spot = (p: typeof pets[number], n: number) => p.plan.spot(n);
-  return { at };
+  // Кот ест рыбу id: с какого её бока (side: -1 — слева) и сколько уже съел (eaten, 0..1); null — не ест.
+  // Верно для последнего at().
+  const eat = () => eating;
+  // Видно ли, как кот идёт за рыбой id: рядом с ней есть где встать. Нет — её показывают без кота.
+  const shows = (id: number) => job?.id === id && job.ok;
+  const spot = (p: Pet, n: number) => p.plan.spot(n);
+  return { at, eat, shows };
 }

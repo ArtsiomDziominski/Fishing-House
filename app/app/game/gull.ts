@@ -2,6 +2,7 @@
 // Где она и что делает, считается от часов причала (их ведёт сервер), поэтому все игроки видят одну и ту же чайку.
 // Подойдёшь к столбу, на котором она сидит или куда садится, — улетит и вернётся позже. Спугивают её у каждого игрока свои
 // глаза: кто стоит рядом, клиент видит сам, так что у всех в комнате она улетает почти разом. Сидящего рыбака не боится.
+// За рыбой, выложенной на землю, прилетает другая чайка — воришка (thief): за какой рыбой и когда, решает сервер (SCRAPS).
 // Кадры — пиксельные карты 1:1 в арт-пикселях (буква — цвет из PAL, точка — пусто), клювом вправо; влево — отражение.
 
 // Столбы, на которые садится чайка: x, y — середина шляпки, где стоят лапы; base — низ столба у воды (по нему решаем, кто кого заслоняет).
@@ -87,6 +88,19 @@ const FRAMES = {
     '.......oGGo.....',
     '........oo......',
   ],
+  peck: [                          // клюёт с земли: шея вперёд, клюв у земли (лапы там же, где у сидящей)
+    '...............',
+    '...............',
+    '...............',
+    '..ooooo........',
+    '.oggggwooo.....',
+    'oGggggwWWWo....',
+    'oGGgggwwWWWoo..',
+    '.oGGGgwwwWWWWo.',
+    '..oooooooowWkWo',
+    '.........oWWWWy',
+    '.....f.f..ooo.r',
+  ],
 };
 type Frame = keyof typeof FRAMES;
 
@@ -102,6 +116,9 @@ const PLAN = {
   scareSpeed: 90,                  // спугнутая летит быстрее
 };
 const OFF = 24;                    // за краем карты чайку не видно
+// Чайка-воришка (рыба на земле, SCRAPS в shared): за ARRIVE секунд слетает к рыбе и садится в reach пикселях от неё, клюёт,
+// пока рыба лежит, и улетает со скоростью leave — с рыбой в клюве или ни с чем.
+const THIEF = { arrive: 2.4, reach: 8, peck: 0.45, leave: 90, side: 70 };
 
 const hash = (n: number, s: number) => { let h = (n * 374761393 + s * 668265263) | 0; h = (h ^ (h >>> 13)) * 1274126177 | 0; return ((h ^ (h >>> 16)) >>> 0) / 4294967296; };
 
@@ -183,5 +200,29 @@ export function createGullView(W: number) {
     const who = to >= 0 && lift / dur > 0.5 ? scarer(to, near) : undefined;   // садится туда, где кто-то стоит, — отворачивает на подлёте
     return who ? flee(shot.at, who) : shot;
   }
-  return { at };
+
+  // Чайка-воришка у рыбы f (id — номер рыбы: от него, откуда она прилетит). el — секунд с тех пор, как за рыбой прилетели;
+  // gone — через сколько секунд от того же начала рыбы на земле не стало (null — ещё лежит); taken — её унесла эта чайка,
+  // иначе рыбу подняли, и чайка улетает ни с чем. Пока рыба лежит, чайка клюёт её — хоть и дольше, чем ARRIVE: рыбы
+  // не стало, тогда и улетает. Возвращает кадр (сидящая — perched, base — по лапам) и beak — точку под клювом, где
+  // нарисовать рыбу (null — клюв пуст); null — чайки уже нет.
+  function thief(f: Pt, id: number, el: number, gone: number | null, taken: boolean): (Shot & { beak: Pt | null }) | null {
+    const right = f.x >= W / 2, face = right ? 1 : 0;   // прилетает сверху с ближнего края и смотрит на рыбу
+    const sky = { x: f.x + (right ? 1 : -1) * THIEF.side, y: -OFF - Math.round(hash(id, 21) * 30) };
+    const feet = { x: f.x + (right ? THIEF.reach : -THIEF.reach), y: f.y }, body = { x: feet.x, y: feet.y - (SIT.y - FLY.y) - 1 };
+    const sitting = (frame: Frame): Shot & { beak: Pt | null } => {
+      const img = art[frame][face]!;
+      return { img, x: feet.x - (face ? img.width - 1 - SIT.x : SIT.x), y: feet.y - SIT.y, perched: true, base: feet.y, beak: null };
+    };
+    const end = gone ?? Infinity;
+    if (el < Math.min(THIEF.arrive, end)) return { ...flying(sky, body, el / THIEF.arrive, el), beak: null };   // слетает к рыбе
+    if (el < end) return sitting((el - THIEF.arrive) % THIEF.peck < THIEF.peck * 0.55 ? 'peck' : 'sit');      // клюёт
+    // рыбы не стало — улетает оттуда, где была: с земли или прямо с подлёта, вверх и дальше в ту же сторону
+    const from = gone! < THIEF.arrive ? flying(sky, body, gone! / THIEF.arrive, gone!).at : body;
+    const away = { x: from.x + (right ? -1 : 1) * 160, y: -OFF - 10 }, dur = Math.hypot(away.x - from.x, away.y - from.y) / THIEF.leave;
+    const k = (el - gone!) / dur; if (k >= 1) return null;
+    const shot = flying(from, away, k, el - gone!), flip = away.x < from.x;
+    return { ...shot, beak: taken ? { x: shot.x + (flip ? 0 : shot.img.width - 1), y: shot.y + FLY.y + 1 } : null };
+  }
+  return { at, thief };
 }

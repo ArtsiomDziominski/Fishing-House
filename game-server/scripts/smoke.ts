@@ -1,13 +1,15 @@
 // Проверка игрового сервера целиком: бот заводит игрока в базе, входит по билету (ведро у него в руке), идёт за рюкзаком,
 // перекладывает вещи в рюкзаке и берёт их в руку, ставит и поднимает ведро, выкладывает их на землю и поднимает (и чужие — в другой копии причала), несёт всё к причалу, садится и ловит рыбу;
-// достаёт рыбу из ведра, жарит её у костра и съедает, а голодным засыпает и просыпается у дома; заодно проверяет, что телепорт сервер не принимает.
+// достаёт рыбу из ведра, жарит её у костра (в дождь костёр гаснет, и его разжигают) и съедает, выложенную на землю рыбу уносит чайка,
+// а голодным засыпает и просыпается у дома;
+// заодно проверяет, что телепорт сервер не принимает.
 //
 //   npm run smoke -w game-server            (нужны запущенные база и игровой сервер, .env с DATABASE_URL и GAME_SECRET)
 //   GAME_URL=http://localhost:2567 npm run smoke -w game-server
 //   npm run smoke:own -w game-server        (то же, но сервер бот поднимает сам — smoke-own.ts)
 
 import { Client, type Room } from '@colyseus/sdk';
-import { World, ITEMS, HUNGER, ROOM, DAY_LENGTH, WEATHERS, REACH, dayHour, weatherText, dist, seat, standPoint, homePoint, type Bag, type GroundView, type Item, type PlayerView, type ServerMessages, type WorldState } from '@fh/shared';
+import { World, ITEMS, HUNGER, SCRAPS, FIRE, ROOM, DAY_LENGTH, WEATHERS, REACH, dayHour, weatherText, dist, seat, standPoint, homePoint, type Bag, type GroundView, type Item, type PlayerView, type ServerMessages, type WorldState } from '@fh/shared';
 import { createDb, createAccount, issueTicket, getProfile, loadItems, loadGround, loadPlayer, saveWorld, recordCatch } from '@fh/shared/server';
 
 const url = process.env.GAME_URL || 'http://localhost:2567';
@@ -457,13 +459,38 @@ items = null;
 again.send('itemStow', { id: raw.id, at: null });
 await until('отказ убрать сырую рыбу', () => !!items);
 check(items!.note === 'raw' && items!.hands.some(it => it.id === raw.id), 'сырую рыбу в рюкзак не убрать');
+const bait = thing(items!.list, 'worms');
+items = null;
+again.send('itemTake', { id: bait.id, left: false });
+await until('отказ взять червей в руку с рыбой', () => !!items);
+check(items!.note === 'raw' && items!.hands.some(it => it.id === raw.id) && items!.list.some(it => it.id === bait.id), 'в руку с сырой рыбой другую вещь не взять — рыба в рюкзак не уходит');
 again.send('stand');
 const at = { ...standPoint() };
 await walk(World.nearestWalkable(World.fire.x - 24, World.fire.y + 2)!, again, at);
+const fireNow = () => (again.state as { fire?: boolean }).fire;
+// костёр под дождём: через FIRE.douse с он гаснет у всех, у погасшего не жарят, под дождём его не разжечь; без дождя — разжигают
+if (before.canSet) {
+  again.send('weather', { kind: 'rain', wind: false });
+  await until('костёр погас', () => fireNow() === false, (FIRE.douse + 3) * 1000);
+  check(true, `дождь шёл ${FIRE.douse} с — костёр погас`);
+  again.send('rest');
+  await until('сел у погасшего костра', () => hand()?.rest === true);
+  await sleep((HUNGER.COOK + 1) * 1000);
+  check(hand()?.hand === 'fish', 'у погасшего костра рыба не жарится');
+  again.send('kindle');
+  await sleep(400);
+  check(fireNow() === false, 'под дождём костёр не разжечь');
+  again.send('weather', { kind: 'clear', wind: false });
+  await sleep(300);
+  again.send('kindle');
+  await until('костёр горит', () => fireNow() === true);
+  check(true, 'дождь кончился — костёр разожгли, он снова горит');
+} else if (fireNow() === false) again.send('kindle');   // погас под дождём по расписанию — разжигаем, если дождь кончился
 again.send('rest');
 await until('сел у костра', () => hand()?.rest === true);
 await until('рыба пожарилась', () => food.some(f => f.e === 'cooked') && hand()?.hand === 'fish-fried', (HUNGER.COOK + 4) * 1000);
 check( food.find(f => f.e === 'cooked')!.fish === caught, `у костра рыба пожарилась за ${HUNGER.COOK} с`);
+if (before.canSet) again.send('weather', { kind: was.fixKind, wind: was.fixWind });   // погода — как была
 items = null;
 again.send('eat', {});
 await until('съел', () => food.some(f => f.e === 'ate') && !!items && hand()?.hand === '');
@@ -472,6 +499,91 @@ await sleep(300);
 check(!(await loadItems(db, me.id)).hands.some(it => ITEMS.isFish(it.kind)) && (await getProfile(db, me.id))!.bag.total === 1, 'в базе рыбы больше нет, а в профиле улов прежний');
 await again.leave();
 await sleep(500);
+
+// жуёт рыбу HUNGER.EAT секунд — это в состоянии комнаты, его видят все; вторую рыбу в это время не съесть
+{
+  const eater = await createAccount(db, 'едок_' + Math.random().toString(36).slice(2, 8), 'не-для-входа');
+  for (let i = 0; i < 2; i++) await recordCatch(db, eater.id, { id: 'roach', grams: 100 + i });
+  const r: Room = await client.joinOrCreate(ROOM, { ticket: issueTicket(eater.id, eater.name) });
+  let plate: ServerMessages['items'] | null = null;
+  const ate: ServerMessages['food'][] = [];
+  r.onMessage('items', (m: ServerMessages['items']) => { plate = m; });
+  r.onMessage('food', (m: ServerMessages['food']) => { ate.push(m); });
+  for (const type of ['self', 'bag', 'fish', 'clock', 'weather', 'hunger']) r.onMessage(type, () => {});
+  const seen = () => (r.state as { players: { get(sid: string): PlayerView | undefined } }).players.get(r.sessionId);
+  const take = async () => { plate = null; r.send('fishTake', { species: 'roach' }); await until('рыбу у едока', () => !!plate && plate.hands.some(it => it.kind === 'fish' && it.id > 0)); };
+  await until('едока в комнате', () => !!plate && !!seen());
+  await take();
+  r.send('eat', {});
+  await until('едок жуёт', () => seen()?.eat === 'fish');
+  check(!seen()!.eatLeft && seen()!.hand === '' && ate.length === 1, 'съел сырую рыбу из правой руки — в комнате видно, что он жуёт');
+  await take();
+  r.send('eat', {});
+  await sleep(200);
+  check(seen()?.eat === 'fish' && seen()!.hand === 'fish' && ate.length === 1, 'пока жуёт, вторую рыбу не съесть — она остаётся в руке');
+  await until('едок доел', () => seen()?.eat === '', (HUNGER.EAT + 2) * 1000);
+  r.send('eat', {});
+  await until('вторую съел', () => ate.length === 2 && seen()?.eat === 'fish');
+  check(seen()!.hand === '', `через ${HUNGER.EAT} с доел — и вторую уже можно`);
+  await r.leave();
+  await sleep(300);
+}
+
+// рыба на земле (SCRAPS): чайка её уносит, кот съедает или она тает — и её нет ни на земле, ни в базе; подняли, пока за ней
+// шли, — она у того, кто поднял. Когда за рыбой придут, сервер решает сам (SCRAPS.fate), а в разработке зовут сразу (scrap).
+{
+  const host = await createAccount(db, 'рыбак_' + Math.random().toString(36).slice(2, 8), 'не-для-входа');
+  for (let i = 0; i < 3; i++) await recordCatch(db, host.id, { id: 'roach', grams: 100 + i });
+  const r: Room = await client.joinOrCreate(ROOM, { ticket: issueTicket(host.id, host.name) });
+  let plate: ServerMessages['items'] | null = null;
+  r.onMessage('items', (m: ServerMessages['items']) => { plate = m; });
+  for (const type of ['self', 'bag', 'fish', 'clock', 'weather', 'hunger', 'food']) r.onMessage(type, () => {});
+  const lying = (id: number) => onGround(id, r);
+  const stored = async (id: number) => (await loadGround(db)).some(g => g.id === id) || (await loadItems(db, host.id)).hands.some(it => it.id === id);
+  await until('рыбака в комнате', () => !!plate);
+  r.send('stand');
+  await sleep(300);
+  const drop = async () => {                             // рыбу из ведра — в руку и на землю у ног
+    plate = null;
+    r.send('fishTake', { species: 'roach' });
+    await until('рыбу у рыбака', () => !!plate && plate.hands.some(it => it.kind === 'fish' && it.id > 0));
+    const f = plate!.hands.find(it => it.kind === 'fish')!;
+    r.send('itemDrop', { id: f.id });
+    await until('рыбу на земле', () => lying(f.id)?.kind === 'fish');
+    await sleep(300);                                    // записалась в базу: теперь её можно поднять
+    return f;
+  };
+  const a = await drop();
+  check(lying(a.id)!.end === '' && lying(a.id)!.fish === 'roach', 'рыба лежит на земле, за ней пока никто не пришёл');
+  if (before.canSet) {
+    r.send('scrap', { id: a.id, by: 'gull' });
+    await until('чайку', () => lying(a.id)?.end === 'gull');
+    check(await stored(a.id), 'за рыбой прилетела чайка — это видно всем, а рыба пока на месте');
+    await until('чайка унесла', () => !lying(a.id), (SCRAPS.TAKE.gull + 3) * 1000);
+    await sleep(300);
+    check(!(await stored(a.id)), `через ${SCRAPS.TAKE.gull} с чайка унесла рыбу — её нет ни на земле, ни в базе`);
+    const b = await drop();
+    r.send('scrap', { id: b.id, by: 'cat' });
+    await until('кота', () => lying(b.id)?.end === 'cat');
+    plate = null;
+    r.send('itemPick', { id: b.id });
+    await until('рыбу снова в руке', () => !!plate && plate.hands.some(it => it.id === b.id));
+    await sleep((SCRAPS.TAKE.cat + 1) * 1000);
+    check(!lying(b.id) && (await loadItems(db, host.id)).hands.some(it => it.id === b.id), 'кот шёл за рыбой, но её подняли — она в руке и в базе, кот ушёл ни с чем');
+    const pailId = plate!.hands.find(it => ITEMS.isBucket(it.kind))!.id;
+    r.send('itemDrop', { id: pailId });
+    await until('ведро на земле', () => !!lying(pailId));
+    r.send('scrap', { id: pailId, by: 'fade' });
+    await sleep(400);
+    check(lying(pailId)?.end === '', 'не рыбу звери не трогают: ведро на земле лежит как лежало');
+  } else {
+    r.send('scrap', { id: a.id, by: 'gull' });
+    await sleep(400);
+    check(lying(a.id)?.end === '', 'звать зверя к рыбе с клиента нельзя — сервер не слушает');
+  }
+  await r.leave();
+  await sleep(300);
+}
 
 // голод: сытость на нуле почти три минуты — входим, и герой засыпает; спит — ходить нельзя, треть рыбы из ведра пропадает
 for (let i = 0; i < 10; i++) await recordCatch(db, me.id, { id: 'roach', grams: 100 + i });

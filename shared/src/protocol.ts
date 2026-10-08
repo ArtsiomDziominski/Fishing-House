@@ -5,6 +5,7 @@ import type { FishingEvent } from './fishing.ts';
 import type { Item, ItemKind, Place } from './items.ts';
 import type { PackKind } from './packs.ts';
 import type { Dir, WorldState } from './rules.ts';
+import type { ScrapEnd } from './scraps.ts';
 import type { Weather, WeatherKind } from './weather.ts';
 
 export const ROOM = 'pier';             // комната-причал; когда в ней тесно, сервер открывает ещё одну такую же
@@ -31,6 +32,7 @@ export interface ClientMessages {
   move: { x: number; y: number; dir: Dir };   // где герой сейчас
   sit: void;                                  // сесть на край причала; ведро в руке остаётся в руке (рисуется рядом с рыбаком)
   rest: void;                                 // сесть у костра — там, где стоишь; встают тем же stand или просто уходят
+  kindle: void;                               // разжечь погасший костёр: стоя или сидя у огня, когда нет дождя
   stand: void;                                // встать
   press: void;                                // забросить, подсечь — как F или пробел
   packOn: void;                               // надеть рюкзак (он должен лежать рядом)
@@ -46,6 +48,7 @@ export interface ClientMessages {
   fishTake: { species: string; left?: boolean };   // достать рыбу этого вида из ведра (в руке или на земле рядом) в руку left; не назвали — в свободную
   eat: { left?: boolean };                    // съесть рыбу из руки left (не назвали — жареную первой, потом сырую)
   itemGive: { kind: ItemKind };               // положить в рюкзак новую вещь. Только в разработке
+  scrap: { id: number; by: ScrapEnd };        // позвать к рыбе на земле чайку или кота (или дать ей растаять) прямо сейчас. Только в разработке
   clock: { hour: number | null };             // перевести часы причала на этот час — сразу у всех; null — настоящее время. Только в разработке
   weather: { kind: WeatherKind | null; wind: boolean | null };   // выставить погоду и ветер — сразу у всех; null — по расписанию. Только в разработке
 }
@@ -88,12 +91,14 @@ export interface PlayerView {
                                                             // Тяжёлая вещь — только в hand (держат её двумя руками)
   lamp: boolean;                                            // лампа у него в руке зажжена и светит
   sleep: boolean;                                           // спит от голода
+  eat: string; eatLeft: boolean;                            // что он сейчас ест ('fish', 'fish-fried'; пусто — не ест) и какой рукой
   recent: ArrayLike<string>;                                // хвосты последних рыб — над ведром, если оно у него в руке
 }
 
 // Вещь на земле, как её видят все в состоянии комнаты (ключ — её id строкой). Поля совпадают с GroundState
-// в game-server/src/state.ts. Земля одна на все копии причала и не пустеет, когда игрок уходит. fish — хвосты рыб над ведром.
-export interface GroundView { kind: string; x: number; y: number; lit: boolean; fish: string }
+// в game-server/src/state.ts. Земля одна на все копии причала и не пустеет, когда игрок уходит. fish — у ведра хвосты рыб над ним, у рыбы — её вид.
+// end — у рыбы: за ней пришла чайка или кот, или она тает (ScrapEnd в scraps.ts); пусто — лежит.
+export interface GroundView { kind: string; x: number; y: number; lit: boolean; fish: string; end: string }
 
 // Почему сервер закрыл соединение.
 export const KICK = { replaced: 'replaced' } as const;

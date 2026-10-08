@@ -17,6 +17,7 @@ export const HUNGER = (() => {
   const LOSS = 0.3;                      // какая доля рыбы из ведра пропадает, пока герой спит
   const LOW = 25;                        // ниже этого герою хочется есть — пора к костру
   const COOK = 8;                        // секунд сидеть у костра с сырой рыбой в руке, пока она не пожарится
+  const EAT = 1.5;                       // секунд герой ест рыбу: столько его видят жующим, и вторую в это время не съесть
   const RAW = 10;                        // сколько даёт сырая рыба
   const SIMPLE = 'roach';                // самая простая рыба: жареная даёт только половину
   // Сколько сытости даёт рыба species: сырая (cooked = false) или жареная.
@@ -28,5 +29,5 @@ export const HUNGER = (() => {
   const lost = (n: number) => Math.floor(n * LOSS);
   // Во сколько раз быстрее или медленнее обычного ходит герой.
   const pace = (food: number) => (food > 0 ? 1 : SLOW);
-  return { MAX, DAYLIGHT, DRAIN, STARVE, SLEEP, SLOW, LOSS, LOW, COOK, RAW, SIMPLE, gain, eat, drain, lost, pace };
+  return { MAX, DAYLIGHT, DRAIN, STARVE, SLEEP, SLOW, LOSS, LOW, COOK, EAT, RAW, SIMPLE, gain, eat, drain, lost, pace };
 })();

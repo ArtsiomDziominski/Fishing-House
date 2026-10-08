@@ -231,6 +231,27 @@ export function heldPlace(s: HeldSprite, hand: { x: number; y: number; out: -1 |
   return { img: v.img[flip ? 1 : 0], w: v.w, h: v.h, x: hand.x - gx, y: Math.min(hand.y - v.grip[1], floor - v.h + 1) };
 }
 
+// Рыба, которую едят: её держат за хвост головой вверх, у рта, и с каждым укусом (bites: 0..2) она короче — сверху
+// след зубов и мякоть (f). Съедена (bites 3) — null. Цвета — как у рыбы в руке: сырая или жареная.
+const EATEN = [
+  ['..o..', '.oco.', '.obo.', 'obcdo', 'obcdo', 'obcdo', 'obcdo', '.obo.', '.ooo.', 'o...o'],
+  ['.o.o.', 'ofdfo', 'obcdo', 'obcdo', '.obo.', '.ooo.', 'o...o'],
+  ['.o.o.', '.ofo.', '.ooo.', 'o...o'],
+];
+const FLESH: Record<string, string> = { 'fish': 'efc9b8', 'fish-fried': 'f6dfae' };
+const eaten = new Map<string, HTMLCanvasElement | null>();
+export function eatenSprite(kind: string, bites: number): HTMLCanvasElement | null {
+  const key = kind + bites;
+  let c = eaten.get(key);
+  if (c !== undefined) return c;
+  const art = (HELD as Record<string, HeldArt | undefined>)[kind], map = EATEN[bites];
+  c = art && map && FLESH[kind] ? paint({ ...art, pal: { ...art.pal, f: FLESH[kind]! }, map }, false) : null;
+  eaten.set(key, c);
+  return c;
+}
+// Крошки от укуса — цвета боков и брюха этой рыбы.
+export const crumbColors = (kind: string) => { const p = (HELD as Record<string, HeldArt | undefined>)[kind]?.pal; return p ? ['#' + p.c, '#' + p.d] : ['#e4e8e4']; };
+
 // Вещь на земле: лампа стоит, как в руке, а длинное (удочки, невод, топор) лежит плашмя — картинка руки, повёрнутая на
 // четверть оборота. Низ картинки — то место, где вещь касается земли. lit — горит ли лампа.
 export interface GroundSprite { img: HTMLCanvasElement; w: number; h: number }
