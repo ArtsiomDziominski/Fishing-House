@@ -1,8 +1,9 @@
 // Вещи в рюкзаке: удочки, сети, топор, лампа и мелочь для рыбалки. Каждая занимает прямоугольник клеток в сетке рюкзака:
 // мелочь — одну клетку, сачок и топор — две, удочка и большие сети — четыре. Вещь можно повернуть на четверть
 // оборота — ширина и высота меняются местами. Сколько клеток в рюкзаке, знает его вид (PACKS.grid).
-// Где что лежит, решает и хранит сервер; клиент только просит переложить и по тем же правилам заранее подсвечивает,
-// куда вещь встанет. Картинки — в app/app/game/items-art.ts.
+// Одну вещь герой держит в руке: её берут из рюкзака и убирают обратно; пока она в руке, клеток не занимает,
+// но помнит, где лежала. Лампу из руки можно поставить на землю и взять обратно; горит она только в руке или на земле. Где что лежит, решает и хранит сервер; клиент только просит переложить и по тем же правилам
+// заранее подсвечивает, куда вещь встанет. Картинки — в app/app/game/items-art.ts.
 
 import { PACKS, type PackKind } from './packs.ts';
 import { REACH, dist, type PackState } from './rules.ts';
@@ -38,7 +39,7 @@ export const ITEMS = (() => {
     'net-cast': { name: 'Сеть-накидка', group: 'net', w: 2, h: 2, text: 'Бросают кругом, по краю грузила.' },
     'net-seine': { name: 'Невод', group: 'net', w: 4, h: 1, text: 'Длинная сеть с поплавками и грузилами.' },
     'axe': { name: 'Топор', group: 'tool', w: 2, h: 1, text: 'Нарубить сучьев и наколоть дров.' },
-    'lamp': { name: 'Походная лампа', group: 'tool', w: 1, h: 1, text: 'Керосиновая, с ручкой. С ней и ночью не темно.' },
+    'lamp': { name: 'Походная лампа', group: 'tool', w: 1, h: 1, text: 'Керосиновая, с ручкой. Светит в руке или на земле, в рюкзаке — нет.' },
     'worms': { name: 'Банка червей', group: 'tackle', w: 1, h: 1, text: 'Свежие, с огорода.' },
     'floats': { name: 'Поплавки', group: 'tackle', w: 1, h: 1, text: 'Красный и синий, на запас.' },
   };
@@ -108,10 +109,37 @@ export const ITEMS = (() => {
     }
     return { list, moved };
   }
-  // Есть ли в рюкзаке лампа: ночью она светит вокруг рюкзака — на спине героя или там, где он лежит.
-  const lit = (items: readonly Item[]) => items.some(it => it.kind === 'lamp');
+  // Какую вещь можно поставить из руки на землю. Пока только лампу. У вещи на земле x и y — место на карте, а не клетка.
+  const stands = (kind: ItemKind) => kind === 'lamp';
+  // Лампа светит, только когда она в руке или стоит на земле (и зажжена). В рюкзаке лампа не горит.
+  const lampOut = (hand: Item | null, ground: Item | null) => hand?.kind === 'lamp' || ground?.kind === 'lamp';
+  // Зажечь и погасить лампу можно, когда она под рукой: в руке или стоит на земле рядом. slack — запас сервера на рывки сети.
+  const lampNear = (hero: Point, hand: Item | null, ground: Item | null, slack = 0) => hand?.kind === 'lamp' || ground?.kind === 'lamp' && dist(hero, ground) <= REACH + slack;
+
+  // Взять вещь из рюкзака в руку. Рука занята — прежняя вещь уходит в рюкзак: на место взятой, если встаёт, иначе туда,
+  // где лежала раньше, иначе на первое свободное. back — она же на новом месте. null — такой вещи нет или прежнюю некуда деть.
+  function take(g: Grid, items: readonly Item[], hand: Item | null, id: number): { list: Item[]; hand: Item; back: Item | null } | null {
+    const it = items.find(i => i.id === id); if (!it) return null;
+    const list = items.filter(i => i !== it);
+    if (!hand) return { list, hand: it, back: null };
+    const at = [{ x: it.x, y: it.y, rot: hand.rot }, { x: hand.x, y: hand.y, rot: hand.rot }].find(p => fits(g, list, hand.kind, p.x, p.y, p.rot)) || spot(g, list, hand.kind);
+    if (!at) return null;
+    const back = { ...hand, ...at };
+    return { list: [...list, back], hand: it, back };
+  }
+  // Убрать вещь из руки в рюкзак: в названную клетку (at) или, если её не назвали, туда, где лежала, а занято — на первое
+  // свободное место. item — она же на новом месте. null — рука пуста или вещь не встаёт.
+  function stow(g: Grid, items: readonly Item[], hand: Item | null, at: Place | null = null): { list: Item[]; item: Item } | null {
+    if (!hand) return null;
+    let p: Place | null;
+    if (at) p = fits(g, items, hand.kind, at.x, at.y, at.rot && turns(hand.kind)) ? { x: at.x, y: at.y, rot: at.rot && turns(hand.kind) } : null;
+    else p = fits(g, items, hand.kind, hand.x, hand.y, hand.rot) ? { x: hand.x, y: hand.y, rot: hand.rot } : spot(g, items, hand.kind);
+    if (!p) return null;
+    const item = { ...hand, ...p };
+    return { list: [...items, item], item };
+  }
   // Сколько клеток занято.
   const used = (items: readonly Item[]) => items.reduce((n, it) => n + cells(it.kind), 0);
 
-  return { STARTER, isKind, info, size, cells, grid, turns, fits, spot, repack, settle, used, lit };
+  return { STARTER, isKind, info, size, cells, grid, turns, fits, spot, repack, settle, used, stands, lampOut, lampNear, take, stow };
 })();

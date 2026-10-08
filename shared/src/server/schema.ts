@@ -3,7 +3,7 @@
 // users   — учётные записи: имя для входа и хеш пароля. Наружу не отдаётся никогда.
 // players — игровой профиль: публичный id, имя, деньги, где игрок оставил героя и ведро.
 // catches — каждая пойманная рыба. Из неё собирается ведро и рекорды.
-// items   — вещи в рюкзаке игрока: что это и в какой клетке сетки лежит (правила — shared/src/items.ts).
+// items   — вещи игрока: что это и в какой клетке сетки рюкзака лежит или что она в руке (правила — shared/src/items.ts).
 
 import { sql } from 'drizzle-orm';
 import { bigserial, boolean, index, integer, jsonb, pgTable, serial, smallint, text, timestamp, uniqueIndex } from 'drizzle-orm/pg-core';
@@ -42,6 +42,8 @@ export const items = pgTable('items', {
   x: smallint('x').notNull(),                                      // левая верхняя клетка в сетке рюкзака
   y: smallint('y').notNull(),
   rot: boolean('rot').notNull().default(false),                    // повёрнута на четверть оборота
+  held: boolean('held').notNull().default(false),                  // в руке у героя, а не в рюкзаке; x, y, rot — где лежала до того
+  ground: boolean('ground').notNull().default(false),              // стоит на земле (лампа); тогда x, y — место на карте
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 }, t => [index('items_player_idx').on(t.playerId)]);
 

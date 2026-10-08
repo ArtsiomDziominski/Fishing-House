@@ -1,0 +1,1 @@
+ALTER TABLE "items" ADD COLUMN "ground" boolean DEFAULT false NOT NULL;

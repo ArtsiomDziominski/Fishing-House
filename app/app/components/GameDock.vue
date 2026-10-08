@@ -1,24 +1,12 @@
-<!-- Низ экрана: кнопки действий (то же, что E, Q, I, L, F и Esc) и подсказка по управлению. -->
+<!-- Низ экрана: кнопки действий (то же, что E, Q, I, L, G, F и Esc) и подсказка по управлению. -->
 <script setup lang="ts">
-import { ITEMS } from '@fh/shared';
-
-const emit = defineEmits<{ bucket: []; pack: []; open: []; lamp: []; fish: []; stand: [] }>();
+const emit = defineEmits<{ bucket: []; pack: []; open: []; lamp: []; ground: []; fish: []; stand: [] }>();
 const game = useGameStore();
 
-// Лампу зажигают и гасят, когда она в рюкзаке, а рюкзак на спине или рядом — как и перекладывают вещи.
-const hasLamp = computed(() => game.actions.open && ITEMS.lit(game.items));
-function onKey(ev: KeyboardEvent) {
-  if (ev.code !== 'KeyL' || ev.repeat || ev.ctrlKey || ev.metaKey || ev.altKey || !hasLamp.value) return;
-  if ((ev.target as HTMLElement | null)?.closest?.('input, select, textarea')) return;
-  emit('lamp');
-}
-onMounted(() => window.addEventListener('keydown', onKey));
-onBeforeUnmount(() => window.removeEventListener('keydown', onKey));
-
 // после клика снимаем фокус с кнопки, иначе пробел и Enter будут нажимать её, а не подсекать
-function press(ev: MouseEvent, what: 'bucket' | 'pack' | 'open' | 'lamp' | 'fish' | 'stand') {
+function press(ev: MouseEvent, what: 'bucket' | 'pack' | 'open' | 'lamp' | 'ground' | 'fish' | 'stand') {
   (ev.currentTarget as HTMLElement).blur();
-  if (what === 'bucket') emit('bucket'); else if (what === 'pack') emit('pack'); else if (what === 'open') emit('open'); else if (what === 'lamp') emit('lamp'); else if (what === 'fish') emit('fish'); else emit('stand');
+  if (what === 'bucket') emit('bucket'); else if (what === 'pack') emit('pack'); else if (what === 'open') emit('open'); else if (what === 'lamp') emit('lamp'); else if (what === 'ground') emit('ground'); else if (what === 'fish') emit('fish'); else emit('stand');
 }
 </script>
 
@@ -28,7 +16,8 @@ function press(ev: MouseEvent, what: 'bucket' | 'pack' | 'open' | 'lamp' | 'fish
       <button v-if="game.actions.bucket" type="button" @click="press($event, 'bucket')"><kbd>E</kbd><span>{{ game.actions.bucket }}</span></button>
       <button v-if="game.actions.pack" type="button" @click="press($event, 'pack')"><kbd>Q</kbd><span>{{ game.actions.pack }}</span></button>
       <button v-if="game.actions.open" type="button" @click="press($event, 'open')"><kbd>I</kbd><span>{{ game.packOpen ? 'Закрыть рюкзак' : 'Открыть рюкзак' }}</span></button>
-      <button v-if="hasLamp" type="button" @click="press($event, 'lamp')"><kbd>L</kbd><span>{{ game.actions.lamp ? 'Погасить лампу' : 'Зажечь лампу' }}</span></button>
+      <button v-if="game.actions.light" type="button" @click="press($event, 'lamp')"><kbd>L</kbd><span>{{ game.actions.light }}</span></button>
+      <button v-if="game.actions.ground" type="button" @click="press($event, 'ground')"><kbd>G</kbd><span>{{ game.actions.ground }}</span></button>
       <button v-if="game.actions.fish" type="button" :class="{ hot: game.actions.hot }" @click="press($event, 'fish')"><kbd>F</kbd><span>{{ game.actions.fish }}</span></button>
       <button v-if="game.actions.stand" type="button" @click="press($event, 'stand')"><kbd>Esc</kbd><span>Встать</span></button>
     </div>
@@ -39,7 +28,7 @@ function press(ev: MouseEvent, what: 'bucket' | 'pack' | 'open' | 'lamp' | 'fish
       <span class="for-keys"><kbd>E</kbd> — взять или поставить ведро</span>
       <span class="for-keys"><kbd>Q</kbd> — надеть или снять рюкзак</span>
       <span class="for-keys"><kbd>I</kbd> — заглянуть в рюкзак</span>
-      <span v-if="hasLamp" class="for-keys"><kbd>L</kbd> — зажечь или погасить лампу</span>
+      <span v-if="game.actions.light || game.actions.ground" class="for-keys"><kbd>L</kbd> — зажечь или погасить лампу, <kbd>G</kbd> — поставить или взять</span>
       <span class="for-keys"><kbd>F</kbd> или пробел — рыбачить</span>
       <span class="for-touch">Коснись места — рыбак пойдёт туда</span>
       <span class="for-touch">Ведро, рюкзак и рыбалка — кнопками внизу</span>

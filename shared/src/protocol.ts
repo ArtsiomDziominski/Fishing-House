@@ -2,7 +2,7 @@
 
 import type { Catch } from './fish.ts';
 import type { FishingEvent } from './fishing.ts';
-import type { Item, ItemKind } from './items.ts';
+import type { Item, ItemKind, Place } from './items.ts';
 import type { PackKind } from './packs.ts';
 import type { Dir, WorldState } from './rules.ts';
 import type { Weather, WeatherKind } from './weather.ts';
@@ -39,8 +39,12 @@ export interface ClientMessages {
   packOff: { x: number; y: number };          // снять рюкзак и положить сюда
   packKind: { kind: PackKind };               // выбрать другой рюкзак (вещи должны в него влезть)
   itemMove: { id: number; x: number; y: number; rot: boolean };   // переложить вещь в рюкзаке; рюкзак на спине или рядом
-  itemDrop: { id: number };                   // выбросить вещь из рюкзака
-  lamp: { on: boolean };                      // зажечь или погасить лампу; она в рюкзаке, рюкзак на спине или рядом
+  itemDrop: { id: number };                   // выбросить вещь из рюкзака или из руки
+  itemTake: { id: number };                   // взять вещь из рюкзака в руку; что было в руке — уходит в рюкзак
+  itemStow: { at: Place | null };             // убрать вещь из руки в рюкзак: в эту клетку или (null) на свободное место
+  itemPut: { x: number; y: number };          // поставить вещь из руки на землю сюда (ITEMS.stands: пока только лампу)
+  itemPick: void;                             // взять свою вещь с земли: в руку, а занята — в рюкзак, если он рядом
+  lamp: { on: boolean };                      // зажечь или погасить лампу; она в руке или стоит на земле рядом
   itemGive: { kind: ItemKind };               // положить в рюкзак новую вещь. Только в разработке
   clock: { hour: number | null };             // перевести часы причала на этот час — сразу у всех; null — настоящее время. Только в разработке
   weather: { kind: WeatherKind | null; wind: boolean | null };   // выставить погоду и ветер — сразу у всех; null — по расписанию. Только в разработке
@@ -51,10 +55,11 @@ export interface ServerMessages {
   self: WorldState;                           // где ты на самом деле: при входе и когда сервер не принял ход
   bag: Bag;                                   // ведро целиком: при входе
   fish: FishingEvent & { bag?: Bag };         // рыбалка; к подсечке приложено новое ведро
-  // Вещи в рюкзаке целиком: при входе, когда сервер не принял перекладку и когда вещей стало больше или их разложило
-  // по новому рюкзаку. note — почему не вышло: far — рюкзак далеко, full — новой вещи нет места, tight — вещи не влезут
-  // в выбранный рюкзак (тогда сервер шлёт и «self» со старым рюкзаком).
-  items: { list: Item[]; note?: 'far' | 'full' | 'tight' };
+  // Вещи целиком — что в рюкзаке (list), что в руке (hand) и что стоит на земле (ground; у неё x, y — место на карте):
+  // при входе, когда сервер не принял перекладку и когда вещей стало больше или их разложило по новому рюкзаку.
+  // note — почему не вышло: far — рюкзак далеко, full — вещи нет места, tight — вещи не влезут в выбранный рюкзак
+  // (тогда сервер шлёт и «self» со старым рюкзаком), busy — рука занята, а в рюкзак вещь с земли не убрать.
+  items: { list: Item[]; hand: Item | null; ground: Item | null; note?: 'far' | 'full' | 'tight' | 'busy' };
   // Часы причала, мс: по ним у всех одно время суток. Приходят при входе и когда часы перевели.
   // canSet — сервер разрешает их переводить (разработка), moved — сейчас они переведены.
   clock: { now: number; canSet: boolean; moved: boolean };
@@ -70,7 +75,9 @@ export interface PlayerView {
   rest: boolean;                                            // сидит у костра
   carrying: boolean; bx: number; by: number; bucketHome: boolean;
   wearing: boolean; px: number; py: number; pack: string;   // рюкзак: на спине или лежит в px, py; pack — его вид
-  lamp: boolean;                                            // в рюкзаке лежит зажжённая лампа: ночью вокруг него светло
+  hand: string;                                             // что в руке: вид вещи (ITEM_KINDS) или пустая строка
+  ground: string; gx: number; gy: number;                   // что игрок поставил на землю (вид вещи или пусто) и где
+  lamp: boolean;                                            // его лампа зажжена и светит: она в руке или на земле
   recent: ArrayLike<string>;
 }
 

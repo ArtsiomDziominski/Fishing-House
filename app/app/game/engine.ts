@@ -24,12 +24,14 @@ import { createNightView } from './night-view.ts';
 import { createSoundView } from './sound.ts';
 import { createFireView } from './campfire.ts';
 import { LIGHT, createLightView, type LightSpot } from './light.ts';
+import { heldPlace, heldSprite } from './held-art.ts';
 import { createWildlifeView } from './wildlife.ts';
 import { createHouseView } from './house.ts';
 import { createPetsView } from './pets.ts';
 
-// open — рюкзак на спине или рядом: в него можно заглянуть (I); lamp — лампа в рюкзаке сейчас горит (так сказал сервер)
-export interface Actions { bucket: string | null; pack: string | null; fish: string | null; hot: boolean; stand: boolean; open: boolean; lamp: boolean }
+// open — рюкзак на спине или рядом: в него можно заглянуть (I); light — зажечь или погасить лампу (L), когда она в руке
+// или стоит рядом; ground — поставить лампу из руки на землю или взять её оттуда (G)
+export interface Actions { bucket: string | null; pack: string | null; fish: string | null; hot: boolean; stand: boolean; open: boolean; light: string | null; ground: string | null }
 // Время суток для интерфейса: подпись часов, насколько темно (0..1), минута игровых суток,
 // разрешает ли сервер переводить часы и выставлять погоду (разработка), переведены ли часы сейчас;
 // weather — погода словами, fixKind и fixWind — что из погоды выставлено вручную (null — идёт по расписанию).
@@ -52,17 +54,18 @@ export interface GameUI {
 }
 
 export interface GameHandle {
-  bucketAction(): void; packAction(): void; lampAction(): void; setPack(kind: PackKind): void; fishAction(): void; standUp(): void; destroy(): void;
+  bucketAction(): void; packAction(): void; lampAction(): void; groundAction(): void; setPack(kind: PackKind): void; fishAction(): void; standUp(): void; destroy(): void;
   setClock(hour: number | null): void;                  // перевести часы причала на этот час (на сервере, у всех); null — настоящее время
   setWeather(kind: WeatherKind | null, wind: boolean | null): void;   // выставить погоду и ветер (на сервере, у всех); null — по расписанию
   setSound(on: boolean): void;                          // включить или выключить звук
 }
 
 // rest — сидит у костра
-interface Hero { x: number; y: number; dir: Dir; sitting: boolean; rest: boolean; moving: boolean; anim: number; path: { x: number; y: number }[] | null; then: 'sit' | 'pick' | 'wear' | 'rest' | null; stuck: number; run: boolean }
+interface Hero { x: number; y: number; dir: Dir; sitting: boolean; rest: boolean; moving: boolean; anim: number; path: { x: number; y: number }[] | null; then: 'sit' | 'pick' | 'wear' | 'rest' | 'lamp' | null; stuck: number; run: boolean }
 interface Ghost { x: number; y: number; anim: number; moving: boolean; blink: number; seen: number }
 // pack — вид рюкзака на спине или null, если герой налегке
-interface Drawn { x: number; y: number; dir: Dir; rest: boolean; moving: boolean; anim: number; carrying: boolean; pack: PackKind | null; recent: ArrayLike<string>; blink: number }
+// hand — вид вещи в руке или пустая строка; lit — его лампа горит
+interface Drawn { x: number; y: number; dir: Dir; rest: boolean; moving: boolean; anim: number; carrying: boolean; pack: PackKind | null; hand: string; lit: boolean; recent: ArrayLike<string>; blink: number }
 
 const W = World.W, H = World.H, FW = HERO.FW, FH = HERO.FH;
 const ANCHOR = 9;                     // столбец кадра героя над точкой опоры
@@ -317,7 +320,7 @@ export async function startGame(canvas: HTMLCanvasElement, room: Room, ui: GameU
   function fishAction() {                               // F, пробел: сесть, забросить, подсечь
     if (hero.sitting) send('press'); else if (nearSeatNow()) sitDown(); else restDown();
   }
-  function walkTo(x: number, y: number, then?: 'sit' | 'pick' | 'wear' | 'rest', run = false) {
+  function walkTo(x: number, y: number, then?: 'sit' | 'pick' | 'wear' | 'rest' | 'lamp', run = false) {
     if (hero.sitting || hero.rest) standUp();
     const path = World.findPath(hero, { x, y });
     if (!path || !path.length) { hero.path = null; marker = null; return; }
@@ -331,6 +334,7 @@ export async function startGame(canvas: HTMLCanvasElement, room: Room, ui: GameU
     else if (then === 'pick') pickUp();
     else if (then === 'wear') putOn();
     else if (then === 'rest') restDown();
+    else if (then === 'lamp') groundAction();
   }
   function noteMoved() { if (!moved) { moved = true; ui.moved(); } }
 
@@ -458,9 +462,30 @@ export async function startGame(canvas: HTMLCanvasElement, room: Room, ui: GameU
     clockIn -= dt; flushClock();
     refreshActions(); refreshSky();
   }
-  // Горит ли своя лампа — по состоянию комнаты: там то, что решил сервер и что видят остальные.
-  function lampLit() { let lit = false; players()?.forEach((p, sid) => { if (sid === room.sessionId) lit = p.lamp; }); return lit; }
-  function lampAction() { send('lamp', { on: !lampLit() }); }
+  // Что у героя в руке, где стоит его лампа и горит ли она — по состоянию комнаты: там то, что решил сервер и что видят остальные.
+  const ownView = () => { let me: PlayerView | null = null; players()?.forEach((p, sid) => { if (sid === room.sessionId) me = p; }); return me as PlayerView | null; };
+  const ownHand = () => ownView()?.hand || '';
+  // Лампа на земле — своя: где она и можно ли до неё дотянуться.
+  const ownGround = () => { const me = ownView(); return me?.ground ? { x: me.gx, y: me.gy } : null; };
+  const atGround = () => { const g = ownGround(); return !!g && !hero.sitting && dist(hero, g) <= REACH; };
+  const onGround = (x: number, y: number) => { const g = ownGround(); return !!g && Math.abs(x - g.x) <= 5 && y >= g.y - 11 && y <= g.y + 3; };
+  // Зажечь и погасить лампу можно, когда она в руке или стоит рядом; в рюкзаке она не горит.
+  const lampNear = () => ownHand() === 'lamp' || atGround();
+  function lampAction() { if (lampNear()) send('lamp', { on: !ownView()?.lamp }); }
+  // G: лампа из руки — на землю рядом с собой, со стороны руки, в которой она была; лампа с земли — обратно в руку.
+  function groundAction() {
+    if (!ready || hero.sitting) return;
+    if (ownGround()) { if (atGround()) { flushMove(); send('itemPick'); } return; }
+    if (ownHand() !== 'lamp') return;
+    const side = HERO.hand(hero.dir, 0).out;
+    const spots = [[9 * side, 2], [-9 * side, 2], [0, 7], [9 * side, 6], [-9 * side, 6], [0, -7], [14 * side, 2], [-14 * side, 2]];
+    for (const [dx, dy] of spots) {
+      const x = Math.round(hero.x + dx!), y = Math.round(hero.y + dy!);
+      const seen = [0, 3, 6].every(up => World.depthAt(x, y - up) <= y);   // не за вывеской и не под кроной: лампу должно быть видно
+      if (fits(x, y, 2) && seen) { flushMove(); send('itemPut', { x, y }); return; }
+    }
+    ui.toast('Здесь лампу не поставить — тесно', 'bad');
+  }
   function refreshActions() {
     const ph = fishing.st.phase;
     const a: Actions = {
@@ -472,7 +497,8 @@ export async function startGame(canvas: HTMLCanvasElement, room: Room, ui: GameU
       hot: hero.sitting && ph === 'bite',
       stand: hero.sitting || hero.rest,
       open: packInReach(hero, pack),
-      lamp: lampLit(),
+      light: lampNear() ? (ownView()?.lamp ? 'Погасить лампу' : 'Зажечь лампу') : null,
+      ground: hero.sitting ? null : ownGround() ? (atGround() ? 'Взять лампу' : null) : ownHand() === 'lamp' ? 'Поставить лампу' : null,
     };
     const key = JSON.stringify(a); if (key === actionsKey) return; actionsKey = key;
     ui.actions(a);
@@ -546,6 +572,15 @@ export async function startGame(canvas: HTMLCanvasElement, room: Room, ui: GameU
     sctx.drawImage(packArt[p.kind].ground, 0, 0);
     blit(sack, sctx, p.x - (P.w >> 1), p.y - (P.h - 1), p.y);
   }
+  // Вещь, поставленная на землю (лампа): та же маленькая картинка, что в руке, и тень под ней. x, y — где она стоит.
+  function drawGround(kind: string, lit: boolean, x: number, y: number) {
+    const art = heldSprite(kind, lit)?.front; if (!art) return;
+    cctx.clearRect(0, 0, CW, CH);
+    cctx.fillStyle = 'rgba(18, 22, 10, 0.3)';
+    cctx.fillRect(1, art.h - 1, art.w, 1); cctx.fillRect(2, art.h, art.w - 2, 1);
+    cctx.drawImage(art.img[0], 1, 0);
+    blit(cell, cctx, x - 1 - (art.w >> 1), y - (art.h - 1), y);
+  }
   function drawHero(a: Drawn, t: number) {
     const hx = Math.round(a.x), hy = Math.round(a.y);
     const f = a.moving && !a.rest ? 1 + (Math.floor(a.anim) % 4) : ((t + a.blink) % 3.7 < 0.14 ? 5 : 0);   // стоя иногда моргает
@@ -553,6 +588,8 @@ export async function startGame(canvas: HTMLCanvasElement, room: Room, ui: GameU
     cctx.fillStyle = 'rgba(18, 22, 10, 0.3)';         // тень под ногами
     cctx.fillRect(CX + 4, FH - 2, 11, 1); cctx.fillRect(CX + 2, FH - 1, 15, 2); cctx.fillRect(CX + 4, FH + 1, 11, 1);
     cctx.drawImage(heroFrames(a.carrying, a.pack, a.rest)[a.dir][f]!, CX, 0);
+    const held = heldSprite(a.hand, a.lit);           // вещь в свободной руке — поверх героя: она сбоку от тела и видна с любой стороны
+    if (held) { const p = heldPlace(held, HERO.hand(a.dir, f, a.rest), a.dir === 'left' || a.dir === 'right', FH - 1); cctx.drawImage(p.img, CX + p.x, p.y); }
     if (a.carrying) {                                 // ведро в руке качается вместе с плечом
       const rig = rigs[a.dir], side = a.dir === 'left' || a.dir === 'right';
       const sway = side ? (f === 2 || f === 4 ? -1 : 0) : (f === 1 || f === 3 ? 1 : 0);
@@ -605,17 +642,17 @@ export async function startGame(canvas: HTMLCanvasElement, room: Room, ui: GameU
   // Вечер и ночь: слой цвета неба умножается на кадр, а свет из окон и фонаря проедает в нём дыры — возле дома светло.
   // Сверху тот же ореол кладётся тёплой добавкой. Днём (белое небо, свет погашен) кадр остаётся как есть.
   const GLOW_ADD = 0.3;                                 // доля тёплой добавки
-  // Где сейчас горит огонь: костёр и лампы — у каждого, у кого лампа в рюкзаке, на спине или там, где рюкзак лежит. Так сказал сервер.
+  // Где сейчас горит огонь: костёр и зажжённые лампы — в руке у героя (тогда свет при нём) и там, где лампу поставили
+  // на землю. В рюкзаке лампа не горит. Так сказал сервер.
   const light = createLightView();
   function lampSpots() {
     const out: LightSpot[] = [{ x: fire.x, y: fire.y - 4, k: 1.5 }];   // костёр горит всегда и светит дальше лампы
     players()?.forEach((p, sid) => {
       if (!p.lamp) return;
+      if (p.ground === 'lamp') out.push({ x: p.gx, y: p.gy - 4 });
+      if (p.hand !== 'lamp') return;
       const mine = sid === room.sessionId, g = mine ? (ready ? hero : null) : ghosts.get(sid); if (!g) return;
-      const worn = mine ? pack.worn : p.wearing, sits = mine ? hero.sitting : p.sitting;
-      if (!worn) out.push(mine ? { x: pack.x, y: pack.y - 5 } : { x: p.px, y: p.py - 5 });
-      else if (sits) out.push({ x: seat.x, y: seat.y - 12 });
-      else out.push({ x: g.x, y: g.y - 14 });
+      if (mine ? hero.sitting : p.sitting) out.push({ x: seat.x, y: seat.y - 12 }); else out.push({ x: g.x, y: g.y - 14 });
     });
     return out;
   }
@@ -642,8 +679,8 @@ export async function startGame(canvas: HTMLCanvasElement, room: Room, ui: GameU
     fctx.fillStyle = 'rgba(244, 227, 193, 0.9)';
     for (const [dx, dy] of [[-3 - p, 0], [2 + p, 0], [0, -2 - p], [0, 1 + p]] as const) fctx.fillRect(x + dx, y + dy, dx ? 2 : 1, dx ? 1 : 2);
   }
-  const GLYPH: Record<'E' | 'F' | 'Q', string[]> = { E: ['###', '#..', '##.', '#..', '###'], F: ['###', '#..', '##.', '#..', '#..'], Q: ['.###.', '#...#', '#...#', '#..#.', '.##.#'] };   // Q в три пикселя шириной не читается
-  function drawKeycap(letter: 'E' | 'F' | 'Q', cx2: number, top: number) {   // клавиша-подсказка над предметом
+  const GLYPH: Record<'E' | 'F' | 'Q' | 'G', string[]> = { E: ['###', '#..', '##.', '#..', '###'], F: ['###', '#..', '##.', '#..', '#..'], Q: ['.###.', '#...#', '#...#', '#..#.', '.##.#'], G: ['.###.', '#....', '#.###', '#...#', '.###.'] };   // Q и G — в пять пикселей шириной не читается
+  function drawKeycap(letter: 'E' | 'F' | 'Q' | 'G', cx2: number, top: number) {   // клавиша-подсказка над предметом
     const x0 = cx2 - 4;
     fctx.fillStyle = '#240702'; fctx.fillRect(x0 + 1, top, 7, 9); fctx.fillRect(x0, top + 1, 9, 7);
     fctx.fillStyle = '#f4e3c1'; fctx.fillRect(x0 + 1, top + 1, 7, 7);
@@ -658,6 +695,8 @@ export async function startGame(canvas: HTMLCanvasElement, room: Room, ui: GameU
       fctx.fillStyle = '#f4e3c1'; fctx.fillRect(bucket.x - 2, bucket.y - 27 - bob, 5, 1); fctx.fillRect(bucket.x - 1, bucket.y - 26 - bob, 3, 1); fctx.fillRect(bucket.x, bucket.y - 25 - bob, 1, 1);
     }
     if (canWear() && !hero.moving) drawKeycap('Q', pack.x, pack.y - P.h - 13 - bob);
+    const lampAt = ownGround();
+    if (lampAt && atGround() && !hero.moving) drawKeycap('G', lampAt.x, lampAt.y - 20 - bob);
     if ((nearSeatNow() || nearFireNow()) && !hero.moving) drawKeycap('F', Math.round(hero.x), Math.round(hero.y) - FH - 11 - bob);
   }
 
@@ -712,6 +751,7 @@ export async function startGame(canvas: HTMLCanvasElement, room: Room, ui: GameU
     const queue: { y: number; draw: () => void }[] = [];
     for (const b of boats) queue.push({ y: b.y, draw: () => b.draw(fctx, t) });
     queue.push({ y: fire.y, draw: () => campfire.draw(fctx, t) });
+    players()?.forEach(p => { if (p.ground) queue.push({ y: p.gy - 0.5, draw: () => drawGround(p.ground, p.lamp, p.gx, p.gy) }); });   // лампы на земле — свои и чужие
     const people = [...(ready ? [hero] : []), ...ghosts.values()];
     const afoot: { x: number; y: number }[] = ready && !hero.sitting ? [hero] : [];// кто на ногах: сидящего рыбака чайка не боится
     players()?.forEach((p, sid) => { const g = ghosts.get(sid); if (g && !p.sitting && sid !== room.sessionId) afoot.push(g); });
@@ -723,7 +763,7 @@ export async function startGame(canvas: HTMLCanvasElement, room: Room, ui: GameU
     // Все, кто сидит, — один рыбак с картинки; рюкзак ему рисуем свой, а если сидят только другие — первого из них.
     let someoneSits = hero.sitting, seatPack: PackKind | null = hero.sitting && pack.worn ? pack.kind : null;
     if (ready) {
-      if (!hero.sitting) queue.push({ y: hero.y, draw: () => drawHero({ ...hero, carrying: bucket.carried, pack: pack.worn ? pack.kind : null, recent: bag.recent, blink: 0 }, t) });
+      if (!hero.sitting) queue.push({ y: hero.y, draw: () => drawHero({ ...hero, carrying: bucket.carried, pack: pack.worn ? pack.kind : null, hand: ownHand(), lit: !!ownView()?.lamp, recent: bag.recent, blink: 0 }, t) });
       if (!bucket.carried) queue.push({ y: bucket.y, draw: () => drawBucket({ ...bucket, recent: bag.recent }) });
       if (!pack.worn) queue.push({ y: pack.y, draw: () => drawPack(pack) });
     }
@@ -732,7 +772,7 @@ export async function startGame(canvas: HTMLCanvasElement, room: Room, ui: GameU
       const g = ghosts.get(sid); if (!g) return;
       const worn = p.wearing ? packKind(p.pack) : null;
       if (p.sitting) { if (!someoneSits) seatPack = worn; someoneSits = true; }
-      else queue.push({ y: g.y, draw: () => drawHero({ x: g.x, y: g.y, dir: p.dir, rest: p.rest, moving: g.moving, anim: g.anim, carrying: p.carrying, pack: worn, recent: p.recent, blink: g.blink }, t) });
+      else queue.push({ y: g.y, draw: () => drawHero({ x: g.x, y: g.y, dir: p.dir, rest: p.rest, moving: g.moving, anim: g.anim, carrying: p.carrying, pack: worn, hand: p.hand, lit: p.lamp, recent: p.recent, blink: g.blink }, t) });
       if (!p.carrying) queue.push({ y: p.by - 0.5, draw: () => drawBucket({ x: p.bx, y: p.by, home: p.bucketHome, recent: p.recent }) });
       if (!p.wearing) queue.push({ y: p.py - 0.5, draw: () => drawPack({ x: p.px, y: p.py, kind: packKind(p.pack) }) });
     });
@@ -781,6 +821,8 @@ export async function startGame(canvas: HTMLCanvasElement, room: Room, ui: GameU
     if (ev.code === 'KeyF' || ev.code === 'Space' || ev.code === 'Enter') { fishAction(); ev.preventDefault(); }
     else if (ev.code === 'KeyE') bucketAction();
     else if (ev.code === 'KeyQ') packAction();
+    else if (ev.code === 'KeyL') lampAction();
+    else if (ev.code === 'KeyG') groundAction();
     else if (ev.code === 'Escape') standUp();
     else if (ev.code === 'F2') { debug = !debug; if (!debug) ui.debug(null); ev.preventDefault(); }
   });
@@ -797,6 +839,7 @@ export async function startGame(canvas: HTMLCanvasElement, room: Room, ui: GameU
     else if (bucket.carried && onHero(p.x, p.y)) putDown();
     else if (onBucket(p.x, p.y)) { if (canPick()) pickUp(); else walkTo(bucket.x, bucket.y + 5, 'pick', run); }
     else if (onPack(p.x, p.y)) { if (canWear()) putOn(); else walkTo(pack.x, pack.y + 5, 'wear', run); }
+    else if (onGround(p.x, p.y)) { const g = ownGround()!; if (atGround()) groundAction(); else if (!hero.sitting) walkTo(g.x, g.y + 5, 'lamp', run); }   // клик по своей лампе: подойти и взять
     else if (onFire(p.x, p.y)) {                        // клик по костру: подойти с ближней стороны и сесть
       if (nearFireNow()) restDown();
       else if (!hero.rest) { const d = Math.max(1, dist(hero, fire)), at = World.nearestWalkable(fire.x + (hero.x - fire.x) / d * 24, fire.y + (hero.y - fire.y) / d * 14); if (at) walkTo(at.x, at.y, 'rest', run); }
@@ -827,7 +870,7 @@ export async function startGame(canvas: HTMLCanvasElement, room: Room, ui: GameU
     hourNow, setClock, setWeather, wx, river, setHour: (hour: number | null) => { fixedHour = hour ?? NaN; } };   // setHour(22) останавливает время на этом часе, setHour(null) — пускает снова
 
   return {
-    bucketAction, packAction, lampAction, setPack, fishAction, standUp, setClock, setWeather, setSound: sound.setOn,
+    bucketAction, packAction, lampAction, groundAction, setPack, fishAction, standUp, setClock, setWeather, setSound: sound.setOn,
     destroy() {
       sound.destroy();
       alive = false; cancelAnimationFrame(raf);

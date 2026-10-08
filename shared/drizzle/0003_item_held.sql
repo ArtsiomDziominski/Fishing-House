@@ -1,0 +1,1 @@
+ALTER TABLE "items" ADD COLUMN "held" boolean DEFAULT false NOT NULL;

@@ -20,7 +20,11 @@ export const PlayerState = schema({
   px: t.int16(),              // где лежит рюкзак, если не на спине
   py: t.int16(),
   pack: t.string(),           // вид рюкзака (PACK_KINDS)
-  lamp: t.boolean(),          // в рюкзаке лежит зажжённая лампа
+  hand: t.string(),           // что в руке: вид вещи (ITEM_KINDS) или пусто
+  ground: t.string(),         // что игрок поставил на землю: вид вещи или пусто
+  gx: t.int16(),              // и где
+  gy: t.int16(),
+  lamp: t.boolean(),          // его лампа зажжена и светит: она в руке или на земле
   recent: t.array('string'),  // хвосты последних рыб над ведром
 }, 'PlayerState');
 export type PlayerState = SchemaType<typeof PlayerState>;

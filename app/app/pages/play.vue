@@ -2,7 +2,7 @@
      входим в комнату-причал на игровом сервере и запускаем движок на холсте. -->
 <script setup lang="ts">
 import { Client, type Room } from '@colyseus/sdk';
-import { ROOM, World, type ClientMessages, type ItemKind, type ServerMessages, type WeatherKind } from '@fh/shared';
+import { ROOM, World, type ClientMessages, type ItemKind, type Place, type ServerMessages, type WeatherKind } from '@fh/shared';
 import { startGame, type GameHandle } from '~/game/engine';
 
 definePageMeta({ layout: false, middleware: 'auth' });
@@ -23,15 +23,18 @@ function endpoint() {
 function setWeather(kind: WeatherKind | null, wind: boolean | null) { handle?.setWeather(kind, wind); }
 function setSound(on: boolean) { game.setSound(on); handle?.setSound(on); }
 
-// Вещи в рюкзаке: окно рюкзака просит, сервер решает и, если не согласен, присылает «items» с причиной.
+// Вещи в рюкзаке и в руке: окно рюкзака просит, сервер решает и, если не согласен, присылает «items» с причиной.
 const send = <K extends keyof ClientMessages>(type: K, msg: ClientMessages[K]) => room?.send(type, msg);
 const ITEM_NOTES: Record<NonNullable<ServerMessages['items']['note']>, string> = {
   far: 'Рюкзак далеко — подойди к нему',
   full: 'В рюкзаке нет места',
   tight: 'Вещи в этот рюкзак не влезут — сначала выложи лишнее',
+  busy: 'Рука занята — убери вещь в рюкзак',
 };
 function moveItem(id: number, x: number, y: number, rot: boolean) { send('itemMove', { id, x, y, rot }); }
 function dropItem(id: number) { send('itemDrop', { id }); }
+function takeItem(id: number) { send('itemTake', { id }); }
+function stowItem(at: Place) { send('itemStow', { at }); }
 function giveItem(kind: ItemKind) { send('itemGive', { kind }); }
 
 function stop() {
@@ -51,7 +54,7 @@ async function connect() {
     room = r;
     game.roomId = r.roomId;
     r.onMessage('items', (m: ServerMessages['items']) => {
-      game.items = m.list;
+      game.items = m.list; game.hand = m.hand;
       if (m.note) game.showToast(ITEM_NOTES[m.note], 'bad');
     });
     r.onDrop(() => { game.status = 'reconnecting'; });
@@ -96,10 +99,10 @@ const overlay = computed(() => {
 
     <GameCatch />
     <GameToast />
-    <GameDock @bucket="handle?.bucketAction()" @pack="handle?.packAction()" @fish="handle?.fishAction()" @stand="handle?.standUp()" @open="game.togglePack()" @lamp="handle?.lampAction()" />
+    <GameDock @bucket="handle?.bucketAction()" @pack="handle?.packAction()" @fish="handle?.fishAction()" @stand="handle?.standUp()" @open="game.togglePack()" @lamp="handle?.lampAction()" @ground="handle?.groundAction()" />
     <GamePack @pick="handle?.setPack($event)" />
     <GameOnline @clock="handle?.setClock($event)" @weather="setWeather" @sound="setSound" />
-    <GameBackpack @move="moveItem" @drop="dropItem" @give="giveItem" />
+    <GameBackpack @move="moveItem" @drop="dropItem" @take="takeItem" @stow="stowItem" @give="giveItem" />
 
     <div v-if="overlay" class="overlay" :class="{ soft: game.status === 'reconnecting' || game.status === 'connecting' }">
       <div class="panel box">

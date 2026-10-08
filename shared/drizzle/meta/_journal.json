@@ -22,6 +22,20 @@
       "when": 1791402901398,
       "tag": "0002_drop_boats",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1791456761771,
+      "tag": "0003_item_held",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1791458249717,
+      "tag": "0004_item_ground",
+      "breakpoints": true
     }
   ]
 }

@@ -1,5 +1,5 @@
 // Проверка игрового сервера целиком: бот заводит игрока в базе, входит по билету, идёт за ведром и рюкзаком,
-// перекладывает вещи в рюкзаке, несёт всё к причалу, садится и ловит рыбу; заодно проверяет, что телепорт сервер не принимает.
+// перекладывает вещи в рюкзаке и берёт их в руку, несёт всё к причалу, садится и ловит рыбу; заодно проверяет, что телепорт сервер не принимает.
 //
 //   npm run smoke -w game-server            (нужны запущенные база и игровой сервер, .env с DATABASE_URL и GAME_SECRET)
 //   GAME_URL=http://localhost:2567 npm run smoke -w game-server
@@ -148,6 +148,28 @@ check(items === null, 'черви переложены в угол, сачок �
 room.send('itemMove', { id: worms.id, x: 1, y: 0, rot: false });   // там удочка
 await until('отказ положить на удочку', () => !!items);
 check(thing(items!.list, 'worms').x === 5 && !items!.note, 'на удочку червей не положить — сервер прислал, как всё лежит');
+// рука: взять вещь из рюкзака, сменить её другой, убрать обратно. Сервер, когда согласен, молчит — как всё лежит,
+// спрашиваем отказом: просим переложить вещь, которой нет.
+const asked = async () => { items = null; room.send('itemMove', { id: 0, x: 0, y: 0, rot: false }); await until('как лежат вещи', () => !!items); return items!; };
+const rod = thing(kit, 'rod-willow');
+check((await asked()).hand === null && seen()?.hand === '', 'в руке пусто');
+room.send('itemTake', { id: rod.id });
+await until('удочку в руке', () => seen()?.hand === 'rod-willow');
+let got = await asked();
+check(got.hand?.id === rod.id && !got.list.some(it => it.id === rod.id) && got.list.length === kit.length - 1, 'удочка взята из рюкзака в руку — это видно всем');
+room.send('itemTake', { id: scoop.id });
+await until('сачок в руке', () => seen()?.hand === 'net-scoop');
+got = await asked();
+check(got.hand?.id === scoop.id && thing(got.list, 'rod-willow').x === 0 && thing(got.list, 'rod-willow').y === 0, 'взял сачок — удочка из руки вернулась в рюкзак на своё место');
+room.send('itemStow', { at: { x: 0, y: 2, rot: false } });
+await until('пустую руку', () => seen()?.hand === '');
+got = await asked();
+check(got.hand === null && thing(got.list, 'net-scoop').x === 0 && thing(got.list, 'net-scoop').y === 2 && !thing(got.list, 'net-scoop').rot, 'сачок убран из руки в названную клетку');
+room.send('itemStow', { at: null });
+got = await asked();
+check(got.hand === null && got.list.length === kit.length, 'из пустой руки убирать нечего');
+room.send('itemMove', { id: scoop.id, x: 5, y: 0, rot: true });           // сачок — обратно стоймя в угол
+items = null;
 if (before.canSet) {
   // в разработке вещи можно положить; две вещи по 4 клетки, и в кожаный рюкзак (4×3) уже не влезть
   items = null;
@@ -168,26 +190,62 @@ if (before.canSet) {
   await until('ещё червей', () => !!items);
   check(items!.list.length === kit.length + 1 && !items!.list.some(it => it.kind === 'net-seine'), 'невод и накидка выброшены, новая банка червей легла на их место');
   room.send('itemDrop', { id: items!.list.at(-1)!.id });
-  // лампа в рюкзаке видна всем в состоянии комнаты: по ней клиенты рисуют свет
-  check(seen()?.lamp === false, 'без лампы в рюкзаке света нет');
+  // лампа светит, только когда она в руке или стоит на земле; свет виден всем в состоянии комнаты
+  check(seen()?.lamp === false, 'без лампы света нет');
   items = null;
   room.send('itemGive', { kind: 'lamp' });
   await until('лампу', () => !!items && items.list.some(it => it.kind === 'lamp' && it.id > 0));
-  await until('свет лампы в состоянии комнаты', () => seen()?.lamp === true);
+  const lamp = thing(items!.list, 'lamp');
+  room.send('lamp', { on: false }); room.send('lamp', { on: true });
+  await sleep(300);
+  check(seen()?.lamp === false && self!.lamp !== false, 'лампа в рюкзаке не светит, и зажечь её там нельзя');
+  room.send('itemTake', { id: lamp.id });
+  await until('лампу в руке', () => seen()?.hand === 'lamp' && seen()?.lamp === true);
   room.send('lamp', { on: false });
   await until('лампа погашена', () => seen()?.lamp === false);
   room.send('lamp', { on: true });
   await until('лампа зажжена снова', () => seen()?.lamp === true);
-  check(true, 'лампу в рюкзаке можно погасить и зажечь');
-  room.send('itemDrop', { id: thing(items!.list, 'lamp').id });
-  await until('свет погас', () => seen()?.lamp === false);
-  check(true, 'лампа в рюкзаке зажигает свет у героя, выложенная — гасит');
+  check(true, 'лампа в руке светит, её можно погасить и зажечь');
+  // на землю и обратно
+  room.send('itemPut', { x: pos.x + 300, y: pos.y });
+  got = await asked();
+  check(got.hand?.id === lamp.id && got.ground === null, 'далеко от себя лампу не поставить');
+  const spot = World.nearestWalkable(pos.x + 10, pos.y + 4)!;
+  room.send('itemPut', spot);
+  await until('лампу на земле', () => seen()?.ground === 'lamp' && seen()?.hand === '');
+  check(seen()!.gx === spot.x && seen()!.gy === spot.y && seen()?.lamp === true, 'лампа поставлена на землю и светит оттуда');
+  room.send('lamp', { on: false });
+  await until('лампа на земле погашена', () => seen()?.lamp === false);
+  room.send('lamp', { on: true });
+  await until('лампа на земле зажжена', () => seen()?.lamp === true);
+  room.send('itemTake', { id: rod.id });                // рука занята удочкой — лампа с земли уйдёт в рюкзак
+  await until('удочку в руке', () => seen()?.hand === 'rod-willow');
+  room.send('itemPick');
+  await until('лампу в рюкзаке', () => seen()?.ground === '');
+  got = await asked();
+  check(got.ground === null && got.list.some(it => it.id === lamp.id) && seen()?.lamp === false, 'рука занята — лампа с земли убрана в рюкзак и погасла');
+  room.send('itemStow', { at: null });                   // удочку — обратно в рюкзак, на свободное место
+  await until('пустую руку', () => seen()?.hand === '');
+  room.send('itemTake', { id: lamp.id });
+  await until('лампу в руке', () => seen()?.hand === 'lamp');
+  room.send('itemPut', spot);
+  await until('лампу на земле', () => seen()?.ground === 'lamp');
+  room.send('itemPick');
+  await until('лампу снова в руке', () => seen()?.hand === 'lamp' && seen()?.ground === '');
+  check(seen()?.lamp === true, 'пустой рукой лампа берётся с земли в руку');
+  room.send('itemDrop', { id: lamp.id });
+  await until('свет погас', () => seen()?.lamp === false && seen()?.hand === '');
+  check(true, 'выброшенная лампа не светит');
 } else {
   items = null;
   room.send('itemGive', { kind: 'net-seine' });
   await sleep(400);
   check(items === null, 'вещи с клиента не кладутся — сервер это сообщение не слушает');
 }
+
+// с поплавками в руке — до конца: после перезахода они должны остаться в руке
+room.send('itemTake', { id: thing(kit, 'floats').id });
+await until('поплавки в руке', () => seen()?.hand === 'floats');
 
 // костёр у дома: сесть можно только рядом с ним, а шаг в сторону поднимает
 room.send('rest');
@@ -237,7 +295,8 @@ check(self!.sitting && !self!.bucket.home && self!.bucket.x === bucketSpot.x, '�
 check(self!.pack.worn && self!.pack.kind === 'sailor', 'рюкзак после перезахода на спине, тот же морской');
 check(bag!.total === 1, 'ведро после перезахода с той же рыбой');
 await until('вещи после входа', () => !!items);
-check(items!.list.length === kit.length && thing(items!.list, 'worms').x === 5 && thing(items!.list, 'net-scoop').rot, 'вещи после перезахода лежат там, куда их переложили, стартовый набор не задвоился');
+check(items!.list.length === kit.length - 1 && thing(items!.list, 'worms').x === 5 && thing(items!.list, 'net-scoop').rot, 'вещи после перезахода лежат там, куда их переложили, стартовый набор не задвоился');
+check(items!.hand?.kind === 'floats' && !items!.list.some(it => it.kind === 'floats'), 'поплавки после перезахода по-прежнему в руке');
 await again.leave();
 await db.close();
 console.log('всё работает');

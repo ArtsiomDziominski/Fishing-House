@@ -82,6 +82,59 @@ test('вещи, вылезшие за край, ищут новое место, 
   for (const it of shown) assert.ok(ITEMS.fits(g, shown, it.kind, it.x, it.y, it.rot, it.id));
 });
 
+test('вещь берут из рюкзака в руку, а прежняя из руки уходит в рюкзак', () => {
+  const g = ITEMS.grid('leather'), list = starter(), [rod, scoop, worms, floats] = list as [Item, Item, Item, Item];
+  assert.equal(ITEMS.take(g, list, null, 99), null);                     // такой вещи в рюкзаке нет
+  const a = ITEMS.take(g, list, null, rod.id)!;
+  assert.equal(a.hand.id, rod.id); assert.equal(a.back, null);
+  assert.deepEqual(a.list.map(it => it.id), [scoop.id, worms.id, floats.id]);
+  assert.deepEqual(a.hand, rod);                                         // в руке вещь помнит, где лежала
+  // удочка в руке, берём сачок: на его место удочка не встаёт — возвращается на своё
+  const b = ITEMS.take(g, a.list, a.hand, scoop.id)!;
+  assert.equal(b.hand.id, scoop.id);
+  assert.deepEqual(b.back, rod);
+  assert.ok(b.list.includes(b.back!) && !b.list.some(it => it.id === scoop.id));
+  // черви в руке, берём поплавки: черви встают прямо на их место
+  const c = ITEMS.take(g, list, null, worms.id)!, d = ITEMS.take(g, c.list, c.hand, floats.id)!;
+  assert.deepEqual(d.back, { ...worms, x: floats.x, y: floats.y });
+  for (const it of d.list) assert.ok(ITEMS.fits(g, d.list, it.kind, it.x, it.y, it.rot, it.id), it.kind);
+  // рюкзак забит удочками, в руке накидка 2×2: взять удочку нельзя — накидку некуда деть
+  const rods: Item[] = [0, 1, 2].map(y => ({ id: 10 + y, kind: 'rod-bamboo', x: 0, y, rot: false }));
+  assert.equal(ITEMS.take(g, rods, { id: 20, kind: 'net-cast', x: 0, y: 0, rot: false }, 10), null);
+});
+
+test('вещь из руки убирают в рюкзак: в названную клетку, на прежнее место или на первое свободное', () => {
+  const g = ITEMS.grid('leather'), list = starter(), scoop = list[1]!;
+  const { list: rest, hand } = ITEMS.take(g, list, null, scoop.id)!;
+  assert.equal(ITEMS.stow(g, rest, null), null);                         // рука пуста
+  assert.deepEqual(ITEMS.stow(g, rest, hand)!.item, scoop);              // место не заняли — возвращается туда же
+  const taken = [...rest, { id: 9, kind: 'worms', x: 0, y: 1, rot: false } as Item];
+  assert.deepEqual(ITEMS.stow(g, taken, hand)!.item, { ...scoop, x: 0, y: 2 });   // заняли — первое свободное
+  const put = ITEMS.stow(g, rest, hand, { x: 2, y: 2, rot: false })!;
+  assert.deepEqual(put.item, { ...scoop, x: 2, y: 2 });
+  assert.equal(put.list.length, list.length);
+  assert.equal(ITEMS.stow(g, rest, hand, { x: 2, y: 1, rot: false }), null);       // там черви
+  assert.equal(ITEMS.stow(g, rest, hand, { x: 3, y: 2, rot: false }), null);       // вылезает за край
+  assert.deepEqual(ITEMS.stow(g, rest, hand, { x: 0, y: 1, rot: true })!.item, { ...scoop, x: 0, y: 1, rot: true });
+  // квадратную вещь не поворачивают, даже если просят
+  assert.equal(ITEMS.stow(g, [], { id: 5, kind: 'worms', x: 0, y: 0, rot: false }, { x: 1, y: 1, rot: true })!.item.rot, false);
+  const rods: Item[] = [0, 1, 2].map(y => ({ id: 10 + y, kind: 'rod-bamboo', x: 0, y, rot: false }));
+  assert.equal(ITEMS.stow(g, rods, hand), null);                         // рюкзак полон
+});
+
+test('лампа светит в руке или на земле, а из рюкзака — нет', () => {
+  const lamp: Item = { id: 7, kind: 'lamp', x: 300, y: 250, rot: false }, rod = starter()[0]!;
+  assert.ok(ITEMS.stands('lamp') && !ITEMS.stands('rod-willow'));
+  assert.ok(!ITEMS.lampOut(null, null) && !ITEMS.lampOut(rod, null));
+  assert.ok(ITEMS.lampOut(lamp, null) && ITEMS.lampOut(rod, lamp));
+  // зажечь и погасить — когда лампа в руке или стоит рядом
+  assert.ok(ITEMS.lampNear({ x: 0, y: 0 }, lamp, null));
+  assert.ok(ITEMS.lampNear({ x: lamp.x + REACH, y: lamp.y }, null, lamp));
+  assert.ok(!ITEMS.lampNear({ x: lamp.x + REACH + 3, y: lamp.y }, null, lamp));
+  assert.ok(ITEMS.lampNear({ x: lamp.x + REACH + 3, y: lamp.y }, null, lamp, 4));
+  assert.ok(!ITEMS.lampNear({ x: lamp.x, y: lamp.y }, rod, null));
+});
+
 test('заглянуть в рюкзак можно, когда он на спине или рядом', () => {
   const pack = startPack();
   assert.ok(packInReach({ x: pack.x + REACH, y: pack.y }, pack));
