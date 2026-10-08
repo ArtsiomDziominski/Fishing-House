@@ -11,6 +11,7 @@ export const PlayerState = schema({
   y: t.float32(),
   dir: t.string(),
   sitting: t.boolean(),       // сидит на краю причала с удочкой
+  rest: t.boolean(),          // сидит у костра
   carrying: t.boolean(),      // ведро в руке
   bx: t.int16(),              // где стоит ведро, если не в руке
   by: t.int16(),
@@ -19,6 +20,7 @@ export const PlayerState = schema({
   px: t.int16(),              // где лежит рюкзак, если не на спине
   py: t.int16(),
   pack: t.string(),           // вид рюкзака (PACK_KINDS)
+  lamp: t.boolean(),          // в рюкзаке лежит зажжённая лампа
   recent: t.array('string'),  // хвосты последних рыб над ведром
 }, 'PlayerState');
 export type PlayerState = SchemaType<typeof PlayerState>;

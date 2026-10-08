@@ -19,12 +19,20 @@ export interface PackState { x: number; y: number; worn: boolean; kind: PackKind
 // Что игрок оставил в мире, когда вышел: хранится в базе и приходит ему при входе.
 // picX, picY — где стояла картинка-образец на карте (World.pic), когда записывались координаты. Карту расширяют,
 // картинка сдвигается вправо и вниз — по этим числам сохранённые места переносятся на новую карту (см. cleanWorld).
-export interface WorldState { x: number; y: number; dir: Dir; sitting: boolean; bucket: BucketState; pack: PackState; picX: number; picY: number }
+// lamp — лампа зажжена (светит, только если она лежит в рюкзаке). rest — сидит у костра (в базе не хранится: войдя, герой стоит).
+export interface WorldState { x: number; y: number; dir: Dir; sitting: boolean; bucket: BucketState; pack: PackState; lamp: boolean; rest: boolean; picX: number; picY: number }
 
 export const dist = (a: Point, b: Point) => Math.hypot(a.x - b.x, a.y - b.y);
 export const seat = World.seat;
 export const nearSeat = (p: Point) => dist(p, seat) <= seat.r;
 export const bucketNearSeat = (b: BucketState) => !b.carried && dist(b, seat) <= NEAR_PIER;
+// У костра садятся там, где стоят, — лишь бы недалеко от огня.
+export const nearFire = (p: Point) => dist(p, World.fire) <= World.fire.sit;
+// Куда смотрит сидящий у костра: на огонь.
+export const faceFire = (p: Point): Dir => {
+  const dx = World.fire.x - p.x, dy = World.fire.y - p.y;
+  return Math.abs(dx) >= Math.abs(dy) ? (dx < 0 ? 'left' : 'right') : (dy < 0 ? 'up' : 'down');
+};
 // Куда встаёт герой, поднявшись с места рыбака.
 export const standPoint = (): Point => World.nearestWalkable(seat.x, seat.y) || { x: seat.x, y: seat.y };
 
@@ -33,5 +41,5 @@ export const startPack = (): PackState => ({ x: World.pack.baseX, y: World.pack.
 
 // Так игра начинается у нового игрока: рыбак сидит на причале, ведро и рюкзак — на своих местах с картинки (там они стоят у дома).
 export function startState(): WorldState {
-  return { x: seat.x, y: seat.y, dir: 'down', sitting: true, bucket: { x: World.bucket.baseX, y: World.bucket.baseY, carried: false, home: true }, pack: startPack(), picX: World.pic.x, picY: World.pic.y };
+  return { x: seat.x, y: seat.y, dir: 'down', sitting: true, bucket: { x: World.bucket.baseX, y: World.bucket.baseY, carried: false, home: true }, pack: startPack(), lamp: true, rest: false, picX: World.pic.x, picY: World.pic.y };
 }

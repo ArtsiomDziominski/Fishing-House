@@ -21,6 +21,7 @@ function endpoint() {
 }
 
 function setWeather(kind: WeatherKind | null, wind: boolean | null) { handle?.setWeather(kind, wind); }
+function setSound(on: boolean) { game.setSound(on); handle?.setSound(on); }
 
 // Вещи в рюкзаке: окно рюкзака просит, сервер решает и, если не согласен, присылает «items» с причиной.
 const send = <K extends keyof ClientMessages>(type: K, msg: ClientMessages[K]) => room?.send(type, msg);
@@ -61,6 +62,7 @@ async function connect() {
       game.status = reason === 'replaced' ? 'replaced' : 'offline';
     });
     handle = await startGame(canvas.value!, r, game.ui());
+    handle.setSound(game.sound);
     if (room === r) game.status = 'online';
   } catch (e: any) {
     if (e?.statusCode === 401) return navigateTo({ path: '/login', query: { next: '/play' } });
@@ -94,9 +96,9 @@ const overlay = computed(() => {
 
     <GameCatch />
     <GameToast />
-    <GameDock @bucket="handle?.bucketAction()" @pack="handle?.packAction()" @fish="handle?.fishAction()" @stand="handle?.standUp()" @open="game.togglePack()" />
+    <GameDock @bucket="handle?.bucketAction()" @pack="handle?.packAction()" @fish="handle?.fishAction()" @stand="handle?.standUp()" @open="game.togglePack()" @lamp="handle?.lampAction()" />
     <GamePack @pick="handle?.setPack($event)" />
-    <GameOnline @clock="handle?.setClock($event)" @weather="setWeather" />
+    <GameOnline @clock="handle?.setClock($event)" @weather="setWeather" @sound="setSound" />
     <GameBackpack @move="moveItem" @drop="dropItem" @give="giveItem" />
 
     <div v-if="overlay" class="overlay" :class="{ soft: game.status === 'reconnecting' || game.status === 'connecting' }">

@@ -30,6 +30,7 @@ export function addToBag(bag: Bag, fish: Catch): { first: boolean; record: boole
 export interface ClientMessages {
   move: { x: number; y: number; dir: Dir };   // где герой сейчас
   sit: { put?: { x: number; y: number } };    // сесть на край причала; put — куда поставить ведро, если оно в руке
+  rest: void;                                 // сесть у костра — там, где стоишь; встают тем же stand или просто уходят
   stand: void;                                // встать
   pick: void;                                 // взять ведро
   put: { x: number; y: number };              // поставить ведро сюда
@@ -39,6 +40,7 @@ export interface ClientMessages {
   packKind: { kind: PackKind };               // выбрать другой рюкзак (вещи должны в него влезть)
   itemMove: { id: number; x: number; y: number; rot: boolean };   // переложить вещь в рюкзаке; рюкзак на спине или рядом
   itemDrop: { id: number };                   // выбросить вещь из рюкзака
+  lamp: { on: boolean };                      // зажечь или погасить лампу; она в рюкзаке, рюкзак на спине или рядом
   itemGive: { kind: ItemKind };               // положить в рюкзак новую вещь. Только в разработке
   clock: { hour: number | null };             // перевести часы причала на этот час — сразу у всех; null — настоящее время. Только в разработке
   weather: { kind: WeatherKind | null; wind: boolean | null };   // выставить погоду и ветер — сразу у всех; null — по расписанию. Только в разработке
@@ -65,8 +67,10 @@ export interface ServerMessages {
 export interface PlayerView {
   pid: string; name: string;
   x: number; y: number; dir: Dir; sitting: boolean;
+  rest: boolean;                                            // сидит у костра
   carrying: boolean; bx: number; by: number; bucketHome: boolean;
   wearing: boolean; px: number; py: number; pack: string;   // рюкзак: на спине или лежит в px, py; pack — его вид
+  lamp: boolean;                                            // в рюкзаке лежит зажжённая лампа: ночью вокруг него светло
   recent: ArrayLike<string>;
 }
 

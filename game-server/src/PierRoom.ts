@@ -11,7 +11,7 @@ import { Room, definePlugins, type Client } from 'colyseus';
 import { UniqueSessionPlugin } from 'colyseus/plugins/unique-session';
 import { z } from 'zod';
 import {
-  World, FISH, ITEMS, DIRS, PACK_KINDS, ITEM_KINDS, WEATHERS, ROOM_SIZE, SPEED, RUN, REACH, PUT_REACH, NEAR_PIER, HOOK_GRACE,
+  World, FISH, ITEMS, DIRS, PACK_KINDS, ITEM_KINDS, WEATHERS, ROOM_SIZE, SPEED, RUN, REACH, PUT_REACH, nearFire, faceFire, NEAR_PIER, HOOK_GRACE,
   createFishing, addToBag, nearSeat, bucketNearSeat, standPoint, startState, packInReach, dist, seat,
   type Bag, type Fishing, type FishingEvent, type Item, type ItemKind, type ServerMessages, type WorldState,
 } from '@fh/shared';
@@ -49,6 +49,7 @@ const cell = z.number().int().min(0).max(63);
 const itemMoveMsg = z.object({ id: z.number().int(), x: cell, y: cell, rot: z.boolean() });
 const itemDropMsg = z.object({ id: z.number().int() });
 const itemGiveMsg = z.object({ kind: z.enum(ITEM_KINDS) });
+const lampMsg = z.object({ on: z.boolean() });
 const clockMsg = z.object({ hour: z.number().min(0).max(24).nullable() });
 const weatherMsg = z.object({ kind: z.enum(WEATHERS).nullable(), wind: z.boolean().nullable() });
 
@@ -79,6 +80,7 @@ export class PierRoom extends Room<{ state: PierState; client: Client<{ auth: Au
 
     this.onMessage('move', moveMsg, (client, m) => this.move(client, m.x, m.y, m.dir));
     this.onMessage('sit', sitMsg, (client, m) => this.sit(client, m?.put));
+    this.onMessage('rest', client => this.rest(client));
     this.onMessage('stand', client => this.withSession(client, s => this.standUp(s)));
     this.onMessage('pick', client => this.pick(client));
     this.onMessage('put', point, (client, m) => this.put(client, m.x, m.y));
@@ -88,6 +90,7 @@ export class PierRoom extends Room<{ state: PierState; client: Client<{ auth: Au
     this.onMessage('packKind', packKindMsg, (client, m) => this.packKind(client, m.kind));
     this.onMessage('itemMove', itemMoveMsg, (client, m) => this.itemMove(client, m.id, m.x, m.y, m.rot));
     this.onMessage('itemDrop', itemDropMsg, (client, m) => this.itemDrop(client, m.id));
+    this.onMessage('lamp', lampMsg, (client, m) => this.lamp(client, m.on));
     this.onMessage('itemGive', itemGiveMsg, (client, m) => { if (Sky.canSet) this.itemGive(client, m.kind); });
   }
 
@@ -149,7 +152,7 @@ export class PierRoom extends Room<{ state: PierState; client: Client<{ auth: Au
     const w = s.world, d = dist(w, { x, y });
     if (w.sitting || !World.canWalk(x, y) || d > s.budget + SLACK) { this.reject(client, s); return; }
     s.budget = Math.max(0, s.budget - d);
-    w.x = x; w.y = y; w.dir = dir; s.dirty = true;
+    w.x = x; w.y = y; w.dir = dir; w.rest = false; s.dirty = true;   // пошёл — значит, встал от костра
     this.syncView(s);
   }
 
@@ -168,7 +171,18 @@ export class PierRoom extends Room<{ state: PierState; client: Client<{ auth: Au
     this.syncView(s);
   }
 
+  // У костра садятся прямо там, где стоят, лицом к огню; ведро, если оно в руке, остаётся в руке.
+  private rest(client: Client) {
+    const s = this.sessions.get(client.sessionId); if (!s) return;
+    const w = s.world;
+    if (w.sitting || w.rest) return;
+    if (!nearFire(w)) { this.reject(client, s); return; }
+    w.rest = true; w.dir = faceFire(w);
+    this.syncView(s);
+  }
+
   private standUp(s: Session) {
+    if (s.world.rest) { s.world.rest = false; this.syncView(s); return; }
     if (!s.world.sitting) return;
     s.fishing.leave();
     const p = standPoint();
@@ -247,7 +261,17 @@ export class PierRoom extends Room<{ state: PierState; client: Client<{ auth: Au
     if (i < 0) { this.tell(client, 'items', { list: s.items }); return; }
     if (!packInReach(s.world, s.world.pack, SLACK)) { this.tell(client, 'items', { list: s.items, note: 'far' }); return; }
     s.items.splice(i, 1);
+    this.syncView(s);                                   // выложил лампу — свет погас
     this.write(s, () => dropItem(db, s.pid, id));
+  }
+
+  // Лампу зажигают и гасят там же, где перекладывают вещи: рюкзак на спине или рядом. Нет лампы или далеко — молчим:
+  // кнопки у игрока тогда и нет.
+  private lamp(client: Client, on: boolean) {
+    const s = this.sessions.get(client.sessionId); if (!s) return;
+    if (!ITEMS.lit(s.items) || !packInReach(s.world, s.world.pack, SLACK) || s.world.lamp === on) return;
+    s.world.lamp = on; s.dirty = true;
+    this.syncView(s);
   }
 
   // Новая вещь — на первое свободное место. Пока строка пишется в базу, место уже занято (id пока отрицательный),
@@ -258,9 +282,10 @@ export class PierRoom extends Room<{ state: PierState; client: Client<{ auth: Au
     if (!at) { this.tell(client, 'items', { list: s.items, note: 'full' }); return; }
     const it: Item = { id: -++this.unsaved, kind, ...at };
     s.items.push(it);
+    this.syncView(s);
     this.write(s, async () => {
       try { it.id = (await addItem(db, s.pid, kind, { x: it.x, y: it.y, rot: it.rot })).id; }
-      catch (err) { s.items = s.items.filter(o => o !== it); throw err; }
+      catch (err) { s.items = s.items.filter(o => o !== it); this.syncView(s); throw err; }
       finally { if (this.sessions.get(client.sessionId) === s) this.tell(client, 'items', { list: s.items }); }
     });
   }
@@ -301,9 +326,10 @@ export class PierRoom extends Room<{ state: PierState; client: Client<{ auth: Au
 
   private syncView(s: Session) {
     const w = s.world, v = s.view;
-    v.x = w.x; v.y = w.y; v.dir = w.dir; v.sitting = w.sitting;
+    v.x = w.x; v.y = w.y; v.dir = w.dir; v.sitting = w.sitting; v.rest = w.rest;
     v.carrying = w.bucket.carried; v.bx = w.bucket.x; v.by = w.bucket.y; v.bucketHome = w.bucket.home;
     v.wearing = w.pack.worn; v.px = w.pack.x; v.py = w.pack.y; v.pack = w.pack.kind;
+    v.lamp = w.lamp && ITEMS.lit(s.items);
     const recent = s.bag.recent.filter(id => FISH.byId[id]);
     if (v.recent.length !== recent.length || recent.some((id, i) => v.recent[i] !== id)) {
       v.recent.clear(); for (const id of recent) v.recent.push(id);

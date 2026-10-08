@@ -168,12 +168,41 @@ if (before.canSet) {
   await until('ещё червей', () => !!items);
   check(items!.list.length === kit.length + 1 && !items!.list.some(it => it.kind === 'net-seine'), 'невод и накидка выброшены, новая банка червей легла на их место');
   room.send('itemDrop', { id: items!.list.at(-1)!.id });
+  // лампа в рюкзаке видна всем в состоянии комнаты: по ней клиенты рисуют свет
+  check(seen()?.lamp === false, 'без лампы в рюкзаке света нет');
+  items = null;
+  room.send('itemGive', { kind: 'lamp' });
+  await until('лампу', () => !!items && items.list.some(it => it.kind === 'lamp' && it.id > 0));
+  await until('свет лампы в состоянии комнаты', () => seen()?.lamp === true);
+  room.send('lamp', { on: false });
+  await until('лампа погашена', () => seen()?.lamp === false);
+  room.send('lamp', { on: true });
+  await until('лампа зажжена снова', () => seen()?.lamp === true);
+  check(true, 'лампу в рюкзаке можно погасить и зажечь');
+  room.send('itemDrop', { id: thing(items!.list, 'lamp').id });
+  await until('свет погас', () => seen()?.lamp === false);
+  check(true, 'лампа в рюкзаке зажигает свет у героя, выложенная — гасит');
 } else {
   items = null;
   room.send('itemGive', { kind: 'net-seine' });
   await sleep(400);
   check(items === null, 'вещи с клиента не кладутся — сервер это сообщение не слушает');
 }
+
+// костёр у дома: сесть можно только рядом с ним, а шаг в сторону поднимает
+room.send('rest');
+await sleep(300);
+check(seen()?.rest === false, 'вдали от костра не сесть');
+await walk(World.nearestWalkable(World.fire.x - 24, World.fire.y + 2)!);
+room.send('rest');
+await until('сел у костра', () => seen()?.rest === true);
+room.send('stand');
+await until('встал от костра', () => seen()?.rest === false);
+room.send('rest');
+await until('сел у костра снова', () => seen()?.rest === true);
+await walk({ x: pos.x - 6, y: pos.y });
+await until('ушёл от костра', () => seen()?.rest === false);
+check(!World.canWalk(World.fire.x, World.fire.y), 'у костра можно посидеть и встать, сквозь очаг не пройти');
 
 await walk({ x: seat.x, y: seat.y });
 const bucketSpot = { x: seat.x + 26, y: seat.y - 13 };   // место на настиле рядом с рыбаком

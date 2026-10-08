@@ -5,6 +5,8 @@ import { defineStore } from 'pinia';
 import { PACKS, emptyBag, type Bag, type Item, type PackKind } from '@fh/shared';
 import type { Actions, GameUI, SkyInfo, Tone } from '~/game/engine';
 
+const SOUND_KEY = 'fh-sound';
+const recall = (key: string) => { try { return localStorage.getItem(key); } catch { return null; } };   // на сервере и в частном окне хранилища нет
 export type Status = 'idle' | 'connecting' | 'online' | 'reconnecting' | 'replaced' | 'offline' | 'error';
 
 export const useGameStore = defineStore('game', {
@@ -18,11 +20,12 @@ export const useGameStore = defineStore('game', {
     packOpen: false,              // открыто окно рюкзака
     // время суток и погода: часы, темнота фона, погода словами; можно ли их выставлять (разработка) и что выставлено
     sky: { label: '', dark: 0, minutes: 0, canSet: false, moved: false, weather: '', fixKind: null, fixWind: null } as SkyInfo,
-    actions: { bucket: null, pack: null, fish: null, hot: false, stand: false, open: false } as Actions,
+    actions: { bucket: null, pack: null, fish: null, hot: false, stand: false, open: false, lamp: false } as Actions,
     toast: { text: '', tone: '' as Tone, fishId: null as string | null, show: false, seq: 0 },
     quietHint: false,
     debug: null as string | null,
     online: [] as { pid: string; name: string }[],
+    sound: recall(SOUND_KEY) !== '0',   // звук включён; помним выбор игрока в этом браузере
   }),
   actions: {
     reset() { this.$reset(); },
@@ -37,6 +40,7 @@ export const useGameStore = defineStore('game', {
       if (want && !this.actions.open) { this.showToast('Рюкзак далеко — подойди к нему', 'bad'); return; }
       this.packOpen = want;
     },
+    setSound(on: boolean) { this.sound = on; try { localStorage.setItem(SOUND_KEY, on ? '1' : '0'); } catch { /* в частном окне хранилища может не быть — выбор проживёт до перезагрузки */ } },
     // Мост от движка к хранилищу.
     ui(): GameUI {
       return {

@@ -1,4 +1,4 @@
-// Вещи в рюкзаке: удочки, сети, топор и мелочь для рыбалки. Каждая занимает прямоугольник клеток в сетке рюкзака:
+// Вещи в рюкзаке: удочки, сети, топор, лампа и мелочь для рыбалки. Каждая занимает прямоугольник клеток в сетке рюкзака:
 // мелочь — одну клетку, сачок и топор — две, удочка и большие сети — четыре. Вещь можно повернуть на четверть
 // оборота — ширина и высота меняются местами. Сколько клеток в рюкзаке, знает его вид (PACKS.grid).
 // Где что лежит, решает и хранит сервер; клиент только просит переложить и по тем же правилам заранее подсвечивает,
@@ -11,7 +11,7 @@ import type { Point } from './world.ts';
 export const ITEM_KINDS = [
   'rod-willow', 'rod-bamboo', 'rod-tele', 'rod-carbon', 'rod-gold',
   'net-scoop', 'net-cast', 'net-seine',
-  'axe',
+  'axe', 'lamp',
   'worms', 'floats',
 ] as const;
 export type ItemKind = typeof ITEM_KINDS[number];
@@ -38,6 +38,7 @@ export const ITEMS = (() => {
     'net-cast': { name: 'Сеть-накидка', group: 'net', w: 2, h: 2, text: 'Бросают кругом, по краю грузила.' },
     'net-seine': { name: 'Невод', group: 'net', w: 4, h: 1, text: 'Длинная сеть с поплавками и грузилами.' },
     'axe': { name: 'Топор', group: 'tool', w: 2, h: 1, text: 'Нарубить сучьев и наколоть дров.' },
+    'lamp': { name: 'Походная лампа', group: 'tool', w: 1, h: 1, text: 'Керосиновая, с ручкой. С ней и ночью не темно.' },
     'worms': { name: 'Банка червей', group: 'tackle', w: 1, h: 1, text: 'Свежие, с огорода.' },
     'floats': { name: 'Поплавки', group: 'tackle', w: 1, h: 1, text: 'Красный и синий, на запас.' },
   };
@@ -107,8 +108,10 @@ export const ITEMS = (() => {
     }
     return { list, moved };
   }
+  // Есть ли в рюкзаке лампа: ночью она светит вокруг рюкзака — на спине героя или там, где он лежит.
+  const lit = (items: readonly Item[]) => items.some(it => it.kind === 'lamp');
   // Сколько клеток занято.
   const used = (items: readonly Item[]) => items.reduce((n, it) => n + cells(it.kind), 0);
 
-  return { STARTER, isKind, info, size, cells, grid, turns, fits, spot, repack, settle, used };
+  return { STARTER, isKind, info, size, cells, grid, turns, fits, spot, repack, settle, used, lit };
 })();

@@ -6,6 +6,7 @@ import { WEATHERS, WEATHER_NAMES, type WeatherKind } from '@fh/shared';
 const emit = defineEmits<{
   clock: [hour: number | null];                            // перевести часы причала на этот час; null — настоящее время
   weather: [kind: WeatherKind | null, wind: boolean | null];   // выставить погоду и ветер; null — по расписанию
+  sound: [on: boolean];                                    // включить или выключить звук
 }>();
 const game = useGameStore();
 const { user } = useUserSession();
@@ -37,6 +38,7 @@ function blur(ev: Event) { (ev.currentTarget as HTMLElement).blur(); }
 function toggle(ev: Event, what: 'clock' | 'list') { blur(ev); open.value = open.value === what ? null : what; }
 function setClock(ev: Event, hour: number | null) { blur(ev); draft.value = null; emit('clock', hour); }
 function setKind(ev: Event, kind: WeatherKind | null) { blur(ev); emit('weather', kind, game.sky.fixWind); }
+function setSound(ev: Event) { blur(ev); emit('sound', !game.sound); }
 function setWind(ev: Event, wind: boolean | null) { blur(ev); emit('weather', game.sky.fixKind, wind); }
 </script>
 
@@ -55,6 +57,9 @@ function setWind(ev: Event, wind: boolean | null) { blur(ev); emit('weather', ga
       <button type="button" class="chip" :aria-expanded="open === 'list'" @click="toggle($event, 'list')">
         <span class="dot" :class="'is-' + game.status" />
         На причале: {{ game.online.length }}
+      </button>
+      <button type="button" class="chip" :class="{ off: !game.sound }" :aria-pressed="game.sound" :title="game.sound ? 'Выключить звук' : 'Включить звук'" @click="setSound">
+        {{ game.sound ? 'Звук' : 'Без звука' }}
       </button>
       <NuxtLink to="/" class="chip" title="В меню">Меню</NuxtLink>
     </div>
@@ -111,6 +116,7 @@ function setWind(ev: Event, wind: boolean | null) { blur(ev); emit('weather', ga
   cursor: pointer;
 }
 .chip:hover, .skybox button:hover { background: var(--wood-hover); color: var(--paper); }
+.chip.off { color: var(--paper-dim); }
 .chip.clock { gap: 0; white-space: pre; font-variant-numeric: tabular-nums; }
 .chip.clock.manual { border-color: var(--coat); }   /* время или погода выставлены вручную */
 .chip.clock.still { cursor: default; }

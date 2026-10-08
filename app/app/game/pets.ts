@@ -165,7 +165,7 @@ const PETS = [
 const CHAIN = 12;                  // столько сроков подряд зверь выбирает место поближе к прошлому, потом — где угодно
 const NEAR = [24, 130];            // «поближе»: не ближе и не дальше стольких пикселей
 const GRID = 2;                    // шаг сетки для поиска пути, арт-пикселей
-const AWAY = 26;                   // от места рыбака, ведра и рюкзака держатся на таком расстоянии
+const AWAY = 26;                   // от костра, места рыбака, ведра и рюкзака держатся на таком расстоянии
 const BED = { x: 62, y: 8, gap: 20 };   // ночлег: у крыльца — на столько правее левого края дома и ниже его низа; друг от друга не ближе gap
 
 const hash = (n: number, s: number) => { let h = (n * 374761393 + s * 668265263) | 0; h = (h ^ (h >>> 13)) * 1274126177 | 0; return ((h ^ (h >>> 16)) >>> 0) / 4294967296; };
@@ -325,7 +325,7 @@ export function petNight(ms: number, fixed?: number) {
 // at(ms) — что нарисовать в этот миг (ms — часы причала): по штуке на зверя, класть в общую очередь по y (лапы).
 export function createPetsView() {
   const W = World.W, H = World.H, walk = World.walk.slice();
-  const avoid = [{ x: World.seat.x, y: World.seat.y }, { x: World.bucket.baseX, y: World.bucket.baseY }, { x: World.pack.baseX, y: World.pack.baseY }];
+  const avoid = [{ x: World.fire.x, y: World.fire.y }, { x: World.seat.x, y: World.seat.y }, { x: World.bucket.baseX, y: World.bucket.baseY }, { x: World.pack.baseX, y: World.pack.baseY }];
   const beds: Pt[] = [], porch = { x: World.house.x + BED.x, y: World.house.y + World.house.h + BED.y };
   // Спящего должно быть видно целиком: ничто из стоящего ближе к зрителю (крыльцо, бочки, кусты) его не закрывает.
   const open = (q: Pt) => { for (let j = -8; j <= 0; j++) for (let i = -12; i <= 12; i++) if (World.depthAt(q.x + i, q.y + j) > q.y) return false; return true; };

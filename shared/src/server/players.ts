@@ -80,6 +80,8 @@ export function cleanWorld(w: WorldState | null): WorldState | null {
     x: p.x, y: p.y, dir: DIRS.includes(w.dir) ? w.dir : 'down', sitting: !!w.sitting,
     bucket: { x: moved(b.x, dx, World.bucket.baseX), y: moved(b.y, dy, World.bucket.baseY), carried: !!b.carried && !w.sitting, home: !!b.home },
     pack: k ? { x: moved(k.x, dx, World.pack.baseX), y: moved(k.y, dy, World.pack.baseY), worn: !!k.worn, kind: PACKS.isKind(k.kind) ? k.kind : PACKS.DEFAULT } : startPack(),
+    rest: false,
+    lamp: (w as { lamp?: boolean }).lamp !== false,   // в старых записях лампы нет — она зажжена
     picX: World.pic.x, picY: World.pic.y,
   };
 }

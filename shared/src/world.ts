@@ -3,7 +3,7 @@
 // Один экземпляр на процесс: клиент ставит в него своё ведро как препятствие, сервер карту не меняет.
 
 import { WORLD_DATA as DATA } from './world-data.ts';
-import { HOUSE } from './house.ts';
+import { FIRE, HOUSE } from './house.ts';
 
 export interface Point { x: number; y: number }
 export interface Box extends Point { w: number; h: number }
@@ -34,6 +34,12 @@ const onMap = (x: number, y: number): Point => ({ x: x + DATA.pic.x, y: y + DATA
   for (let y = Math.max(0, Math.floor(Math.min(...ys))); y <= Math.min(H - 1, Math.ceil(Math.max(...ys))); y++)
     for (let x = Math.max(0, Math.floor(Math.min(...xs))); x <= Math.min(W - 1, Math.ceil(Math.max(...xs))); x++)
       if (inside(x + 0.5, y + 0.5)) walk[y * W + x] = 0;
+}
+// Костёр у дома: очаг тоже вычеркнут из проходимости.
+const fire = { ...onMap(...FIRE.at), rx: FIRE.rx, ry: FIRE.ry, sit: FIRE.sit };
+for (let y = Math.ceil(fire.y - fire.ry); y <= fire.y + fire.ry; y++) for (let x = Math.ceil(fire.x - fire.rx); x <= fire.x + fire.rx; x++) {
+  const dx = (x - fire.x) / fire.rx, dy = (y - fire.y) / fire.ry;
+  if (x >= 0 && y >= 0 && x < W && y < H && dx * dx + dy * dy <= 1) walk[y * W + x] = 0;
 }
 const box = ([x, y, w, h]: readonly [number, number, number, number]): Box => ({ ...onMap(x, y), w, h });
 
@@ -146,6 +152,8 @@ export const World = {
   fisher: DATA.fisher, line: DATA.line, rod: DATA.rod, seat: DATA.seat, bucket: DATA.bucket, pack: DATA.pack, sparkles: DATA.sparkles as [number, number, number, number][],
   // Дом — отдельная картинка поверх карты (house.png), где он стоит: левый верх и размер.
   house: box([...HOUSE.at, ...HOUSE.size]),
+  // Костёр у дома: середина очага, его размер и расстояние, с которого можно сесть у огня.
+  fire,
   // Дом: устье трубы, горящие окна и ореол вокруг них. Если сборка запекла дом в карту (house.onMap в tools/world-shapes.mjs),
   // они берутся из world-data.ts, иначе — у дома, стоящего поверх карты.
   smoke: (DATA.smoke as Point | null) ?? onMap(...HOUSE.smoke) as Point | null,
