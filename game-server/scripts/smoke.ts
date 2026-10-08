@@ -386,7 +386,7 @@ await until('ушёл от костра', () => seen()?.rest === false);
 check(!World.canWalk(World.fire.x, World.fire.y), 'у костра можно посидеть и встать, сквозь очаг не пройти');
 
 await walk({ x: seat.x, y: seat.y });
-// ведро — на настил рядом с рыбаком: так улов идёт в него, а левая рука свободна для удочки
+// ведро — на настил рядом с рыбаком: так улов идёт в него, а руки свободны для удочки и червей
 const bucketSpot = World.nearestWalkable(seat.x + 16, seat.y - 10)!;
 room.send('itemPut', { ...bucketSpot, left: true });
 await until('ведро у места рыбака', () => !!onGround(pail.id) && held() === 'floats');
@@ -397,9 +397,16 @@ fish.length = 0;
 room.send('press');
 await until('needRod у воды', () => fish.some(f => f.e === 'needRod'));
 check(!fish.some(f => f.e === 'cast'), 'ведро рядом, но в руке поплавки, а не удочка — забросить нельзя');
-// достаём удочку из рюкзака (он на спине) в свободную левую руку — поплавки остаются в правой. С ней — до конца: после перезахода она должна остаться в руке
+// достаём удочку из рюкзака (он на спине) в свободную левую руку — поплавки остаются в правой
 room.send('itemTake', { id: rod.id });
 await until('удочку в левой руке', () => seen()?.off === 'rod-willow');
+fish.length = 0;
+room.send('press');
+await until('needBait', () => fish.some(f => f.e === 'needBait'));
+check(!fish.some(f => f.e === 'cast'), 'удочка в руке, но в другой поплавки, а не черви — забросить нельзя');
+// черви — в правую руку вместо поплавков: те уходят в рюкзак. С удочкой и червями — до конца: после перезахода они должны остаться в руках
+room.send('itemTake', { id: worms.id, left: false });
+await until('червей в правой руке', () => held() === 'rod-willow,worms');
 room.send('press');
 await until('заброс', () => fish.some(f => f.e === 'cast'));
 await until('поклёвку', () => fish.some(f => f.e === 'bite'), 12000);
@@ -434,8 +441,8 @@ check(self!.sitting && pailNow?.x === bucketSpot.x && pailNow.fish === (hook.e =
 check(self!.pack.worn && self!.pack.kind === 'sailor', 'рюкзак после перезахода на спине, тот же морской');
 check(bag!.total === 1, 'улов после перезахода тот же');
 await until('вещи после входа', () => !!items);
-check(items!.list.length === kit.length - 2 + (before.canSet ? 4 : 0) && thing(items!.list, 'worms').x === 5 && thing(items!.list, 'net-scoop').rot, 'вещи после перезахода лежат там, куда их переложили, стартовый набор не задвоился');
-check(items!.hands.map(it => it.kind + (it.left ? ':левая' : ':правая')).join() === 'floats:правая,rod-willow:левая' && !items!.list.some(it => it.kind === 'rod-willow' || it.kind === 'floats'), 'поплавки в правой руке, удочка в левой — и после перезахода');
+check(items!.list.length === kit.length - 2 + (before.canSet ? 4 : 0) && thing(items!.list, 'floats').x === 5 && thing(items!.list, 'floats').y === 4 && thing(items!.list, 'net-scoop').rot, 'вещи после перезахода лежат там, куда их переложили (поплавки — на месте червей), стартовый набор не задвоился');
+check(items!.hands.map(it => it.kind + (it.left ? ':левая' : ':правая')).join() === 'worms:правая,rod-willow:левая' && !items!.list.some(it => it.id === rod.id || it.id === worms.id), 'черви в правой руке, удочка в левой — и после перезахода');
 
 // еда: рыбу достают из ведра в свободную руку, сырую в рюкзак не убрать, у костра она жарится, жареную съедают
 const caught = hook.e === 'hook' ? hook.fish.id : '';
@@ -444,7 +451,7 @@ items = null;
 again.send('fishTake', { species: caught });
 await until('отказ достать рыбу', () => !!items);
 check(items!.note === 'busy', 'обе руки заняты — рыбу из ведра не достать');
-again.send('itemStow', { id: floats.id, at: null });
+again.send('itemStow', { id: worms.id, at: null });
 await until('свободную правую руку', () => hand()?.hand === '');
 items = null;
 again.send('fishTake', { species: caught });

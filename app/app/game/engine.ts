@@ -371,10 +371,12 @@ export async function startGame(canvas: HTMLCanvasElement, room: Room, ui: GameU
       if (m.e === 'cooked') { sound.cue('catch'); ui.toast(`${name} — готово! Съесть — X`, 'good', m.fish); }
       else ui.toast(m.gain ? `Съедено: ${name.toLowerCase()} · сытость +${m.gain}` : `Съедено: ${name.toLowerCase()} — ты и так сыт`, 'good', m.fish);
     }
-    else if (m.e === 'needRod') {                       // рыбачат удочкой в руке; заодно скажем и про ведро, чтобы не ходить дважды
-      ui.toast(ownPail() || pailBySeat() ? 'Нужна удочка: возьми её из рюкзака в руку' : 'Нужна удочка в руке и ведро — в руке или рядом. Удочка — в рюкзаке', 'bad');
+    else if (m.e === 'needRod' || m.e === 'needBait') {   // рыбачат с удочкой в одной руке и червями в другой; заодно скажем и про ведро, чтобы не ходить дважды
+      const want = m.e === 'needBait' ? 'Нужны черви: возьми банку из рюкзака в другую руку'
+        : ownHands().some(ITEMS.isBait) ? 'Нужна удочка: возьми её из рюкзака в другую руку' : 'Нужны удочка и черви — по одной в каждую руку. Они в рюкзаке';
+      ui.toast(pailBySeat() ? want : `${want}, а ведро поставь рядом на настил`, 'bad');
     }
-    else if (m.e === 'needBucket') ui.toast('Рыбу некуда класть. Возьми ведро в руку или поставь его у причала');
+    else if (m.e === 'needBucket') ui.toast('Рыбу некуда класть: руки заняты удочкой и червями, поставь ведро рядом на настил');
     else {
       if (m.e === 'early') ui.toast('Рано дёрнул — рыба ушла', 'bad');
       else if (m.e === 'miss') ui.toast('Сорвалась…', 'bad');
@@ -979,7 +981,7 @@ export async function startGame(canvas: HTMLCanvasElement, room: Room, ui: GameU
     for (const p of pets.at(Date.now() + skew, Number.isFinite(fixedHour) ? fixedHour : undefined, catErrand())) queue.push({ y: p.y, draw: () => p.draw(fctx) });   // кот и собака — как все, по лапам
     // Все, кто сидит, — один рыбак с картинки; рюкзак ему рисуем свой, а если сидят только другие — первого из них.
     let someoneSits = hero.sitting, seatPack: PackKind | null = hero.sitting && pack.worn ? pack.kind : null;
-    let seatRod = hero.sitting && ownHands().some(ITEMS.isRod);   // у сидящего удочка в руках, только если она у него и правда в руке
+    let seatRod = hero.sitting ? ownHands().find(ITEMS.isRod) ?? null : null;   // у сидящего удочка в руках, только если она у него и правда в руке, — та же самая
     let seatPail: ArrayLike<string> | null = hero.sitting && ownPail() ? bag.recent : null;   // ведро в руке сидящего — рядом на настиле
     if (ready) {
       const me = ownView() ?? { hand: '', off: '' };
@@ -990,7 +992,7 @@ export async function startGame(canvas: HTMLCanvasElement, room: Room, ui: GameU
       if (sid === room.sessionId) return;
       const g = ghosts.get(sid); if (!g) return;
       const worn = p.wearing ? packKind(p.pack) : null;
-      if (p.sitting) { if (!someoneSits) seatPack = worn; someoneSits = true; seatRod ||= ITEMS.isRod(p.hand) || ITEMS.isRod(p.off); if (!seatPail && pailHand(p)) seatPail = p.recent; }
+      if (p.sitting) { if (!someoneSits) seatPack = worn; someoneSits = true; seatRod ??= ITEMS.isRod(p.hand) ? p.hand : ITEMS.isRod(p.off) ? p.off : null; if (!seatPail && pailHand(p)) seatPail = p.recent; }
       else queue.push({ y: g.y, draw: () => drawHero({ x: g.x, y: g.y, dir: p.dir, rest: p.rest, moving: g.moving, anim: g.anim, carrying: pailHand(p), pack: worn, hands: otherHands(p), lit: p.lamp, recent: p.recent, blink: g.blink, eat: eatOf(p, sid, t) }, t) });
       if (!p.wearing) queue.push({ y: p.py - 0.5, draw: () => drawPack({ x: p.px, y: p.py, kind: packKind(p.pack) }) });
     });

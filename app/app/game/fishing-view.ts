@@ -3,6 +3,7 @@
 // идут сами по таймерам TIME — тем же, что на сервере.
 
 import { TIME, type Catch, type FishingEvent, type Phase } from '@fh/shared';
+import { rodColors } from './held-art.ts';
 
 export interface ViewState { phase: Phase; t: number; nibble: number; fish: Catch | null }
 
@@ -55,7 +56,8 @@ function ripple(ctx: Ctx, x: number, y: number, r: number, alpha: number) {
 // ---------- удочка ----------
 // Удилище нарисовано прямо на fisher.png. Для подсечки оно отделяется от рыбака и поворачивается вокруг рук вверх.
 // В пикселях fisher.png. Удилище — прямоугольник x 0..19, y 13..25, кроме угла справа сверху (x > 15, y < 20): там лицо.
-const ROD = { pivotX: 18, pivotY: 24, tipX: 1, tipY: 14, minY: 13, maxX: 19, maxY: 25, faceX: 15, faceY: 20 };
+// tipLen — сколько столбцов от кончика вершинка, gripX — с какого столбца рукоять (в руках рыбака).
+const ROD = { pivotX: 18, pivotY: 24, tipX: 1, tipY: 14, minY: 13, maxX: 19, maxY: 25, faceX: 15, faceY: 20, tipLen: 2, gripX: 14 };
 const LIFT = 0.6, PAD = 14;                                                       // подъём (рад, ~35°) и запас холста под поднятое удилище
 
 // Угол удочки: при подсечке — резкий рывок вверх, удочка держится, пока рыба идёт по леске, и плавно опускается, пока рыба летит в ведро.
@@ -69,25 +71,46 @@ function rodTip(x: number, tipY: number, a: number) {
   const px = x + ROD.pivotX - ROD.tipX, py = tipY + ROD.pivotY - ROD.tipY, vx = ROD.tipX - ROD.pivotX, vy = ROD.tipY - ROD.pivotY;
   return { x: Math.round(px + vx * Math.cos(a) - vy * Math.sin(a)), y: Math.round(py + vx * Math.sin(a) + vy * Math.cos(a)) };
 }
-// Сидящий рыбак: тело отдельно, удилище отдельно; повёрнутые кадры удилища кешируются.
+// Сидящий рыбак: тело отдельно, удилище отдельно; повёрнутые кадры удилища кешируются. Удилище в руках — та самая удочка,
+// что у рыбака в руке: оно рисуется её цветами (rodColors), как удочка в руке на ходу, — вершинка, бланк, у рук рукоять,
+// по краям контур — по линии от кончика к рукам. Удочка незнакомая — остаётся удилище с картинки.
 export function createRod(fisher: HTMLImageElement) {
   const w = fisher.width, h = fisher.height;
   const canvas = (cw: number, ch: number) => { const c = document.createElement('canvas'); c.width = cw; c.height = ch; return c; };
   const body = canvas(w, h), bctx = body.getContext('2d')!;
   bctx.drawImage(fisher, 0, 0);
-  const all = bctx.getImageData(0, 0, w, h), rod = new Uint8ClampedArray(all.data.length);
+  const all = bctx.getImageData(0, 0, w, h), painted = new Uint8ClampedArray(all.data.length);
+  const inRod = (x: number, y: number) => x >= 0 && x <= ROD.maxX && y >= ROD.minY && y <= ROD.maxY && !(x > ROD.faceX && y < ROD.faceY);
   for (let y = ROD.minY; y <= ROD.maxY; y++) for (let x = 0; x <= ROD.maxX; x++) {
-    if (x > ROD.faceX && y < ROD.faceY) continue;
+    if (!inRod(x, y)) continue;
     const i = (y * w + x) * 4;
-    for (let c = 0; c < 4; c++) { rod[i + c] = all.data[i + c]!; all.data[i + c] = 0; }
+    for (let c = 0; c < 4; c++) { painted[i + c] = all.data[i + c]!; all.data[i + c] = 0; }
   }
   bctx.putImageData(all, 0, 0);
-  const cache = new Map<number, HTMLCanvasElement>();
-  function turned(a: number) {                    // поворот без сглаживания: каждый пиксель берём из ближайшего пикселя исходника
-    let c = cache.get(a);
+  // Удилище удочки kind: кадр в покое, его пиксели (для поворота) и повёрнутые кадры.
+  interface RodArt { still: HTMLCanvasElement; px: Uint8ClampedArray; turned: Map<number, HTMLCanvasElement> }
+  const rods = new Map<string, RodArt>();
+  function rodOf(kind: string) {
+    let r = rods.get(kind);
+    if (r) return r;
+    const col = rodColors(kind), still = canvas(w, h), sx = still.getContext('2d')!;
+    if (!col) { const img = sx.createImageData(w, h); img.data.set(painted); sx.putImageData(img, 0, 0); }
+    else {
+      const dot = (x: number, y: number, c: string) => { if (inRod(x, y)) { sx.fillStyle = c; sx.fillRect(x, y, 1, 1); } };
+      const k = (ROD.pivotY + 0.5 - ROD.tipY) / (ROD.pivotX - ROD.tipX), at = (x: number) => Math.round(ROD.tipY + (x - ROD.tipX) * k);
+      dot(ROD.tipX - 1, ROD.tipY, col.o);
+      for (let x = ROD.tipX; x <= ROD.maxX; x++) { dot(x, at(x) - 1, col.o); dot(x, at(x) + 1, col.o); }   // контур — над бланком и под ним
+      for (let x = ROD.tipX; x <= ROD.maxX; x++) dot(x, at(x), x < ROD.tipX + ROD.tipLen ? col.t : x >= ROD.gripX ? col.h : col.p);
+    }
+    r = { still, px: sx.getImageData(0, 0, w, h).data, turned: new Map() };
+    rods.set(kind, r);
+    return r;
+  }
+  function turned(r: RodArt, a: number) {         // поворот без сглаживания: каждый пиксель берём из ближайшего пикселя исходника
+    let c = r.turned.get(a);
     if (c) return c;
     c = canvas(w + PAD * 2, h + PAD * 2); const cx = c.getContext('2d')!, out = cx.createImageData(c.width, c.height);
-    const cos = Math.cos(a), sin = Math.sin(a);
+    const cos = Math.cos(a), sin = Math.sin(a), rod = r.px;
     for (let y = 0; y < c.height; y++) for (let x = 0; x < c.width; x++) {
       const vx = x - PAD + 0.5 - ROD.pivotX, vy = y - PAD + 0.5 - ROD.pivotY;
       const sx = Math.floor(ROD.pivotX + vx * cos + vy * sin), sy = Math.floor(ROD.pivotY - vx * sin + vy * cos);
@@ -96,16 +119,17 @@ export function createRod(fisher: HTMLImageElement) {
       if (!rod[i + 3]) continue;
       for (let k = 0; k < 4; k++) out.data[o + k] = rod[i + k]!;
     }
-    cx.putImageData(out, 0, 0); cache.set(a, c);
+    cx.putImageData(out, 0, 0); r.turned.set(a, c);
     return c;
   }
   return {
-    // a — на сколько удилище поднято (рад); rod — есть ли оно вообще: без удочки в руке рыбак сидит с пустыми руками
-    draw(ctx: Ctx, x: number, y: number, a: number, rod = true) {
-      if (!rod) { ctx.drawImage(body, x, y); return; }
-      if (a <= 0) { ctx.drawImage(fisher, x, y); return; }
+    // a — на сколько удилище поднято (рад); rod — какая удочка в руке: null — без удочки рыбак сидит с пустыми руками
+    draw(ctx: Ctx, x: number, y: number, a: number, rod: string | null) {
       ctx.drawImage(body, x, y);
-      ctx.drawImage(turned(Math.round(a / 0.03) * 0.03), x - PAD, y - PAD);
+      if (!rod) return;
+      const r = rodOf(rod);
+      if (a <= 0) ctx.drawImage(r.still, x, y);
+      else ctx.drawImage(turned(r, Math.round(a / 0.03) * 0.03), x - PAD, y - PAD);
     },
   };
 }

@@ -4,7 +4,8 @@
 // - ходит клиент сам (так нет задержки), а сервер проверяет каждый шаг: в проходимую ли клетку и не быстрее ли, чем можно;
 //   не принял — шлёт игроку «self», и тот встаёт туда, где сервер его видит;
 // - рыбалку ведёт только сервер: когда клюёт, кто клюнул, успел ли подсечь. Клиент шлёт лишь нажатия. Забросить можно
-//   только с удочкой в руке (её берут из рюкзака) и с ведром — в руке или на земле у места рыбака;
+//   только с удочкой в одной руке и червями в другой (их берут из рюкзака) и с ведром на земле у места рыбака
+//   (или в руке, но тогда не хватит рук на червей);
 // - улов пишется в базу сразу при подсечке, место героя и рюкзака — при выходе и раз в минуту;
 // - вещи в рюкзаке перекладывает тоже сервер, и в руку их берёт он же: проверяет по ITEMS, что вещь встаёт, и пишет
 //   в базу по очереди (writes);
@@ -174,7 +175,7 @@ export class PierRoom extends Room<{ state: PierState; client: Client<{ auth: Au
     view.pid = saved.id; view.name = saved.name;
     const s: Session = {
       sid: client.sessionId, pid: saved.id, name: saved.name, world, bag: saved.bag, unrecorded: [], items: packed.list, hands, unsynced: new Set([...packed.moved, ...extra].map(it => it.id)), writes: Promise.resolve(), view, budget: BUDGET_MAX, dirty: false, fed: -1, cook: 0, eat: null,
-      fishing: createFishing({ hasRod: () => s.hands.some(it => ITEMS.isRod(it.kind)), hasBucket: () => this.hasBucket(s), emit: ev => this.onFishing(client, s, ev), grace: HOOK_GRACE }),
+      fishing: createFishing({ hasRod: () => s.hands.some(it => ITEMS.isRod(it.kind)), hasBait: () => s.hands.some(it => ITEMS.isBait(it.kind)), hasBucket: () => this.hasBucket(s), emit: ev => this.onFishing(client, s, ev), grace: HOOK_GRACE }),
     };
     if (world.sitting) s.fishing.sit();
     this.sessions.set(client.sessionId, s);

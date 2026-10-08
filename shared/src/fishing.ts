@@ -1,6 +1,7 @@
 // Рыбалка с края причала — правила. Их ведёт сервер: он решает, когда клюёт, кто клюнул и успел ли игрок подсечь.
 // Клиент только показывает фазы по событиям сервера (app/app/game/fishing-view.ts).
-// Рыбачат удочкой: она должна быть в руке. Без неё не забросить, а убрал её посреди рыбалки — леска сматывается.
+// Рыбачат удочкой в одной руке и с червями в другой. Без них не забросить, а убрал удочку или червей посреди
+// рыбалки — леска сматывается.
 //
 // Фазы: off — герой не сидит; rest — сидит, леска в воде, как на картинке; cast — заброс;
 // wait — ждём поклёвку; bite — клюёт, надо подсечь; pull — рыба идёт вверх по леске;
@@ -17,7 +18,7 @@ export type Phase = 'off' | 'rest' | 'cast' | 'wait' | 'bite' | 'pull' | 'fly' |
 
 // Что сервер сообщает игроку о его рыбалке. hook — рыба подсечена и уже лежит в ведре.
 export type FishingEvent =
-  | { e: 'needRod' } | { e: 'needBucket' } | { e: 'cast' } | { e: 'nibble' } | { e: 'bite' }
+  | { e: 'needRod' } | { e: 'needBait' } | { e: 'needBucket' } | { e: 'cast' } | { e: 'nibble' } | { e: 'bite' }
   | { e: 'early' } | { e: 'miss' } | { e: 'rest' } | { e: 'hook'; fish: Catch };
 
 export interface FishingState { phase: Phase; t: number; wait: number; nibble: number; fish: Catch | null }
@@ -25,12 +26,13 @@ export interface FishingState { phase: Phase; t: number; wait: number; nibble: n
 export interface FishingOptions {
   rnd?: () => number;
   hasRod: () => boolean;              // в руке ли удочка
+  hasBait: () => boolean;             // в руке ли черви
   hasBucket: () => boolean;           // стоит ли ведро рядом с местом рыбака
   emit: (ev: FishingEvent) => void;
   grace?: number;                     // сколько секунд прибавить к окну подсечки
 }
 
-export function createFishing({ rnd = Math.random, hasRod, hasBucket, emit, grace = 0 }: FishingOptions) {
+export function createFishing({ rnd = Math.random, hasRod, hasBait, hasBucket, emit, grace = 0 }: FishingOptions) {
   const st: FishingState = { phase: 'off', t: 0, wait: 0, nibble: -1, fish: null };
   const set = (phase: Phase) => { st.phase = phase; st.t = 0; };
   function cast() {
@@ -44,14 +46,15 @@ export function createFishing({ rnd = Math.random, hasRod, hasBucket, emit, grac
   function press() {
     if (st.phase === 'rest') {
       if (!hasRod()) { emit({ e: 'needRod' }); return; }
+      if (!hasBait()) { emit({ e: 'needBait' }); return; }
       if (!hasBucket()) { emit({ e: 'needBucket' }); return; }
       cast();
     } else if (st.phase === 'wait') { set('scare'); emit({ e: 'early' }); }
     else if (st.phase === 'bite' && st.fish) { const fish = st.fish; set('pull'); emit({ e: 'hook', fish }); }
   }
   function update(dt: number) {
-    // удочку убрали из руки — рыбалка кончилась; рыба, что уже подсечена, и так в ведре
-    if (st.phase !== 'off' && st.phase !== 'rest' && !hasRod()) { st.fish = null; set('rest'); emit({ e: 'rest' }); return; }
+    // удочку или червей убрали из руки — рыбалка кончилась; рыба, что уже подсечена, и так в ведре
+    if (st.phase !== 'off' && st.phase !== 'rest' && !(hasRod() && hasBait())) { st.fish = null; set('rest'); emit({ e: 'rest' }); return; }
     const t0 = st.t;
     st.t += dt;
     if (st.phase === 'cast' && st.t >= TIME.cast) set('wait');

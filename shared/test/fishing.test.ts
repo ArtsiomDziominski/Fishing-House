@@ -4,10 +4,10 @@ import { createFishing, TIME, HOOK_GRACE, type FishingEvent } from '../src/fishi
 import { FISH } from '../src/fish.ts';
 import { addToBag, emptyBag } from '../src/protocol.ts';
 
-// hand.rod — в руке ли удочка: тест может убрать её посреди рыбалки
-function run(bucket = true, rod = true) {
-  const events: FishingEvent[] = [], hand = { rod };
-  const f = createFishing({ rnd: () => 0.1, hasRod: () => hand.rod, hasBucket: () => bucket, emit: e => events.push(e), grace: HOOK_GRACE });
+// hand.rod, hand.bait — в руке ли удочка и черви: тест может убрать их посреди рыбалки
+function run(bucket = true, rod = true, bait = true) {
+  const events: FishingEvent[] = [], hand = { rod, bait };
+  const f = createFishing({ rnd: () => 0.1, hasRod: () => hand.rod, hasBait: () => hand.bait, hasBucket: () => bucket, emit: e => events.push(e), grace: HOOK_GRACE });
   const step = (sec: number) => { for (let t = 0; t < sec; t += 0.05) f.update(0.05); };
   return { f, events, step, hand };
 }
@@ -30,9 +30,30 @@ test('без удочки в руке забросить нельзя, а убр
 });
 
 test('без удочки и без ведра сначала просят удочку', () => {
-  const { f, events } = run(false, false);
+  const { f, events } = run(false, false, false);
   f.sit(); f.press();
   assert.deepEqual(events, [{ e: 'needRod' }]);
+});
+
+test('без червей в руке забросить нельзя, а убрал их — рыбалка кончилась', () => {
+  const { f, events, step, hand } = run(true, true, false);
+  f.sit(); f.press();
+  assert.deepEqual(events, [{ e: 'needBait' }]);
+  assert.equal(f.st.phase, 'rest');
+  hand.bait = true; f.press();
+  assert.equal(events.at(-1)!.e, 'cast');
+  step(TIME.cast + 0.2);
+  hand.bait = false; step(0.05);
+  assert.equal(f.st.phase, 'rest');
+  assert.equal(events.at(-1)!.e, 'rest');
+  step(TIME.waitMax + 1);
+  assert.ok(!events.some(e => e.e === 'bite'), 'без червей само не забрасывается');
+});
+
+test('с удочкой, но без червей и без ведра сначала просят червей', () => {
+  const { f, events } = run(false, true, false);
+  f.sit(); f.press();
+  assert.deepEqual(events, [{ e: 'needBait' }]);
 });
 
 test('без ведра рядом забросить нельзя', () => {

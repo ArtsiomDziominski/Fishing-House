@@ -250,6 +250,12 @@ export function eatenSprite(kind: string, bites: number): HTMLCanvasElement | nu
   return c;
 }
 // Крошки от укуса — цвета боков и брюха этой рыбы.
+// Цвета удочки этого вида (o — контур, p — бланк, h — рукоять, t — вершинка), #rrggbb; не удочка — null. Ими же рисуется
+// удилище у сидящего рыбака (createRod в fishing-view.ts): на причале в руках та же удочка, что и в руке на ходу.
+export function rodColors(kind: string) {
+  const a = (HELD as Record<string, HeldArt | undefined>)[kind];
+  return a?.map === ROD && a.pal ? { o: '#' + PAL.o, p: '#' + a.pal.p, h: '#' + a.pal.h, t: '#' + a.pal.t } : null;
+}
 export const crumbColors = (kind: string) => { const p = (HELD as Record<string, HeldArt | undefined>)[kind]?.pal; return p ? ['#' + p.c, '#' + p.d] : ['#e4e8e4']; };
 
 // Вещь на земле: лампа стоит, как в руке, а длинное (удочки, невод, топор) лежит плашмя — картинка руки, повёрнутая на

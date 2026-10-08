@@ -130,6 +130,8 @@ export const ITEMS = (() => {
   }
   // Удочка ли это: с удочкой в руке рыбачат. kind приходит и строкой из состояния комнаты — незнакомая не удочка.
   const isRod = (kind: string) => isKind(kind) && BY_KIND[kind].group === 'rod';
+  // Наживка — черви: рыбачат, держа их в другой руке.
+  const isBait = (kind: string) => kind === 'worms';
   // Ведро: в него идёт улов, без него не забросить.
   const isBucket = (kind: string) => kind === 'bucket';
   // Рыба, вынутая из ведра: сырая или жареная. raw — сырая: её держат только в руке.
@@ -236,5 +238,5 @@ export const ITEMS = (() => {
   // Сколько клеток занято.
   const used = (items: readonly Item[]) => items.reduce((n, it) => n + cells(it.kind), 0);
 
-  return { STARTER, isKind, info, size, cells, grid, turns, fits, spot, repack, settle, used, isRod, isBucket, isFish, isRaw, packable, title, meal, GROUND_MAX, dropSpot, nearest, HANDS, weight, load, sideOf, free, handFor, canHold, inHand, inOrder, unheld, lampOut, lampNear, take, stow };
+  return { STARTER, isKind, info, size, cells, grid, turns, fits, spot, repack, settle, used, isRod, isBait, isBucket, isFish, isRaw, packable, title, meal, GROUND_MAX, dropSpot, nearest, HANDS, weight, load, sideOf, free, handFor, canHold, inHand, inOrder, unheld, lampOut, lampNear, take, stow };
 })();
