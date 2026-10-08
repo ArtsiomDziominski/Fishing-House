@@ -1,4 +1,4 @@
-// Звук причала. Файлов нет: всё синтезируется в браузере (Web Audio) — шум реки, дождя и ветра из одного белого шума
+// Звук причала. Файлов нет: всё синтезируется в браузере (Web Audio) — шум дождя и ветра из одного белого шума
 // через фильтры, а сверчки, лягушки, сова, дневные птицы и рыбалка — короткими тонами, шаги и треск костра — щелчками шума.
 // Что слышно, идёт за тем же, что видно: за темнотой кадра и силой погоды. У каждого игрока звуки свои, их никто не сверяет.
 // Браузер даёт звучать только после первого нажатия — до wake() здесь тишина.
@@ -9,7 +9,7 @@ type Wave = OscillatorType;
 export interface SoundScene { dark: number; clouds: number; rain: number; wind: number; walk: 0 | 1 | 2; fire: number }
 export type SoundCue = 'cast' | 'bite' | 'catch' | 'miss';
 
-const VOL = { master: 0.8, river: 0.05, rain: 0.17, wind: 0.11, cricket: 0.022, frog: 0.03, owl: 0.035, bird: 0.016, step: 0.028, fire: 0.05, cue: 0.07 };
+const VOL = { master: 0.8, rain: 0.17, wind: 0.11, cricket: 0.022, frog: 0.03, owl: 0.035, bird: 0.016, step: 0.028, fire: 0.05, cue: 0.07 };
 const DUSK = [0.3, 0.46];          // темнота, с которой начинается ночной хор и с которой он в полную силу (как у светлячков)
 
 const rnd = (a: number, b: number) => a + Math.random() * (b - a);
@@ -17,7 +17,7 @@ const clamp = (v: number, a: number, b: number) => (v < a ? a : v > b ? b : v);
 
 export function createSoundView() {
   let ctx: AudioContext | null = null, master: GainNode | null = null, on = true;
-  let river: GainNode, rain: GainNode, wind: GainNode, windTone: BiquadFilterNode, noise: AudioBuffer;
+  let rain: GainNode, wind: GainNode, windTone: BiquadFilterNode, noise: AudioBuffer;
   // через сколько секунд каждый голос подаст звук снова
   const next = { cricketA: 1, cricketB: 1.7, frog: 6, owl: 20, bird: 2, step: 0, crackle: 0.3, mix: 0 };
 
@@ -38,8 +38,7 @@ export function createSoundView() {
     master = ctx.createGain(); master.gain.value = VOL.master; master.connect(ctx.destination);
     noise = ctx.createBuffer(1, ctx.sampleRate * 2, ctx.sampleRate);
     const data = noise.getChannelData(0); for (let i = 0; i < data.length; i++) data[i] = Math.random() * 2 - 1;
-    river = ctx.createGain(); rain = ctx.createGain(); wind = ctx.createGain();
-    loop([filter('lowpass', 520)], river);
+    rain = ctx.createGain(); wind = ctx.createGain();
     loop([filter('highpass', 1400), filter('lowpass', 7500)], rain);
     windTone = filter('bandpass', 420, 0.9); loop([windTone], wind);
     const gust = ctx.createOscillator(), depth = ctx.createGain();           // ветер гуляет: порывы то выше, то ниже
@@ -91,7 +90,6 @@ export function createSoundView() {
     if (next.mix <= 0) {                                // не каждый кадр: громкость плывёт плавно и так
       next.mix = 0.25;
       const t = ctx.currentTime;
-      river.gain.setTargetAtTime(VOL.river * (1 + s.rain * 0.6), t, 0.8);
       rain.gain.setTargetAtTime(VOL.rain * s.rain, t, 0.8);
       wind.gain.setTargetAtTime(VOL.wind * s.wind, t, 1.2);
     }

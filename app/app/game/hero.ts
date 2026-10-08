@@ -3,6 +3,7 @@
 // вид спереди, со спины и туловище с ногами дорисованы той же палитрой.
 // Кадр 19×34, точка опоры (ступни) — середина нижней строки.
 // Рюкзак на спине — накладка поверх туловища, своя для каждого ракурса; её тона задаёт вид рюкзака.
+// У костра герой сидит: кадр собирается из стоячего (seated).
 
 export type Dir = 'down' | 'up' | 'left' | 'right';
 export type Pixels = Uint8ClampedArray;
@@ -340,6 +341,15 @@ export const HERO = (() => {
     return frames;
   }
 
+  // Сидит у костра: тот же кадр, но на REST строк ниже — без подола плаща и штанов, сапоги сразу под плащом.
+  const REST = 8, BOOTS = 3;
+  function seated(buf: Pixels): Pixels {
+    const out = blank(), row = FW * 4;
+    out.set(buf.subarray(0, (FH - REST - BOOTS) * row), REST * row);
+    out.set(buf.subarray((FH - BOOTS) * row), (FH - BOOTS) * row);
+    return out;
+  }
+
   // Рука с ведром для стороны dir: { w, h, data (RGBA), x, y } в координатах кадра и место дна ведра.
   function carryRig(dir: Dir): Rig {
     const src = CARRY[dir === 'right' ? 'left' : dir], flip = dir === 'right';
@@ -352,5 +362,5 @@ export const HERO = (() => {
     return { ...pixels(PACK.left.map, withPack(tones)), x: SEAT_PACK[0], y: SEAT_PACK[1] };
   }
 
-  return { FW, FH, PAL, build, carryRig, seatPack };
+  return { FW, FH, PAL, REST, build, seated, carryRig, seatPack };
 })();

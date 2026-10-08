@@ -23,6 +23,7 @@ import { createCrowView } from './crow.ts';
 import { createNightView } from './night-view.ts';
 import { createSoundView } from './sound.ts';
 import { createFireView } from './campfire.ts';
+import { LIGHT, createLightView, type LightSpot } from './light.ts';
 import { createWildlifeView } from './wildlife.ts';
 import { createHouseView } from './house.ts';
 import { createPetsView } from './pets.ts';
@@ -138,12 +139,13 @@ export async function startGame(canvas: HTMLCanvasElement, room: Room, ui: GameU
   }
   // Кадры героя: налегке и с рюкзаком каждого вида, с ведром и без. Набор собирается, когда впервые понадобился.
   const frameSets = new Map<string, Record<Dir, HTMLCanvasElement[]>>();
-  function heroFrames(carry: boolean, kind: PackKind | null) {
-    const key = (carry ? '+' : '-') + (kind || '');
+  // rest — кадры сидящего у костра
+  function heroFrames(carry: boolean, kind: PackKind | null, rest = false) {
+    const key = (carry ? '+' : '-') + (kind || '') + (rest ? '~' : '');
     let set = frameSets.get(key);
     if (!set) {
       const px = HERO.build(carry, kind && PACKS.tones(kind)); set = {} as Record<Dir, HTMLCanvasElement[]>;
-      for (const dir of Object.keys(px) as Dir[]) set[dir] = px[dir].map(buf => fromPixels({ w: FW, h: FH, data: buf }));
+      for (const dir of Object.keys(px) as Dir[]) set[dir] = px[dir].map(buf => fromPixels({ w: FW, h: FH, data: rest ? HERO.seated(buf) : buf }));
       frameSets.set(key, set);
     }
     return set;
@@ -165,7 +167,7 @@ export async function startGame(canvas: HTMLCanvasElement, room: Room, ui: GameU
   const boats = createBoatsView(W, H, river.water);                          // лодки у причала; их пиксели — уже не вода
   const nightLife = createNightView(river.water);                                // светлячки, отсвет окон и лунная дорожка на воде
   const campfire = createFireView(), fire = World.fire;                      // костёр у дома: у него можно посидеть
-  const sound = createSoundView();                                           // река, дождь, ветер, ночной хор, рыбалка — звук
+  const sound = createSoundView();                                           // дождь, ветер, ночной хор, костёр, рыбалка — звук
   let heard = '';                                                            // фаза рыбалки, о которой звук уже сказал
   const crow = createCrowView();                                             // ворона над поляной и на крыше дома
   const gull = createGullView(W);                                            // чайка над водой и на столбах причала
@@ -544,24 +546,20 @@ export async function startGame(canvas: HTMLCanvasElement, room: Room, ui: GameU
     sctx.drawImage(packArt[p.kind].ground, 0, 0);
     blit(sack, sctx, p.x - (P.w >> 1), p.y - (P.h - 1), p.y);
   }
-  const REST = 8;                                       // на сколько строк сидящий у костра ниже стоящего
   function drawHero(a: Drawn, t: number) {
     const hx = Math.round(a.x), hy = Math.round(a.y);
     const f = a.moving && !a.rest ? 1 + (Math.floor(a.anim) % 4) : ((t + a.blink) % 3.7 < 0.14 ? 5 : 0);   // стоя иногда моргает
     cctx.clearRect(0, 0, CW, CH);
     cctx.fillStyle = 'rgba(18, 22, 10, 0.3)';         // тень под ногами
     cctx.fillRect(CX + 4, FH - 2, 11, 1); cctx.fillRect(CX + 2, FH - 1, 15, 2); cctx.fillRect(CX + 4, FH + 1, 11, 1);
-    const frame = heroFrames(a.carrying, a.pack)[a.dir][f]!;
-    if (a.rest) {                                     // сидит у костра: тот же кадр, но ниже — без подола плаща и штанов, сапоги сразу под плащом
-      cctx.drawImage(frame, 0, 0, FW, FH - REST - 3, CX, REST, FW, FH - REST - 3); cctx.drawImage(frame, 0, FH - 3, FW, 3, CX, FH - 3, FW, 3);
-    } else cctx.drawImage(frame, CX, 0);
+    cctx.drawImage(heroFrames(a.carrying, a.pack, a.rest)[a.dir][f]!, CX, 0);
     if (a.carrying) {                                 // ведро в руке качается вместе с плечом
       const rig = rigs[a.dir], side = a.dir === 'left' || a.dir === 'right';
       const sway = side ? (f === 2 || f === 4 ? -1 : 0) : (f === 1 || f === 3 ? 1 : 0);
       const bx = CX + ANCHOR + rig.bucket[0] - (img.carry.width >> 1), by = FH - 1 + rig.bucket[1] - (img.carry.height - 1) + sway;
       cctx.drawImage(img.carry, bx, by);
       drawTails(cctx, bx, by + B.handle, a.recent);
-      cctx.drawImage(rig.arm, CX + rig.x, rig.y + sway + (a.rest ? REST : 0));   // сидя плечо ниже
+      cctx.drawImage(rig.arm, CX + rig.x, rig.y + sway + (a.rest ? HERO.REST : 0));   // сидя плечо ниже
     }
     blit(cell, cctx, hx - ANCHOR - CX, hy - (FH - 1), hy);
   }
@@ -607,22 +605,10 @@ export async function startGame(canvas: HTMLCanvasElement, room: Room, ui: GameU
   // Вечер и ночь: слой цвета неба умножается на кадр, а свет из окон и фонаря проедает в нём дыры — возле дома светло.
   // Сверху тот же ореол кладётся тёплой добавкой. Днём (белое небо, свет погашен) кадр остаётся как есть.
   const GLOW_ADD = 0.3;                                 // доля тёплой добавки
-  // Свет походной лампы: круг, в котором темнота отступает, — ступенями, как пиксельный ореол. hole — насколько он
-  // проедает темноту, warm — доля тёплой добавки, flicker — как сильно огонь дрожит.
-  const LAMP = { r: 46, hole: 0.85, warm: 0.2, flicker: 0.06 };
-  const lampGlow = makeCanvas(LAMP.r * 2, LAMP.r * 2);
-  {
-    const c = ctx2d(lampGlow), px = c.createImageData(LAMP.r * 2, LAMP.r * 2);
-    for (let y = 0; y < LAMP.r * 2; y++) for (let x = 0; x < LAMP.r * 2; x++) {
-      const d = Math.hypot(x + 0.5 - LAMP.r, (y + 0.5 - LAMP.r) * 1.15) / LAMP.r, o = (y * LAMP.r * 2 + x) * 4;   // чуть сплюснут: свет лежит на земле
-      const a = d >= 1 ? 0 : Math.ceil((1 - d) ** 1.3 * 6) / 6;
-      px.data[o] = 255; px.data[o + 1] = 196; px.data[o + 2] = 110; px.data[o + 3] = Math.round(a * 255);
-    }
-    c.putImageData(px, 0, 0);
-  }
-  // Где сейчас горят лампы: у каждого, у кого она в рюкзаке, — на спине или там, где рюкзак лежит. Так сказал сервер.
+  // Где сейчас горит огонь: костёр и лампы — у каждого, у кого лампа в рюкзаке, на спине или там, где рюкзак лежит. Так сказал сервер.
+  const light = createLightView();
   function lampSpots() {
-    const out: { x: number; y: number; k?: number }[] = [{ x: fire.x, y: fire.y - 4, k: 1.5 }];   // костёр горит всегда и светит дальше лампы
+    const out: LightSpot[] = [{ x: fire.x, y: fire.y - 4, k: 1.5 }];   // костёр горит всегда и светит дальше лампы
     players()?.forEach((p, sid) => {
       if (!p.lamp) return;
       const mine = sid === room.sessionId, g = mine ? (ready ? hero : null) : ghosts.get(sid); if (!g) return;
@@ -634,26 +620,20 @@ export async function startGame(canvas: HTMLCanvasElement, room: Room, ui: GameU
     return out;
   }
   // tint — цвет неба с погодой, lit — горит ли свет в доме (0..1), haze — серая дымка под тучами (0..1).
-  // lamps — где горят лампы игроков, lamp — в какую силу (днём 0), t — секунды: огонь дрожит.
-  // k у огня — во сколько раз его круг шире лампового.
-  function drawNight(tint: number[], lit: number, haze: number, lamps: { x: number; y: number; k?: number }[], lamp: number, t: number) {
+  // lamps — где горят костёр и лампы игроков, lamp — в какую силу (днём 0), t — секунды: огонь дрожит.
+  function drawNight(tint: number[], lit: number, haze: number, lamps: LightSpot[], lamp: number, t: number) {
     const g = World.glow, lights = g ? lit : 0;        // без дома светить нечему: ночь тёмная везде
     if (!lights && haze < 0.004 && tint.every(v => v >= 254)) return;
     if (lamp <= 0) lamps = [];
-    const beam = (c: CanvasRenderingContext2D, power: number) => lamps.forEach((p, i) => {
-      c.globalAlpha = power * lamp * (1 - LAMP.flicker * (0.5 + 0.5 * Math.sin(t * 9 + i * 2.1) * Math.sin(t * 3.7 + i)));
-      const r = Math.round(LAMP.r * (p.k ?? 1));
-      c.drawImage(lampGlow, Math.round(p.x) - r, Math.round(p.y) - r, r * 2, r * 2);
-    });
     dctx.globalCompositeOperation = 'source-over'; dctx.globalAlpha = 1;
     dctx.fillStyle = `rgb(${tint.join(',')})`; dctx.fillRect(0, 0, W, H);
     if (g && lights) { dctx.globalCompositeOperation = 'destination-out'; dctx.globalAlpha = lights; dctx.drawImage(img.glow, g.x, g.y); }
-    if (lamps.length) { dctx.globalCompositeOperation = 'destination-out'; beam(dctx, LAMP.hole); }
+    if (lamps.length) { dctx.globalCompositeOperation = 'destination-out'; light.beam(dctx, lamps, LIGHT.hole * lamp, t); }
     fctx.globalCompositeOperation = 'multiply'; fctx.drawImage(dusk, 0, 0);
     fctx.globalCompositeOperation = 'source-over';
     if (haze >= 0.004) { fctx.globalAlpha = haze; fctx.fillStyle = HAZE; fctx.fillRect(0, 0, W, H); }
     if (g && lights) { fctx.globalCompositeOperation = 'lighter'; fctx.globalAlpha = lights * GLOW_ADD; fctx.drawImage(img.glow, g.x, g.y); }
-    if (lamps.length) { fctx.globalCompositeOperation = 'lighter'; beam(fctx, LAMP.warm); }
+    if (lamps.length) { fctx.globalCompositeOperation = 'lighter'; light.beam(fctx, lamps, LIGHT.warm * lamp, t); }
     fctx.globalCompositeOperation = 'source-over'; fctx.globalAlpha = 1;
   }
   function drawMarker() {                              // куда идём

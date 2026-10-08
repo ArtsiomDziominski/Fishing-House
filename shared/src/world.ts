@@ -3,7 +3,8 @@
 // Один экземпляр на процесс: клиент ставит в него своё ведро как препятствие, сервер карту не меняет.
 
 import { WORLD_DATA as DATA } from './world-data.ts';
-import { FIRE, HOUSE } from './house.ts';
+import { HOUSE } from './house.ts';
+import { FIRE } from './campfire.ts';
 
 export interface Point { x: number; y: number }
 export interface Box extends Point { w: number; h: number }
@@ -35,7 +36,7 @@ const onMap = (x: number, y: number): Point => ({ x: x + DATA.pic.x, y: y + DATA
     for (let x = Math.max(0, Math.floor(Math.min(...xs))); x <= Math.min(W - 1, Math.ceil(Math.max(...xs))); x++)
       if (inside(x + 0.5, y + 0.5)) walk[y * W + x] = 0;
 }
-// Костёр у дома: очаг тоже вычеркнут из проходимости.
+// Костёр у дома (shared/src/campfire.ts): очаг тоже вычеркнут из проходимости.
 const fire = { ...onMap(...FIRE.at), rx: FIRE.rx, ry: FIRE.ry, sit: FIRE.sit };
 for (let y = Math.ceil(fire.y - fire.ry); y <= fire.y + fire.ry; y++) for (let x = Math.ceil(fire.x - fire.rx); x <= fire.x + fire.rx; x++) {
   const dx = (x - fire.x) / fire.rx, dy = (y - fire.y) / fire.ry;
