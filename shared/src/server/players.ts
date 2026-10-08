@@ -2,8 +2,9 @@
 // Сайт (Nuxt) и игровой сервер (Colyseus) пользуются одними и теми же функциями.
 
 import { randomInt } from 'node:crypto';
-import { desc, eq, sql } from 'drizzle-orm';
+import { and, desc, eq, inArray, sql } from 'drizzle-orm';
 import { FISH, type Catch } from '../fish.ts';
+import { HUNGER } from '../hunger.ts';
 import { emptyBag, type Bag } from '../protocol.ts';
 import { PACKS } from '../packs.ts';
 import { DIRS, startPack, type WorldState } from '../rules.ts';
@@ -48,19 +49,20 @@ export async function findAccount(db: Db, name: string): Promise<(PlayerRef & { 
   return row || null;
 }
 
-// Ведро игрока: сколько каких рыб, самые крупные, общий вес и три последние.
-export async function loadBag(db: Db, pid: string): Promise<Bag> {
-  const bag = emptyBag();
+// Ведро игрока: сколько каких рыб, самые крупные, общий вес и три последние. В ведре — то, что ещё не вынуто (catches.gone);
+// all — весь улов за всё время (для профиля).
+export async function loadBag(db: Db, pid: string, all = false): Promise<Bag> {
+  const bag = emptyBag(), mine = all ? eq(catches.playerId, pid) : and(eq(catches.playerId, pid), eq(catches.gone, false));
   const rows = await db.select({
     species: catches.species,
     n: sql<number>`count(*)::int`, best: sql<number>`max(${catches.grams})::int`, grams: sql<number>`sum(${catches.grams})::int`,
-  }).from(catches).where(eq(catches.playerId, pid)).groupBy(catches.species);
+  }).from(catches).where(mine).groupBy(catches.species);
   for (const r of rows) {
     if (!FISH.byId[r.species]) continue;
     bag.counts[r.species] = r.n; bag.best[r.species] = r.best; bag.total += r.n; bag.grams += r.grams;
   }
   const last = await db.select({ species: catches.species }).from(catches)
-    .where(eq(catches.playerId, pid)).orderBy(desc(catches.caughtAt), desc(catches.id)).limit(3);
+    .where(mine).orderBy(desc(catches.caughtAt), desc(catches.id)).limit(3);
   bag.recent = last.map(r => r.species).filter(id => FISH.byId[id]).reverse();
   return bag;
 }
@@ -69,6 +71,8 @@ export async function loadBag(db: Db, pid: string): Promise<Bag> {
 // У тех, кто играл до появления рюкзаков, рюкзака в записи нет — он ждёт на своём месте.
 // Места записаны при том положении картинки на карте, которое лежит в picX и picY (в старых записях их нет: карта
 // тогда была одной картинкой или не росла вверх). Если карту с тех пор расширили, всё сдвигается вместе с картинкой.
+// Голода в старых записях нет — герой сыт.
+const num = (v: unknown, def: number, lo: number, hi: number) => (typeof v === 'number' && Number.isFinite(v) ? Math.min(hi, Math.max(lo, v)) : def);
 export function cleanWorld(w: WorldState | null): WorldState | null {
   if (!w || typeof w.x !== 'number' || typeof w.y !== 'number') return null;
   const dx = World.pic.x - (typeof w.picX === 'number' ? w.picX : 0);
@@ -82,6 +86,7 @@ export function cleanWorld(w: WorldState | null): WorldState | null {
     rest: false,
     lamp: (w as { lamp?: boolean }).lamp !== false,   // в старых записях лампы нет — она зажжена
     picX: World.pic.x, picY: World.pic.y,
+    food: num(w.food, HUNGER.MAX, 0, HUNGER.MAX), starve: num(w.starve, 0, 0, HUNGER.STARVE), sleep: num(w.sleep, 0, 0, Infinity),
   };
 }
 
@@ -101,6 +106,16 @@ export async function recordCatch(db: Db, pid: string, fish: Catch): Promise<voi
   await db.insert(catches).values({ playerId: pid, species: fish.id, grams: fish.grams });
 }
 
+// Герой уснул от голода: из ведра пропадает доля рыбы (HUNGER.lost), какая попадётся. Возвращает, сколько пропало.
+export async function loseCatches(db: Db, pid: string): Promise<number> {
+  return db.transaction(async tx => {
+    const left = await tx.select({ id: catches.id }).from(catches).where(and(eq(catches.playerId, pid), eq(catches.gone, false))).for('update');
+    const ids = left.map(r => r.id).sort(() => Math.random() - 0.5).slice(0, HUNGER.lost(left.length));
+    if (ids.length) await tx.update(catches).set({ gone: true }).where(inArray(catches.id, ids));
+    return ids.length;
+  });
+}
+
 export interface Profile {
   id: string; name: string; money: number; createdAt: string; lastSeenAt: string | null;
   bag: Bag; latest: { species: string; grams: number; caughtAt: string }[];
@@ -116,7 +131,7 @@ export async function getProfile(db: Db, pid: string): Promise<Profile | null> {
   return {
     id: row.id, name: row.name, money: row.money,
     createdAt: row.createdAt.toISOString(), lastSeenAt: row.lastSeenAt ? row.lastSeenAt.toISOString() : null,
-    bag: await loadBag(db, pid),
+    bag: await loadBag(db, pid, true),
     latest: latest.map(c => ({ species: c.species, grams: c.grams, caughtAt: c.caughtAt.toISOString() })),
   };
 }

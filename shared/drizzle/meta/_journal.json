@@ -57,6 +57,13 @@
       "when": 1791467646398,
       "tag": "0007_bucket_item",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1791469590512,
+      "tag": "0008_fish_gone",
+      "breakpoints": true
     }
   ]
 }

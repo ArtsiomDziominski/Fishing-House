@@ -119,7 +119,7 @@ export function drawBackpack(ctx: CanvasRenderingContext2D, s: BackpackScene) {
       ctx.globalAlpha = d?.id === it.id ? 0.3 : 1;
       if (ITEMS.isBucket(it.kind)) pail(q);
       else {
-        const img = itemSprite(it.kind), up = img.width >= img.height * 2;   // длинная вещь стоит стоймя, рукоятью вниз
+        const img = itemSprite(it.kind, false, it.fish), up = img.width >= img.height * 2;   // длинная вещь стоит стоймя, рукоятью вниз
         const wide = (up ? img.height : img.width) > q.w - 1, z = wide ? 0.5 : 1;   // широкая (накидка) не влезает — вдвое мельче
         const w = (up ? img.height : img.width) * z, h = (up ? img.width : img.height) * z, x = q.x + Math.round((q.w - w) / 2), y = q.y + Math.round((q.h - h) / 2);
         if (up) { ctx.save(); ctx.translate(x, y + h); ctx.rotate(-Math.PI / 2); ctx.drawImage(img, 0, 0, h, w); ctx.restore(); } else ctx.drawImage(img, x, y, w, h);
@@ -166,13 +166,13 @@ export function drawBackpack(ctx: CanvasRenderingContext2D, s: BackpackScene) {
   }
 
   // вещи: подложка во весь их прямоугольник клеток, картинка по центру
-  const block = (it: { kind: ItemKind; rot: boolean }, x: number, y: number, edge: RGB | null, a: number) => {
+  const block = (it: { kind: ItemKind; rot: boolean; fish?: string }, x: number, y: number, edge: RGB | null, a: number) => {
     const z = ITEMS.size(it.kind, it.rot), w = z.w * CELL, h = z.h * CELL;
     ctx.globalAlpha = a;
     fill(x + 1, y + 1, w - 2, h - 2, t[3]!);
     fill(x + 1, y + 1, w - 2, 1, t[2]!);
     if (edge) ring({ x, y, w, h }, edge);
-    const img = itemSprite(it.kind, it.rot);
+    const img = itemSprite(it.kind, it.rot, it.fish);
     ctx.drawImage(img, x + ((w - img.width) >> 1), y + ((h - img.height) >> 1));
     ctx.globalAlpha = 1;
   };

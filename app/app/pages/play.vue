@@ -33,6 +33,9 @@ const ITEM_NOTES: Record<NonNullable<ServerMessages['items']['note']>, string> =
   hands: 'Нужны обе свободные руки — сначала убери то, что в руках',
   gone: 'Кто-то успел поднять это раньше',
   litter: `На земле уже ${ITEMS.GROUND_MAX} твоих вещей — подбери что-нибудь`,
+  raw: 'Сырую рыбу в рюкзак не убрать — пожарь её у костра или съешь',
+  pail: 'Ведро далеко — подойди к нему или возьми его в руку',
+  empty: 'Такой рыбы в ведре уже нет',
 };
 function moveItem(id: number, x: number, y: number, rot: boolean) { send('itemMove', { id, x, y, rot }); }
 function dropItem(id: number) { send('itemDrop', { id }); }
@@ -100,12 +103,13 @@ const overlay = computed(() => {
       <canvas ref="canvas" width="569" height="320" aria-label="Домик рыбака у реки" />
     </main>
 
-    <GameCatch />
+    <GameCatch @take="handle?.takeFish($event)" />
     <GameToast />
-    <GameDock @left="handle?.handAction('left')" @right="handle?.handAction('right')" @pack="handle?.packAction()" @fish="handle?.fishAction()" @stand="handle?.standUp()" @open="game.togglePack()" @lamp="handle?.lampAction()" />
+    <GameDock @left="handle?.handAction('left')" @right="handle?.handAction('right')" @pack="handle?.packAction()" @fish="handle?.fishAction()" @stand="handle?.standUp()" @open="game.togglePack()" @lamp="handle?.lampAction()" @eat="handle?.eatAction()" />
     <GamePack @pick="handle?.setPack($event)" />
     <GameOnline @clock="handle?.setClock($event)" @weather="setWeather" @sound="setSound" />
     <GameBackpack @move="moveItem" @drop="dropItem" @take="takeItem" @stow="stowItem" @give="giveItem" />
+    <GameSleep />
 
     <div v-if="overlay" class="overlay" :class="{ soft: game.status === 'reconnecting' || game.status === 'connecting' }">
       <div class="panel box">

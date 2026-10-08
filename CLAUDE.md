@@ -25,6 +25,7 @@
 - **Что видят другие** — только состояние комнаты (`game-server/src/state.ts`). Свой улов, вещи и рыбалку игрок получает личными сообщениями (`ServerMessages` в `shared/src/protocol.ts`).
 - **Карта** 640×360 арт-пикселей — ровно 16:9, она же кадр игры: экран стоит на месте, камеры и масштаба нет. В её середине — картинка-образец (`World.pic` — где она стоит). Разметка в `tools/world-shapes.mjs` — в координатах картинки, всё в игре и в `world-data.ts` — в координатах карты; числа, снятые с картинки прямо в коде (как `bankY` в движке), сдвигать на `World.pic`.
 - **Пока только картинка**: время суток, погода, река, лодки, птицы и звери на рыбалку не влияют.
+- **Голод**: сытость 100 → 0 за световой день, пополняет рыба из ведра (жареная на костре — сильно). Пустая — герой медленнее, а через 3 минуты засыпает на 3 минуты (часть рыбы из ведра пропадает) и просыпается у дома сытым. Ведёт сервер, правила — `shared/src/hunger.ts`.
 - **Масштаб**: в комнате до `ROOM_SIZE` = 50 игроков, дальше матчмейкер открывает новую копию причала; процессы игрового сервера связаны через Redis.
 
 ## Где что лежит
@@ -36,6 +37,7 @@
 | Ведро (вещь), улов, расстояния | `rules.ts` (`bucketNearSeat`), `ITEMS.isBucket`, `Bag` в `protocol.ts` | `bucketFor`, `sit`, `onFishing` | `drawBucket` в движке, `components/GameCatch.vue` |
 | Дом | `house.ts` | — | `game/house.ts` |
 | Костёр | `campfire.ts` | `rest` | `game/campfire.ts` |
+| Голод, еда, сон | `hunger.ts`, `ITEMS.isFish`/`meal`, `homePoint` | `hunger`, `fishTake`, `eat`, `cook`, `faint`, `wake` | `components/GameHunger.vue`, `GameSleep.vue`, `eatAction` в движке |
 | Рюкзак | `packs.ts` | `packOn`, `packOff`, `packKind` | `components/GamePack.vue` |
 | Вещи и руки | `items.ts` | `item*` в `PierRoom.ts` | `components/GameBackpack.vue`, `game/backpack-view.ts`, `items-art.ts`, `held-art.ts` |
 | Вещи на земле (общие) | `GroundItem`, `ITEMS.dropSpot`, `nearest`, `server/items.ts` (`loadGround`, `claimItem`) | `itemDrop`, `itemPut`, `itemPick`, `PierRoom.ground` | `groundItems` в движке, `groundSprite` в `held-art.ts` |

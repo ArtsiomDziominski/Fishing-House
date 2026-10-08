@@ -1,13 +1,14 @@
 // Проверка игрового сервера целиком: бот заводит игрока в базе, входит по билету (ведро у него в руке), идёт за рюкзаком,
-// перекладывает вещи в рюкзаке и берёт их в руку, ставит и поднимает ведро, выкладывает их на землю и поднимает (и чужие — в другой копии причала), несёт всё к причалу, садится и ловит рыбу; заодно проверяет, что телепорт сервер не принимает.
+// перекладывает вещи в рюкзаке и берёт их в руку, ставит и поднимает ведро, выкладывает их на землю и поднимает (и чужие — в другой копии причала), несёт всё к причалу, садится и ловит рыбу;
+// достаёт рыбу из ведра, жарит её у костра и съедает, а голодным засыпает и просыпается у дома; заодно проверяет, что телепорт сервер не принимает.
 //
 //   npm run smoke -w game-server            (нужны запущенные база и игровой сервер, .env с DATABASE_URL и GAME_SECRET)
 //   GAME_URL=http://localhost:2567 npm run smoke -w game-server
 //   npm run smoke:own -w game-server        (то же, но сервер бот поднимает сам — smoke-own.ts)
 
 import { Client, type Room } from '@colyseus/sdk';
-import { World, ITEMS, ROOM, DAY_LENGTH, WEATHERS, REACH, dayHour, weatherText, dist, seat, standPoint, type Bag, type GroundView, type Item, type PlayerView, type ServerMessages, type WorldState } from '@fh/shared';
-import { createDb, createAccount, issueTicket, getProfile, loadItems, loadGround } from '@fh/shared/server';
+import { World, ITEMS, HUNGER, ROOM, DAY_LENGTH, WEATHERS, REACH, dayHour, weatherText, dist, seat, standPoint, homePoint, type Bag, type GroundView, type Item, type PlayerView, type ServerMessages, type WorldState } from '@fh/shared';
+import { createDb, createAccount, issueTicket, getProfile, loadItems, loadGround, loadPlayer, saveWorld, recordCatch } from '@fh/shared/server';
 
 const url = process.env.GAME_URL || 'http://localhost:2567';
 const db = createDb(undefined, 2);
@@ -30,6 +31,10 @@ let clock: (ServerMessages['clock'] & { skew: number }) | null = null;   // skew
 room.onMessage('clock', (m: ServerMessages['clock']) => { clock = { ...m, skew: m.now - Date.now() }; });
 let weather: ServerMessages['weather'] | null = null;
 room.onMessage('weather', (m: ServerMessages['weather']) => { weather = m; });
+let hunger: ServerMessages['hunger'] | null = null;
+const food: ServerMessages['food'][] = [];
+room.onMessage('hunger', (m: ServerMessages['hunger']) => { hunger = m; });
+room.onMessage('food', (m: ServerMessages['food']) => { food.push(m); });
 
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
 const until = async (what: string, ok: () => boolean, ms = 15000) => {
@@ -45,6 +50,8 @@ check(kit.length === packed.length && packed.every(st => kit.some(it => it.kind 
 const thing = (list: Item[], kind: string) => list.find(it => it.kind === kind)!;
 const pail = items!.hands[0]!;
 check(items!.hands.length === 1 && pail.kind === 'bucket' && pail.left, 'ведро у нового игрока — в левой руке');
+await until('сытость', () => !!hunger);
+check(hunger!.food === HUNGER.MAX && hunger!.sleep === 0, 'новый игрок сыт и не спит');
 await until('часы причала', () => !!clock);
 check(Math.abs(clock!.skew) < DAY_LENGTH * 1000 + 60_000, 'сервер прислал часы причала — по ним у всех одно время суток');
 await until('погоду', () => !!weather);
@@ -320,7 +327,7 @@ if (before.canSet) {
   let theirs: ServerMessages['items'] | null = null, there: WorldState | null = null;
   other.onMessage('items', (m: ServerMessages['items']) => { theirs = m; });
   other.onMessage('self', (m: WorldState) => { there = m; });
-  for (const type of ['bag', 'fish', 'clock', 'weather']) other.onMessage(type, () => {});
+  for (const type of ['bag', 'fish', 'clock', 'weather', 'hunger', 'food']) other.onMessage(type, () => {});
   await until('второго игрока', () => !!theirs && !!there);
   await until('лампу в другой копии', () => !!onGround(lamp.id, other));
   check(other.roomId !== room.roomId && onGround(lamp.id, other)!.x === spot.x, 'во второй копии причала лампа лежит там же — земля у всех одна');
@@ -416,6 +423,8 @@ again.onMessage('fish', () => {});
 again.onMessage('clock', () => {});
 again.onMessage('weather', () => {});
 again.onMessage('items', (m: ServerMessages['items']) => { items = m; });
+again.onMessage('hunger', (m: ServerMessages['hunger']) => { hunger = m; });
+again.onMessage('food', (m: ServerMessages['food']) => { food.push(m); });
 items = null;
 await until('себя после входа', () => !!self);
 const pailNow = (await loadGround(db)).find(g => g.id === pail.id);
@@ -425,7 +434,87 @@ check(bag!.total === 1, 'улов после перезахода тот же');
 await until('вещи после входа', () => !!items);
 check(items!.list.length === kit.length - 2 + (before.canSet ? 4 : 0) && thing(items!.list, 'worms').x === 5 && thing(items!.list, 'net-scoop').rot, 'вещи после перезахода лежат там, куда их переложили, стартовый набор не задвоился');
 check(items!.hands.map(it => it.kind + (it.left ? ':левая' : ':правая')).join() === 'floats:правая,rod-willow:левая' && !items!.list.some(it => it.kind === 'rod-willow' || it.kind === 'floats'), 'поплавки в правой руке, удочка в левой — и после перезахода');
+
+// еда: рыбу достают из ведра в свободную руку, сырую в рюкзак не убрать, у костра она жарится, жареную съедают
+const caught = hook.e === 'hook' ? hook.fish.id : '';
+const hand = () => (again.state as { players: { get(sid: string): PlayerView | undefined } }).players.get(again.sessionId);
+items = null;
+again.send('fishTake', { species: caught });
+await until('отказ достать рыбу', () => !!items);
+check(items!.note === 'busy', 'обе руки заняты — рыбу из ведра не достать');
+again.send('itemStow', { id: floats.id, at: null });
+await until('свободную правую руку', () => hand()?.hand === '');
+items = null;
+again.send('fishTake', { species: caught });
+await until('рыбу в руке', () => !!items && items.hands.some(it => it.kind === 'fish' && it.id > 0) && bag!.total === 0 && hand()?.hand === 'fish');
+const raw = items!.hands.find(it => it.kind === 'fish')!;
+check(raw.fish === caught && !raw.left, 'рыба из ведра — в правой руке, ведро опустело');
+items = null;
+again.send('fishTake', { species: caught });
+await until('отказ — рыбы нет', () => !!items);
+check(items!.note === 'empty', 'в пустом ведре рыбы не достать');
+items = null;
+again.send('itemStow', { id: raw.id, at: null });
+await until('отказ убрать сырую рыбу', () => !!items);
+check(items!.note === 'raw' && items!.hands.some(it => it.id === raw.id), 'сырую рыбу в рюкзак не убрать');
+again.send('stand');
+const at = { ...standPoint() };
+await walk(World.nearestWalkable(World.fire.x - 24, World.fire.y + 2)!, again, at);
+again.send('rest');
+await until('сел у костра', () => hand()?.rest === true);
+await until('рыба пожарилась', () => food.some(f => f.e === 'cooked') && hand()?.hand === 'fish-fried', (HUNGER.COOK + 4) * 1000);
+check( food.find(f => f.e === 'cooked')!.fish === caught, `у костра рыба пожарилась за ${HUNGER.COOK} с`);
+items = null;
+again.send('eat', {});
+await until('съел', () => food.some(f => f.e === 'ate') && !!items && hand()?.hand === '');
+check(!items!.hands.some(it => ITEMS.isFish(it.kind)) && hunger!.food === HUNGER.MAX, 'жареную рыбу съел — в руке пусто, сыт');
+await sleep(300);
+check(!(await loadItems(db, me.id)).hands.some(it => ITEMS.isFish(it.kind)) && (await getProfile(db, me.id))!.bag.total === 1, 'в базе рыбы больше нет, а в профиле улов прежний');
 await again.leave();
+await sleep(500);
+
+// голод: сытость на нуле почти три минуты — входим, и герой засыпает; спит — ходить нельзя, треть рыбы из ведра пропадает
+for (let i = 0; i < 10; i++) await recordCatch(db, me.id, { id: 'roach', grams: 100 + i });
+const saved = (await loadPlayer(db, me.id))!.world!;
+await saveWorld(db, me.id, { ...saved, sitting: false, food: 0, starve: HUNGER.STARVE - 0.5 });
+async function enter() {
+  const r: Room = await client.joinOrCreate(ROOM, { ticket: issueTicket(me.id, me.name) });
+  self = null; hunger = null; bag = null;
+  r.onMessage('self', (m: WorldState) => { self = m; });
+  r.onMessage('bag', (m: Bag) => { bag = m; });
+  r.onMessage('hunger', (m: ServerMessages['hunger']) => { hunger = m; });
+  for (const type of ['fish', 'clock', 'weather', 'items', 'food']) r.onMessage(type, () => {});
+  await until('себя после входа', () => !!self && !!hunger && !!bag);
+  return r;
+}
+let hungry = await enter();
+check(hunger!.food === 0 && hunger!.sleep === 0 && bag!.total === 10, 'вошёл голодным: сытость на нуле, в ведре десять рыб');
+await until('уснул', () => !!hunger && hunger.sleep > 0, 3000);
+check(hunger!.sleep > (HUNGER.SLEEP - 5) * 1000, `голодный уснул на ${HUNGER.SLEEP / 60} минуты`);
+await until('рыба пропала', () => hunger?.lost !== undefined && bag!.total < 10);
+check(hunger!.lost === 3 && bag!.total === 7, 'пока спит, из ведра пропало три рыбы из десяти');
+const asleep = { ...self! };
+self = null;
+hungry.send('move', { x: asleep.x + 3, y: asleep.y, dir: 'down' });
+await until('отказ идти во сне', () => !!self);
+check(self!.x === asleep.x && self!.y === asleep.y, 'спящий не ходит — сервер возвращает его на место');
+await hungry.leave();
+await sleep(500);
+check((await loadPlayer(db, me.id))!.world!.sleep > Date.now(), 'сон записан в базу: перезайти, чтобы не спать, не выйдет');
+const home = homePoint();
+const tired = (await loadPlayer(db, me.id))!.world!;
+await saveWorld(db, me.id, { ...tired, sleep: Date.now() + 1500 });
+hungry = await enter();
+check(hunger!.sleep > 0, 'после перезахода герой всё ещё спит');
+await until('проснулся', () => !!hunger && hunger.sleep === 0 && !!self && self.x === home.x, 5000);
+check(self!.y === home.y && hunger!.food === HUNGER.MAX, 'выспался — проснулся у крыльца дома сытым');
+await hungry.leave();
+await sleep(500);
+const late = (await loadPlayer(db, me.id))!.world!;
+await saveWorld(db, me.id, { ...late, x: seat.x, y: seat.y - 30, sleep: Date.now() - 1000 });
+hungry = await enter();
+check(self!.x === home.x && self!.y === home.y && hunger!.food === HUNGER.MAX && hunger!.sleep === 0, 'сон кончился, пока игрока не было, — входит у дома, сытый');
+await hungry.leave();
 await db.close();
 console.log('всё работает');
 process.exit(0);

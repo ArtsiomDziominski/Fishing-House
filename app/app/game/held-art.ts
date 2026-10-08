@@ -49,6 +49,19 @@ const ROD = [
   '.o...',
 ];
 const rod = (p: string, h: string, t: string): HeldArt => ({ pal: { p, h, t }, map: ROD, grip: [1, 24], lean: 0.6 });
+// Рыба из ведра висит в кулаке за хвост: b — спина, c — бока, d — брюхо.
+const FISH_HELD = [
+  'o...o',
+  '.ooo.',
+  '.obo.',
+  'obcdo',
+  'obcdo',
+  'obcdo',
+  'obcdo',
+  '.obo.',
+  '.oco.',
+  '..o..',
+];
 // Свёрнутая сеть висит на руке: у накидки по краю грузила, у невода — поплавки.
 const BUNDLE: [number, number] = [3, -1];
 
@@ -153,6 +166,9 @@ const HELD: Record<Exclude<ItemKind, 'bucket'>, HeldArt> = {
       '.ooo.',
     ],
   },
+  // рыбу несут за хвост, головой вниз; жареная — подрумяненная, с полосками от углей
+  'fish': { grip: [2, -1], pal: { b: '5b7381', c: 'b5b9b8', d: 'e4e8e4' }, map: FISH_HELD },
+  'fish-fried': { grip: [2, -1], pal: { b: '7a3d1a', c: 'b8692e', d: 'dfa154' }, map: FISH_HELD },
   'floats': {
     grip: [2, -1],
     map: [

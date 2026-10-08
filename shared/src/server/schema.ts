@@ -2,7 +2,7 @@
 //
 // users   — учётные записи: имя для входа и хеш пароля. Наружу не отдаётся никогда.
 // players — игровой профиль: публичный id, имя, деньги, где игрок оставил героя и рюкзак.
-// catches — каждая пойманная рыба. Из неё собирается улов (панель ведра) и рекорды.
+// catches — каждая пойманная рыба. Из неё собирается улов (панель ведра — что ещё не вынуто, gone = false) и рекорды (все).
 // items   — вещи игрока: что это и в какой клетке сетки рюкзака лежит, что она в руке или лежит на земле (правила — shared/src/items.ts).
 
 import { sql } from 'drizzle-orm';
@@ -32,6 +32,7 @@ export const catches = pgTable('catches', {
   playerId: text('player_id').notNull().references(() => players.id, { onDelete: 'cascade' }),
   species: text('species').notNull(),
   grams: integer('grams').notNull(),
+  gone: boolean('gone').notNull().default(false),                  // уже не в ведре: вынули в руку (дальше это вещь fish) или пропала, пока герой спал
   caughtAt: timestamp('caught_at', { withTimezone: true }).notNull().default(sql`now()`),
 }, t => [index('catches_player_idx').on(t.playerId, t.caughtAt)]);
 
@@ -46,7 +47,7 @@ export const items = pgTable('items', {
   leftHand: boolean('left_hand').notNull().default(false),         // в руке — в левой (иначе в правой; тяжёлая — в обеих, числится в правой)
   ground: boolean('ground').notNull().default(false),              // лежит на земле, общей для всех; тогда x, y — место на карте, а player_id — кто выложил
   lit: boolean('lit').notNull().default(false),                    // горит на земле (лампа); в руке горит ли лампа — players.world.lamp
-  fish: text('fish').notNull().default(''),                        // ведро на земле: хвосты последних рыб в нём, id через запятую
+  fish: text('fish').notNull().default(''),                        // ведро на земле: хвосты последних рыб в нём, id через запятую; рыба (fish, fish-fried) — её вид
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 }, t => [index('items_player_idx').on(t.playerId), index('items_ground_idx').on(t.ground).where(sql`${t.ground}`)]);
 

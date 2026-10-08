@@ -7,6 +7,7 @@ export * from './fishing.ts';
 export * from './packs.ts';
 export * from './items.ts';
 export * from './daytime.ts';
+export * from './hunger.ts';
 export * from './weather.ts';
 export * from './rules.ts';
 export * from './protocol.ts';

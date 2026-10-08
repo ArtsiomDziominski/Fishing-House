@@ -2,9 +2,9 @@
 // Каждая нарисована 1:1 в арт-пикселях под свой размер в клетках (клетка 24×24): удочка и невод 4×1 — до 96×24,
 // накидка 2×2 — до 48×48, сачок и топор 2×1 — до 48×24, мелочь — до 24×24, ведро 4×4 — до 96×96 (его карту собрал скрипт
 // по кругам и эллипсам — жестяное ведро с водой, как bucket.png, только крупнее). В клетках рисуются по центру; повёрнутая
-// вещь — та же картинка, повёрнутая на четверть оборота по часовой.
+// вещь — та же картинка, повёрнутая на четверть оборота по часовой. Рыба из ведра (fish, fish-fried) — 1×1, спрайтом своего вида.
 
-import type { ItemKind } from '@fh/shared';
+import { FISH, ITEMS, type ItemKind } from '@fh/shared';
 
 export interface ItemArt { pal: Record<string, string>; map: string[] }
 
@@ -406,22 +406,73 @@ export const ITEM_ART: Record<ItemKind, ItemArt> = {
       '.........o...',
     ],
   },
+  'fish': {
+    pal: { o: '240702', e: '0d0502', B: '5b7381', S: 'b5b9b8', W: 'e4e8e4', F: '8f97a3' },
+    map: [
+      '......oooooo........',
+      '....ooBBBBBBoo....oo',
+      '..ooBBBBBBBBBBoo.oFo',
+      '.oSSBBBBBBBBBBBSooFo',
+      'oSeSSSSSSSSSSSSSSFFo',
+      'oSSSSSSSSSSSSSSSoFFo',
+      '.oWWWWWWWWWWWWWoo.Fo',
+      '..ooooWWWWWWoooo..oo',
+      '......oooooo........',
+    ],
+  },
+  'fish-fried': {
+    pal: { o: '240702', e: '0d0502', B: '7a3d1a', S: 'b8692e', W: 'dfa154', F: '8a4a1e', g: '4a2410' },
+    map: [
+      '......oooooo........',
+      '....oogBBBgBoo....oo',
+      '..ooBBgBBBgBBBoo.oFo',
+      '.oSSBBgBBBgBBBgSooFo',
+      'oSeSSSgSSSgSSSgSSFFo',
+      'oSSSSSgSSSgSSSgSoFFo',
+      '.oWWWWgWWWgWWWgoo.Fo',
+      '..oooogWWWgWoooo..oo',
+      '......oooooo........',
+    ],
+  },
 };
 
 const sprites = new Map<string, HTMLCanvasElement>();
-// Картинка вещи на отдельном холсте (собирается один раз); rot — повёрнутая.
-export function itemSprite(kind: ItemKind, rot = false): HTMLCanvasElement {
-  const key = kind + (rot ? '+' : '');
+// Рыба из ведра рисуется спрайтом своего вида (fish — его id), как в панели ведра; жареная — подрумяненная, с тёмными
+// полосками от углей. Без вида — общая картинка из ITEM_ART.
+function fishPixels(id: string | undefined, fried: boolean): { w: number; h: number; data: Uint8ClampedArray } | null {
+  const sp = id ? FISH.byId[id] : undefined; if (!sp) return null;
+  const s = FISH.sprite(sp);
+  if (fried) for (let i = 0; i < s.w * s.h; i++) {
+    const o = i * 4; if (!s.data[o + 3]) continue;
+    const lum = (0.299 * s.data[o]! + 0.587 * s.data[o + 1]! + 0.114 * s.data[o + 2]!) / 255;
+    if (lum < 0.12) continue;                                   // контур и глаз остаются
+    const k = (i % s.w) % 4 === 1 ? 0.45 : 0.7 + lum * 0.45;    // полоски от решётки
+    s.data[o] = 205 * k; s.data[o + 1] = 120 * k; s.data[o + 2] = 52 * k;
+  }
+  return s;
+}
+// Картинка вещи на отдельном холсте (собирается один раз); rot — повёрнутая, fish — вид рыбы у рыбы из ведра.
+export function itemSprite(kind: ItemKind, rot = false, fish?: string): HTMLCanvasElement {
+  const fishy = ITEMS.isFish(kind) && fish && FISH.byId[fish] ? fish : undefined;
+  const key = kind + (fishy ? ':' + fishy : '') + (rot ? '+' : '');
   let c = sprites.get(key);
   if (c) return c;
-  const { pal, map } = ITEM_ART[kind], h = map.length, w = map[0]!.length;
+  const px = fishPixels(fishy, kind === 'fish-fried');
+  const { pal, map } = ITEM_ART[kind], h = px ? px.h : map.length, w = px ? px.w : map[0]!.length;
+  // цвет пикселя (i, y) картинки как она нарисована; null — пусто
+  const at = (i: number, y: number): [number, number, number] | null => {
+    if (px) { const o = (y * w + i) * 4; return px.data[o + 3] ? [px.data[o]!, px.data[o + 1]!, px.data[o + 2]!] : null; }
+    const ch = map[y]![i]!; if (ch === '.') return null;
+    const hex = pal[ch] || 'ff00ff';
+    return [parseInt(hex.slice(0, 2), 16), parseInt(hex.slice(2, 4), 16), parseInt(hex.slice(4, 6), 16)];
+  };
   c = document.createElement('canvas');
   c.width = rot ? h : w; c.height = rot ? w : h;
   const x = c.getContext('2d')!, img = x.createImageData(c.width, c.height);
   for (let y = 0; y < h; y++) for (let i = 0; i < w; i++) {
-    const ch = map[y]![i]!; if (ch === '.') continue;
-    const hex = pal[ch] || 'ff00ff', px = rot ? h - 1 - y : i, py = rot ? i : y, o = (py * c.width + px) * 4;
-    img.data[o] = parseInt(hex.slice(0, 2), 16); img.data[o + 1] = parseInt(hex.slice(2, 4), 16); img.data[o + 2] = parseInt(hex.slice(4, 6), 16); img.data[o + 3] = 255;
+    const rgb = at(i, y); if (!rgb) continue;
+    const pxl = rot ? h - 1 - y : i, pyl = rot ? i : y, o = (pyl * c.width + pxl) * 4;
+    img.data[o] = rgb[0]; img.data[o + 1] = rgb[1]; img.data[o + 2] = rgb[2]; img.data[o + 3] = 255;
   }
   x.putImageData(img, 0, 0);
   sprites.set(key, c);

@@ -22,6 +22,7 @@ const hover = ref<number | null>(null);
 const drag = shallowRef<Drag | null>(null);
 const hold = shallowRef<{ id: number; k: number } | null>(null);   // вещь держат нажатой: скоро уйдёт в руку или обратно
 const gift = ref<ItemKind>(ITEM_KINDS[0]);
+const GIFTS = ITEM_KINDS.filter(kind => !ITEMS.isFish(kind));   // рыбу не дают: её достают из ведра
 const k = ref(2);                        // во сколько раз холст рюкзака крупнее арт-пикселей
 const stacked = ref(false);              // на узком экране рыбак стоит над рюкзаком, а не сбоку
 
@@ -75,7 +76,7 @@ function take(id: number, side?: Hand) {
 // at — в какую клетку; не названа — туда, где вещь лежала, а занято — на первое свободное место.
 function stow(id: number, at: Place | null = null) {
   const r = ITEMS.stow(grid.value, game.items, game.hands, id, at);
-  if (!r) { if (inHand(id)) game.showToast(at ? 'Сюда вещь не встаёт' : 'В рюкзаке нет места', 'bad'); return; }
+  if (!r) { if (inHand(id)) game.showToast(ITEMS.packable(thing(id)!.kind) ? (at ? 'Сюда вещь не встаёт' : 'В рюкзаке нет места') : 'Сырую рыбу в рюкзак не убрать — пожарь её у костра', 'bad'); return; }
   game.items = r.list; game.hands = r.hands; selected.value = id;
   emit('stow', id, { x: r.item.x, y: r.item.y, rot: r.item.rot });
 }
@@ -256,10 +257,10 @@ onBeforeUnmount(() => { removeEventListener('keydown', key, { capture: true }); 
     </div>
     <footer>
       <template v-if="shown">
-        <div class="what"><b>{{ ITEMS.info(shown.kind).name }}</b><span class="cells">{{ inHand(shown.id) ? handsText(shown.kind, true) : cellsText(shown.kind) + ' · ' + handsText(shown.kind, false) }}</span></div>
+        <div class="what"><b>{{ ITEMS.title(shown) }}</b><span class="cells">{{ inHand(shown.id) ? handsText(shown.kind, true) : cellsText(shown.kind) + ' · ' + handsText(shown.kind, false) }}</span></div>
         <p class="text">{{ ITEMS.info(shown.kind).text }}</p>
         <div v-if="selected === shown.id && !drag" class="buttons">
-          <button v-if="inHand(shown.id)" type="button" @click="blur($event); stow(shown.id)">В рюкзак</button>
+          <button v-if="inHand(shown.id) && ITEMS.packable(shown.kind)" type="button" @click="blur($event); stow(shown.id)">В рюкзак</button>
           <template v-else>
             <button type="button" @click="blur($event); take(shown.id)">{{ heavy(shown.kind) ? 'В руки' : 'В руку' }}</button>
             <button v-if="ITEMS.turns(shown.kind)" type="button" @click="blur($event); rotate()"><kbd>R</kbd>Повернуть</button>
@@ -275,7 +276,7 @@ onBeforeUnmount(() => { removeEventListener('keydown', key, { capture: true }); 
       <!-- разработка: положить в рюкзак любую вещь (сервер слушает это, только когда разрешено и время с погодой) -->
       <div v-if="game.sky.canSet" class="dev">
         <select v-model="gift" aria-label="Какую вещь положить" @change="blur">
-          <option v-for="kind in ITEM_KINDS" :key="kind" :value="kind">{{ ITEMS.info(kind).name }} · {{ cellsText(kind) }}</option>
+          <option v-for="kind in GIFTS" :key="kind" :value="kind">{{ ITEMS.info(kind).name }} · {{ cellsText(kind) }}</option>
         </select>
         <button type="button" @click="blur($event); emit('give', gift)">Положить</button>
       </div>

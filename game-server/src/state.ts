@@ -19,6 +19,7 @@ export const PlayerState = schema({
   hand: t.string(),           // что в правой руке: вид вещи (ITEM_KINDS) или пусто; тяжёлая вещь (в обеих) — только здесь
   off: t.string(),            // что в левой руке
   lamp: t.boolean(),          // лампа у него в руке зажжена и светит
+  sleep: t.boolean(),         // спит от голода
   recent: t.array('string'),  // хвосты последних рыб — над ведром, когда оно у него в руке
 }, 'PlayerState');
 export type PlayerState = SchemaType<typeof PlayerState>;

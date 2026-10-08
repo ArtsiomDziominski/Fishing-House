@@ -1,7 +1,8 @@
-<!-- Что лежит в ведре — панель слева вверху. -->
+<!-- Что лежит в ведре — панель слева вверху: нажать на рыбу — достать её в руку (take). Под ней — сытость. -->
 <script setup lang="ts">
 import { FISH } from '@fh/shared';
 
+const emit = defineEmits<{ take: [species: string] }>();
 const game = useGameStore();
 </script>
 
@@ -12,7 +13,8 @@ const game = useGameStore();
       <span>В ведре</span>
       <b>{{ game.bag.total ? `${game.bag.total} · ${FISH.weightText(game.bag.grams)}` : 'пусто' }}</b>
     </div>
-    <CatchList :bag="game.bag" compact />
+    <CatchList :bag="game.bag" compact pickable @pick="emit('take', $event)" />
+    <GameHunger />
   </aside>
 </template>
 

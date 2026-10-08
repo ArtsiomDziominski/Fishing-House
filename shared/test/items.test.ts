@@ -227,3 +227,25 @@ test('заглянуть в рюкзак можно, когда он на спи
   assert.ok(packInReach({ x: pack.x + REACH + 3, y: pack.y }, pack, 4));
   assert.ok(packInReach({ x: 0, y: 0 }, { ...pack, worn: true }));
 });
+
+test('рыба из ведра — лёгкая вещь в одну клетку: сырую в рюкзак не убрать, жареную — можно', () => {
+  const g = ITEMS.grid('leather');
+  assert.ok(ITEMS.isFish('fish') && ITEMS.isFish('fish-fried') && !ITEMS.isFish('bucket'));
+  assert.equal(ITEMS.cells('fish'), 1); assert.equal(ITEMS.weight('fish'), 1);
+  const raw: Item = { id: 50, kind: 'fish', x: 0, y: 0, rot: false, left: true, fish: 'roach' };
+  assert.equal(ITEMS.stow(g, [], [raw], 50), null);
+  const fried: Item = { ...raw, kind: 'fish-fried' };
+  const r = ITEMS.stow(g, [], [fried], 50)!;
+  assert.ok(r && r.hands.length === 0 && r.item.fish === 'roach', 'жареная рыба легла в рюкзак и помнит свой вид');
+});
+
+test('рыбу зовут по её виду, а есть из рук начинают с жареной', () => {
+  assert.equal(ITEMS.title({ kind: 'fish', fish: 'perch' }), 'Окунь из ведра');
+  assert.equal(ITEMS.title({ kind: 'fish-fried', fish: 'pike' }), 'Щука с костра');
+  assert.equal(ITEMS.title({ kind: 'axe' }), 'Топор');
+  const raw: Item = { id: 1, kind: 'fish', x: 0, y: 0, rot: false, fish: 'roach' };
+  const fried: Item = { id: 2, kind: 'fish-fried', x: 0, y: 0, rot: false, left: true, fish: 'pike' };
+  assert.equal(ITEMS.meal([raw, fried])?.id, 2);
+  assert.equal(ITEMS.meal([raw, fried], 'right')?.id, 1);
+  assert.equal(ITEMS.meal([{ id: 3, kind: 'lamp', x: 0, y: 0, rot: false }]), null);
+});

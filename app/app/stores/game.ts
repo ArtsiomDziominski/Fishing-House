@@ -1,9 +1,9 @@
-// Всё, что показывает интерфейс вокруг холста игры: ведро, рюкзак и вещи в нём, кнопки действий, сообщения, время суток, кто на причале, связь.
+// Всё, что показывает интерфейс вокруг холста игры: ведро, рюкзак и вещи в нём, сытость и сон, кнопки действий, сообщения, время суток, кто на причале, связь.
 // Пишет сюда движок (через GameUI), читают компоненты.
 
 import { defineStore } from 'pinia';
-import { PACKS, emptyBag, type Bag, type Item, type PackKind } from '@fh/shared';
-import type { Actions, GameUI, SkyInfo, Tone } from '~/game/engine';
+import { HUNGER, PACKS, emptyBag, type Bag, type Item, type PackKind } from '@fh/shared';
+import type { Actions, GameUI, HungerInfo, SkyInfo, Tone } from '~/game/engine';
 
 const SOUND_KEY = 'fh-sound';
 const recall = (key: string) => { try { return localStorage.getItem(key); } catch { return null; } };   // на сервере и в частном окне хранилища нет
@@ -21,7 +21,8 @@ export const useGameStore = defineStore('game', {
     packOpen: false,              // открыто окно рюкзака
     // время суток и погода: часы, темнота фона, погода словами; можно ли их выставлять (разработка) и что выставлено
     sky: { label: '', dark: 0, minutes: 0, canSet: false, moved: false, weather: '', fixKind: null, fixWind: null } as SkyInfo,
-    actions: { left: null, right: null, pack: null, fish: null, hot: false, stand: false, open: false, light: null } as Actions,
+    actions: { left: null, right: null, pack: null, fish: null, hot: false, stand: false, open: false, light: null, eat: null } as Actions,
+    hunger: { food: HUNGER.MAX, until: 0, lost: null } as HungerInfo,   // сытость и сон от голода
     toast: { text: '', tone: '' as Tone, fishId: null as string | null, show: false, seq: 0 },
     quietHint: false,
     debug: null as string | null,
@@ -53,6 +54,7 @@ export const useGameStore = defineStore('game', {
         moved: () => { this.quietHint = true; },
         debug: text => { this.debug = text; },
         online: list => { this.online = list; },
+        hunger: info => { this.hunger = info; },
       };
     },
   },

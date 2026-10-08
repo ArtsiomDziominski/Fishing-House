@@ -1,0 +1,1 @@
+ALTER TABLE "catches" ADD COLUMN "gone" boolean DEFAULT false NOT NULL;

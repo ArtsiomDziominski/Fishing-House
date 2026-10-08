@@ -1,0 +1,32 @@
+// Голод. Сытость героя — от 100 до 0: пока он в игре, она тает и за световой день (с рассвета до ночи по часам причала)
+// уходит вся. Пополняет её рыба: сырая — чуть-чуть, жаренная на костре — сильно (самая простая, плотва, — наполовину,
+// остальные — до самого верха). Сытость кончилась — герой ходит медленнее; не поел за STARVE секунд — засыпает от усталости
+// прямо там, где стоял: экран у него чёрный SLEEP секунд, часть рыбы из ведра пропадает, а просыпается он у крыльца
+// своего дома сытым. Смерти нет. Решает всё это сервер, клиент только показывает.
+
+import { DAY_LENGTH, NIGHT_HOURS } from './daytime.ts';
+
+export const HUNGER = (() => {
+  const MAX = 100;
+  // Световой день: от конца ночи до её начала, в секундах настоящего времени.
+  const DAYLIGHT = (NIGHT_HOURS.from - NIGHT_HOURS.to) / 24 * DAY_LENGTH;
+  const DRAIN = MAX / DAYLIGHT;          // сколько сытости уходит за секунду
+  const STARVE = 180;                    // секунд с пустой сытостью до того, как герой уснёт
+  const SLEEP = 180;                     // секунд сна: столько игрок ждёт перед чёрным экраном
+  const SLOW = 0.6;                      // во сколько раз медленнее ходит голодный
+  const LOSS = 0.3;                      // какая доля рыбы из ведра пропадает, пока герой спит
+  const LOW = 25;                        // ниже этого герою хочется есть — пора к костру
+  const COOK = 8;                        // секунд сидеть у костра с сырой рыбой в руке, пока она не пожарится
+  const RAW = 10;                        // сколько даёт сырая рыба
+  const SIMPLE = 'roach';                // самая простая рыба: жареная даёт только половину
+  // Сколько сытости даёт рыба species: сырая (cooked = false) или жареная.
+  const gain = (species: string, cooked: boolean) => (!cooked ? RAW : species === SIMPLE ? MAX / 2 : MAX);
+  const eat = (food: number, species: string, cooked: boolean) => Math.min(MAX, food + gain(species, cooked));
+  // Сытость через dt секунд: тает, но не ниже нуля.
+  const drain = (food: number, dt: number) => Math.max(0, food - DRAIN * dt);
+  // Сколько рыб пропадёт из ведра, где их n: доля LOSS, с округлением вниз.
+  const lost = (n: number) => Math.floor(n * LOSS);
+  // Во сколько раз быстрее или медленнее обычного ходит герой.
+  const pace = (food: number) => (food > 0 ? 1 : SLOW);
+  return { MAX, DAYLIGHT, DRAIN, STARVE, SLEEP, SLOW, LOSS, LOW, COOK, RAW, SIMPLE, gain, eat, drain, lost, pace };
+})();

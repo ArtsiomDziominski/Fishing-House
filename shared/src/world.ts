@@ -155,6 +155,8 @@ export const World = {
   house: box([...HOUSE.at, ...HOUSE.size]),
   // Костёр у дома: середина очага, его размер и расстояние, с которого можно сесть у огня.
   fire,
+  // Перед дверью дома: здесь просыпается тот, кто уснул от голода (homePoint в rules.ts).
+  door: onMap(...HOUSE.door),
   // Дом: устье трубы, горящие окна и ореол вокруг них. Если сборка запекла дом в карту (house.onMap в tools/world-shapes.mjs),
   // они берутся из world-data.ts, иначе — у дома, стоящего поверх карты.
   smoke: (DATA.smoke as Point | null) ?? onMap(...HOUSE.smoke) as Point | null,

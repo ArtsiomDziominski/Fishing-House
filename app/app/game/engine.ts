@@ -7,10 +7,11 @@
 // Рыбалку ведёт сервер: клиент шлёт нажатия и показывает фазы по его событиям.
 // Остальных игроков берём из состояния комнаты и плавно подтягиваем к их последнему месту.
 // Время суток считаем по часам сервера: ночью кадр темнеет, а в окнах дома и в фонаре у двери загорается свет.
+// Голод ведёт сервер: присылает сытость и сон; голодный ходит медленнее, спящий не ходит вовсе (экран чёрный — GameSleep).
 
 import type { Room } from '@colyseus/sdk';
 import {
-  World, FISH, ITEMS, PACKS, PACK_KINDS, MOVE_EVERY, SPEED, CARRY_SPEED, RUN, REACH, seat, nearSeat, standPoint, dist, nearFire, faceFire, bucketNearSeat, packInReach, dayHour, dayPart, clockText, skyAt, weatherText,
+  World, FISH, ITEMS, HUNGER, PACKS, PACK_KINDS, MOVE_EVERY, SPEED, CARRY_SPEED, RUN, REACH, seat, nearSeat, standPoint, dist, nearFire, faceFire, bucketNearSeat, packInReach, dayHour, dayPart, clockText, skyAt, weatherText,
   type Bag, type Catch, type ClientMessages, type Dir, type GroundView, type Hand, type PackKind, type PlayerView, type ServerMessages, type Sky, type WeatherKind, type WorldState,
 } from '@fh/shared';
 import { HERO } from './hero.ts';
@@ -31,8 +32,11 @@ import { createPetsView } from './pets.ts';
 
 // left и right — что сделает левая рука (Q) и правая (E): положить, что в ней (и ведро тоже), или поднять то, что рядом;
 // pack — надеть или снять рюкзак (B); open — рюкзак на спине или рядом: в него можно заглянуть (I);
-// light — зажечь или погасить лампу (L), когда она в руке или стоит на земле рядом
-export interface Actions { left: string | null; right: string | null; pack: string | null; fish: string | null; hot: boolean; stand: boolean; open: boolean; light: string | null }
+// light — зажечь или погасить лампу (L), когда она в руке или стоит на земле рядом; eat — еда (X): съесть рыбу из рук или достать её из ведра
+export interface Actions { left: string | null; right: string | null; pack: string | null; fish: string | null; hot: boolean; stand: boolean; open: boolean; light: string | null; eat: string | null }
+// Голод для интерфейса: food — сытость 0..100; until — когда герой проснётся (мс, наши часы; 0 — не спит);
+// lost — сколько рыб пропало из ведра, пока он спал (null — ещё неизвестно).
+export interface HungerInfo { food: number; until: number; lost: number | null }
 // Время суток для интерфейса: подпись часов, насколько темно (0..1), минута игровых суток,
 // разрешает ли сервер переводить часы и выставлять погоду (разработка), переведены ли часы сейчас;
 // weather — погода словами, fixKind и fixWind — что из погоды выставлено вручную (null — идёт по расписанию).
@@ -52,10 +56,13 @@ export interface GameUI {
   moved(): void;                                        // первый шаг — подсказку можно приглушить
   debug(text: string | null): void;                     // строка отладки вместо подсказки; null — убрать
   online(players: { pid: string; name: string }[]): void;
+  hunger(info: HungerInfo): void;
 }
 
 export interface GameHandle {
   handAction(side: Hand): void; packAction(): void; lampAction(): void; setPack(kind: PackKind): void; fishAction(): void; standUp(): void; destroy(): void;
+  eatAction(): void;                                    // X: съесть рыбу из рук, а нет её — достать из ведра
+  takeFish(species: string): void;                      // достать из ведра рыбу этого вида в свободную руку
   setClock(hour: number | null): void;                  // перевести часы причала на этот час (на сервере, у всех); null — настоящее время
   setWeather(kind: WeatherKind | null, wind: boolean | null): void;   // выставить погоду и ветер (на сервере, у всех); null — по расписанию
   setSound(on: boolean): void;                          // включить или выключить звук
@@ -99,6 +106,7 @@ export async function startGame(canvas: HTMLCanvasElement, room: Room, ui: GameU
   const pack = { x: P.baseX, y: P.baseY, worn: false, kind: PACKS.DEFAULT, blocked: null as number[] | null };
   let bag: Bag = { counts: {}, best: {}, total: 0, grams: 0, recent: [] };
   let pendingBag: Bag | null = null;                                         // ведро после подсечки — покажем, когда рыба долетит
+  let food: number = HUNGER.MAX, sleepUntil = 0, lost: number | null = null;   // сытость и сон — как их назвал сервер (HungerInfo)
   const view = { k: 1 };                                                     // k — во сколько раз холст крупнее карты в арт-пикселях
   const keys = new Set<string>();
   let shift = false, lastDown = { t: -1e9, x: 0, y: 0 };   // Shift зажат; прошлый клик — для двойного
@@ -125,6 +133,8 @@ export async function startGame(canvas: HTMLCanvasElement, room: Room, ui: GameU
     room.onMessage('self', (m: ServerMessages['self']) => receive(['self', m])),
     room.onMessage('bag', (m: ServerMessages['bag']) => receive(['bag', m])),
     room.onMessage('fish', (m: ServerMessages['fish']) => receive(['fish', m])),
+    room.onMessage('hunger', (m: ServerMessages['hunger']) => receive(['hunger', m])),
+    room.onMessage('food', (m: ServerMessages['food']) => receive(['food', m])),
     room.onMessage('clock', (m: ServerMessages['clock']) => { skew = m.now - Date.now(); pier = { canSet: m.canSet, moved: m.moved }; }),
     room.onMessage('weather', (m: ServerMessages['weather']) => { weather = m; }),
   ];
@@ -282,6 +292,7 @@ export async function startGame(canvas: HTMLCanvasElement, room: Room, ui: GameU
     hero.dir = faceFire(hero);
     hero.rest = true; hero.path = null; hero.then = null; hero.moving = false; marker = null;
     send('rest');
+    if (ownHands().includes('fish')) ui.toast(`Рыба жарится — посиди у огня ${HUNGER.COOK} секунд`);
   }
   function fishAction() {                               // F, пробел: сесть, забросить, подсечь
     if (hero.sitting) send('press'); else if (nearSeatNow()) sitDown(); else restDown();
@@ -344,6 +355,12 @@ export async function startGame(canvas: HTMLCanvasElement, room: Room, ui: GameU
   function handle([type, m]: Inbox) {
     if (type === 'self') applySelf(m);
     else if (type === 'bag') { bag = m; pendingBag = null; ui.bag(bag); }
+    else if (type === 'hunger') hungerNews(m);
+    else if (type === 'food') {
+      const name = ITEMS.title({ kind: m.e === 'cooked' || !m.raw ? 'fish-fried' : 'fish', fish: m.fish });
+      if (m.e === 'cooked') { sound.cue('catch'); ui.toast(`${name} — готово! Съесть — X`, 'good', m.fish); }
+      else ui.toast(m.gain ? `Съедено: ${name.toLowerCase()} · сытость +${m.gain}` : `Съедено: ${name.toLowerCase()} — ты и так сыт`, 'good', m.fish);
+    }
     else if (m.e === 'needRod') {                       // рыбачат удочкой в руке; заодно скажем и про ведро, чтобы не ходить дважды
       ui.toast(ownPail() || pailBySeat() ? 'Нужна удочка: возьми её из рюкзака в руку' : 'Нужна удочка в руке и ведро — в руке или рядом. Удочка — в рюкзаке', 'bad');
     }
@@ -356,6 +373,43 @@ export async function startGame(canvas: HTMLCanvasElement, room: Room, ui: GameU
       fishing.apply(m);
     }
   }
+
+  // ---------- голод ----------
+  const asleep = () => sleepUntil > 0;
+  function hungerNews(m: ServerMessages['hunger']) {
+    const was = food, slept = asleep();
+    food = m.food; sleepUntil = m.sleep > 0 ? Date.now() + m.sleep : 0;
+    if (m.lost !== undefined) lost = m.lost; else if (asleep() && !slept) lost = null;
+    if (asleep()) { keys.clear(); hero.path = null; hero.then = null; marker = null; hero.moving = false; }
+    if (slept && !asleep()) ui.toast('Ты выспался у своего дома — сыт и полон сил', 'good');
+    else if (!asleep() && food === 0 && was > 0) ui.toast('Ты голоден — поешь! Достань рыбу из ведра (X) и пожарь у костра', 'bad');
+    else if (food <= HUNGER.LOW && was > HUNGER.LOW && food > 0) ui.toast('Хочется есть — пожарь рыбу на костре');
+    ui.hunger({ food, until: sleepUntil, lost });
+  }
+  // Еда (X): что-то съедобное в руках — съесть (жареную первой); нет — достать рыбу из ведра в свободную руку.
+  const mealInHand = () => { const h = ownHands(); return h.includes('fish-fried') ? 'fish-fried' : h.includes('fish') ? 'fish' : null; };
+  // Ведро под рукой: в руке; у сидящего — у места рыбака; у стоящего — на земле рядом (чьё угодно: улов у каждого свой).
+  const pailNear = () => !!ownPail() || (hero.sitting ? !!pailBySeat() : !!ITEMS.nearest(hero, groundItems().filter(g => ITEMS.isBucket(g.kind))));
+  const handFree = () => !inHand('right') || !inHand('left');
+  const firstFish = () => FISH.SPECIES.find(sp => bag.counts[sp.id])?.id ?? null;   // самую простую — первой
+  function takeFish(species: string) {
+    if (!ready || asleep()) return;
+    if (!bag.counts[species]) { ui.toast('Такой рыбы в ведре нет', 'bad'); return; }
+    if (!pailNear()) { ui.toast('Ведро далеко — подойди к нему или возьми его в руку', 'bad'); return; }
+    if (!handFree()) { ui.toast('Руки заняты — освободи одну, чтобы достать рыбу', 'bad'); return; }
+    flushMove(); send('fishTake', { species });
+  }
+  function eatAction() {
+    if (!ready || asleep()) return;
+    if (mealInHand()) { send('eat', {}); return; }
+    const sp = firstFish();
+    if (sp) takeFish(sp); else if (pailNear()) ui.toast('В ведре пусто — сначала налови рыбы', 'bad');
+  }
+  const eatText = () => {
+    const meal = mealInHand();
+    if (meal) return meal === 'fish' ? 'Съесть сырую рыбу' : 'Съесть жареную рыбу';
+    return firstFish() && pailNear() && handFree() ? 'Достать рыбу из ведра' : null;
+  };
 
   // ---------- другие игроки ----------
   const players = () => (room.state as { players?: { forEach(cb: (p: PlayerView, sid: string) => void): void } } | undefined)?.players;
@@ -390,10 +444,11 @@ export async function startGame(canvas: HTMLCanvasElement, room: Room, ui: GameU
     updateGhosts(dt);
     wx.update(dt, weather); river.update(dt, wx.st.rain);
     if (!ready) return;
+    if (asleep()) { keys.clear(); hero.path = null; }   // спящий не ходит
     let dx = 0, dy = 0, passed = false;
     for (const code of keys) { dx += DIRS[code]![0]; dy += DIRS[code]![1]; }
     const running = shift || (!dx && !dy && hero.run && !!hero.path);   // клавишами бежим с Shift, по клику — с Shift или двойным кликом
-    const pace = running ? RUN : 1, step = (ownPail() ? CARRY_SPEED : SPEED) * pace * dt;
+    const pace = (running ? RUN : 1) * HUNGER.pace(food), step = (ownPail() ? CARRY_SPEED : SPEED) * pace * dt;   // голодный еле плетётся
     if (dx || dy) {                                   // клавиши важнее пути
       if (hero.sitting || hero.rest) standUp();
       hero.path = null; hero.then = null; marker = null; noteMoved();
@@ -500,6 +555,7 @@ export async function startGame(canvas: HTMLCanvasElement, room: Room, ui: GameU
       stand: hero.sitting || hero.rest,
       open: packInReach(hero, pack),
       light: lampOn() === null ? null : lampOn() ? 'Погасить лампу' : 'Зажечь лампу',
+      eat: asleep() ? null : eatText(),
     };
     const key = JSON.stringify(a); if (key === actionsKey) return; actionsKey = key;
     ui.actions(a);
@@ -693,7 +749,24 @@ export async function startGame(canvas: HTMLCanvasElement, room: Room, ui: GameU
     fctx.fillStyle = '#240702';
     GLYPH[letter].forEach((row, j) => { for (let i = 0; i < row.length; i++) if (row[i] === '#') fctx.fillRect(x0 + 4 - (row.length >> 1) + i, top + 2 + j, 1, 1); });
   }
+  // Над спящим от голода — «z z», уплывают вверх.
+  const ZED = ['####', '..#.', '.#..', '####'];
+  function drawSleepers(t: number) {
+    const heads: { x: number; y: number }[] = [];
+    players()?.forEach((p, sid) => {
+      if (!p.sleep) return;
+      const g = sid === room.sessionId ? (ready ? hero : null) : ghosts.get(sid);
+      if (g) heads.push({ x: Math.round(g.x) + 4, y: Math.round(g.y) - FH - 2 });
+    });
+    for (const h of heads) for (let i = 0; i < 2; i++) {
+      const u = (t * 0.6 + i * 0.5) % 1, x = h.x + i * 5 + Math.round(Math.sin(u * 6) * 1.5), y = h.y - Math.round(u * 10);
+      fctx.globalAlpha = 1 - u * 0.8; fctx.fillStyle = '#f4e3c1';
+      ZED.forEach((row, j) => { for (let k = 0; k < row.length; k++) if (row[k] === '#') fctx.fillRect(x + k, y + j, 1, 1); });
+    }
+    fctx.globalAlpha = 1;
+  }
   function drawPrompts(t: number) {
+    drawSleepers(t);
     const bob = Math.floor(t * 2.5) % 2;
     if (canWear() && !hero.moving) drawKeycap('B', pack.x, pack.y - P.h - 13 - bob);
     const lying = groundInReach(), tall = lying && (ITEMS.isBucket(lying.kind) ? B.bodyH + 2 : groundSprite(lying.kind, lying.lit)?.h);   // чем поднять: правой, а занята — левой
@@ -820,6 +893,7 @@ export async function startGame(canvas: HTMLCanvasElement, room: Room, ui: GameU
     if (ev.key === 'Shift') shift = true;
     if (ev.ctrlKey || ev.metaKey || ev.altKey) return;
     if ((ev.target as HTMLElement | null)?.closest?.('input, textarea')) return;
+    if (asleep()) return;                              // спящий ничего не делает
     if (DIRS[ev.code]) { keys.add(ev.code); ev.preventDefault(); return; }
     if (ev.repeat) return;
     if (ev.code === 'KeyF' || ev.code === 'Space' || ev.code === 'Enter') { fishAction(); ev.preventDefault(); }
@@ -827,13 +901,14 @@ export async function startGame(canvas: HTMLCanvasElement, room: Room, ui: GameU
     else if (ev.code === 'KeyQ') handAction('left');
     else if (ev.code === 'KeyB') packAction();
     else if (ev.code === 'KeyL') lampAction();
+    else if (ev.code === 'KeyX') eatAction();
     else if (ev.code === 'Escape') standUp();
     else if (ev.code === 'F2') { debug = !debug; if (!debug) ui.debug(null); ev.preventDefault(); }
   });
   on<KeyboardEvent>(window, 'keyup', ev => { keys.delete(ev.code); if (ev.key === 'Shift') shift = false; });
   on(window, 'blur', () => { keys.clear(); shift = false; });
   on<PointerEvent>(canvas, 'pointerdown', ev => {
-    if (ev.button > 0 || !ready) return;
+    if (ev.button > 0 || !ready || asleep()) return;
     ev.preventDefault();
     const p = toWorld(ev);
     const dbl = ev.timeStamp - lastDown.t < 350 && Math.hypot(p.x - lastDown.x, p.y - lastDown.y) <= 12;
@@ -872,7 +947,7 @@ export async function startGame(canvas: HTMLCanvasElement, room: Room, ui: GameU
     hourNow, setClock, setWeather, wx, river, setHour: (hour: number | null) => { fixedHour = hour ?? NaN; } };   // setHour(22) останавливает время на этом часе, setHour(null) — пускает снова
 
   return {
-    handAction, packAction, lampAction, setPack, fishAction, standUp, setClock, setWeather, setSound: sound.setOn,
+    handAction, packAction, lampAction, setPack, fishAction, standUp, eatAction, takeFish, setClock, setWeather, setSound: sound.setOn,
     destroy() {
       sound.destroy();
       alive = false; cancelAnimationFrame(raf);

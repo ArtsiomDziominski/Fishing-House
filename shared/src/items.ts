@@ -6,9 +6,12 @@
 // тяжёлую (сеть-накидку и невод) — только двумя, и взять её можно, лишь когда обе руки свободны. Ведро — такая же лёгкая
 // вещь: его носят в любой руке, а рыбачить можно, когда оно в руке или стоит на земле у места рыбака.
 // Любую вещь можно выложить на землю — из руки или из рюкзака; с земли её поднимает кто угодно, и она становится его.
-// Лампа горит только в руке или на земле. Где что лежит, решает и хранит сервер; клиент только просит переложить и по тем же правилам
+// Лампа горит только в руке или на земле. Рыба из ведра — тоже вещь (fish — сырая, fish-fried — жареная, вид рыбы в Item.fish):
+// сырую держат только в руке (в рюкзак её не убрать — её место в ведре), её жарят у костра и едят (голод — hunger.ts);
+// жареную можно и в рюкзак. Где что лежит, решает и хранит сервер; клиент только просит переложить и по тем же правилам
 // заранее подсвечивает, куда вещь встанет. Картинки — в app/app/game/items-art.ts.
 
+import { FISH } from './fish.ts';
 import { PACKS, type PackKind } from './packs.ts';
 import { REACH, dist, type PackState } from './rules.ts';
 import type { Point } from './world.ts';
@@ -18,19 +21,21 @@ export const ITEM_KINDS = [
   'net-scoop', 'net-cast', 'net-seine',
   'axe', 'lamp', 'bucket',
   'worms', 'floats',
+  'fish', 'fish-fried',
 ] as const;
 export type ItemKind = typeof ITEM_KINDS[number];
-export type ItemGroup = 'rod' | 'net' | 'tool' | 'tackle';
+export type ItemGroup = 'rod' | 'net' | 'tool' | 'tackle' | 'food';
 
 // Вещь в рюкзаке: id — её номер в базе, x и y — левая верхняя клетка, rot — повёрнута на четверть оборота.
 // У вещи в руке x, y, rot — где она лежала в рюкзаке, а left — в левой ли она руке (тяжёлая — всегда «в правой», хоть и держат её обеими).
-export interface Item { id: number; kind: ItemKind; x: number; y: number; rot: boolean; left?: boolean }
+// fish — у рыбы (fish, fish-fried) её вид (FISH.byId).
+export interface Item { id: number; kind: ItemKind; x: number; y: number; rot: boolean; left?: boolean; fish?: string }
 export type Hand = 'right' | 'left';
 export interface Grid { w: number; h: number }
 // Где вещь лежит, без номера: так её кладут впервые.
 export type Place = Pick<Item, 'x' | 'y' | 'rot'>;
 // Вещь на земле: x и y — место на карте, а не клетка; lit — горит ли (это про лампу); fish — хвосты последних рыб в ведре
-// (id рыб через запятую). Земля общая: такую вещь видят и могут поднять все, а кто её выложил, знает только сервер.
+// (id рыб через запятую), а у рыбы — её вид. Земля общая: такую вещь видят и могут поднять все, а кто её выложил, знает только сервер.
 export interface GroundItem { id: number; kind: ItemKind; x: number; y: number; lit: boolean; fish: string }
 
 // Заглянуть в рюкзак можно, когда он на спине или лежит рядом с героем. slack — запас сервера на рывки сети.
@@ -52,6 +57,8 @@ export const ITEMS = (() => {
     'lamp': { name: 'Походная лампа', group: 'tool', w: 1, h: 1, text: 'Керосиновая, с ручкой. Светит в руке или на земле, в рюкзаке — нет.' },
     'worms': { name: 'Банка червей', group: 'tackle', w: 1, h: 1, text: 'Свежие, с огорода.' },
     'floats': { name: 'Поплавки', group: 'tackle', w: 1, h: 1, text: 'Красный и синий, на запас.' },
+    'fish': { name: 'Сырая рыба', group: 'food', w: 1, h: 1, text: 'Прямо из ведра. Посиди с ней у костра — пожарится. Сырой почти не наешься.' },
+    'fish-fried': { name: 'Жареная рыба', group: 'food', w: 1, h: 1, text: 'С костра, ещё тёплая. Плотва насыщает наполовину, остальные — досыта.' },
   };
   // Что лежит в рюкзаке у нового игрока. Влезает в самый маленький рюкзак — кожаный, с которого все начинают. Ведро в него
   // не влезает — оно сразу в левой руке (held, left).
@@ -125,6 +132,21 @@ export const ITEMS = (() => {
   const isRod = (kind: string) => isKind(kind) && BY_KIND[kind].group === 'rod';
   // Ведро: в него идёт улов, без него не забросить.
   const isBucket = (kind: string) => kind === 'bucket';
+  // Рыба, вынутая из ведра: сырая или жареная. raw — сырая: её держат только в руке.
+  const isFish = (kind: string) => kind === 'fish' || kind === 'fish-fried';
+  const isRaw = (kind: string) => kind === 'fish';
+  // Можно ли убрать вещь в рюкзак: сырую рыбу — нет, её место в ведре.
+  const packable = (kind: string) => !isRaw(kind);
+  // Как назвать вещь игроку: рыбу — по её виду («Плотва из ведра», «Окунь с костра»), остальное — по виду вещи.
+  function title(it: { kind: ItemKind; fish?: string }): string {
+    const sp = isFish(it.kind) && it.fish ? FISH.byId[it.fish] : undefined;
+    return sp ? `${sp.name} ${isRaw(it.kind) ? 'из ведра' : 'с костра'}` : BY_KIND[it.kind].name;
+  }
+  // Что съесть из рук: жареную рыбу первой, потом сырую; side — только из этой руки. null — есть нечего.
+  function meal<T extends { kind: string; left?: boolean }>(hands: readonly T[], side?: Hand): T | null {
+    const food = hands.filter(h => isFish(h.kind) && (!side || sideOf(h) === side));
+    return food.find(h => !isRaw(h.kind)) ?? food[0] ?? null;
+  }
   // Сколько вещей один игрок может держать выложенными на земле: больше — сначала подбери что-нибудь.
   // Земля общая на всех, и всё, что на ней лежит, рассылается каждому, — пусть её не заваливают.
   const GROUND_MAX = 12;
@@ -198,9 +220,9 @@ export const ITEMS = (() => {
     return { list, hands: inOrder([...keep, { ...it, left: to === 'left' }]), back };
   }
   // Убрать вещь id из рук в рюкзак: в названную клетку (at) или, если её не назвали, туда, где лежала, а занято — на первое
-  // свободное место. item — она же на новом месте. null — такой вещи в руках нет или она не встаёт.
+  // свободное место. item — она же на новом месте. null — такой вещи в руках нет, она не встаёт или в рюкзак её не убрать (сырая рыба).
   function stow(g: Grid, items: readonly Item[], hands: readonly Item[], id: number, at: Place | null = null): { list: Item[]; hands: Item[]; item: Item } | null {
-    const it = hands.find(h => h.id === id); if (!it) return null;
+    const it = hands.find(h => h.id === id); if (!it || !packable(it.kind)) return null;
     let p: Place | null;
     if (at) p = fits(g, items, it.kind, at.x, at.y, at.rot && turns(it.kind)) ? { x: at.x, y: at.y, rot: at.rot && turns(it.kind) } : null;
     else p = fits(g, items, it.kind, it.x, it.y, it.rot) ? { x: it.x, y: it.y, rot: it.rot } : spot(g, items, it.kind);
@@ -211,5 +233,5 @@ export const ITEMS = (() => {
   // Сколько клеток занято.
   const used = (items: readonly Item[]) => items.reduce((n, it) => n + cells(it.kind), 0);
 
-  return { STARTER, isKind, info, size, cells, grid, turns, fits, spot, repack, settle, used, isRod, isBucket, GROUND_MAX, dropSpot, nearest, HANDS, weight, load, sideOf, free, handFor, canHold, inHand, inOrder, unheld, lampOut, lampNear, take, stow };
+  return { STARTER, isKind, info, size, cells, grid, turns, fits, spot, repack, settle, used, isRod, isBucket, isFish, isRaw, packable, title, meal, GROUND_MAX, dropSpot, nearest, HANDS, weight, load, sideOf, free, handFor, canHold, inHand, inOrder, unheld, lampOut, lampNear, take, stow };
 })();
