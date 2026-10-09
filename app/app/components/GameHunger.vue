@@ -1,4 +1,4 @@
-<!-- Сытость — полоска под ведром: тает за световой день, рыба с костра её пополняет. Пустая — герой голоден и еле ходит. -->
+<!-- Сытость — своя панель под ведром (стоят в одной колонке, .hud-left на странице игры): тает за световой день, рыба с костра её пополняет. Пустая — герой голоден и еле ходит. -->
 <script setup lang="ts">
 import { HUNGER } from '@fh/shared';
 
@@ -16,7 +16,17 @@ const tone = computed(() => (food.value <= 0 ? 'empty' : food.value <= HUNGER.LO
 </template>
 
 <style scoped>
-.hunger { display: flex; align-items: center; gap: 8px; padding-top: 6px; margin-top: 6px; border-top: 1px solid var(--line); }
+.hunger {
+  display: flex; align-items: center; gap: 8px;
+  min-width: 200px; padding: 7px 12px;
+  border: 1px solid var(--line); border-radius: 9px;
+  background: var(--wood);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.35);
+  font-size: 13px;
+}
+@media (max-width: 560px) {
+  .hunger { padding: 6px 10px; }
+}
 .label { min-width: 62px; }
 .bar { flex: 1 1 auto; min-width: 60px; height: 8px; border: 1px solid rgba(36, 7, 2, 0.8); border-radius: 3px; background: rgba(36, 7, 2, 0.5); overflow: hidden; }
 .bar i { display: block; height: 100%; background: #8a9a3c; transition: width 0.6s ease; }

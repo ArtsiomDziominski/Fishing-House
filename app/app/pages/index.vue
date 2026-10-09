@@ -1,6 +1,7 @@
-<!-- Главное меню. -->
+<!-- Главное меню. Кнопка «Настройки» меняет кнопки меню на настройки (components/MenuSettings.vue) в той же панели. -->
 <script setup lang="ts">
 const { loggedIn, user, clear } = useUserSession();
+const settings = ref(false);   // открыты настройки; открываются только нажатием, то есть уже в браузере
 
 async function logout() {
   await clear();
@@ -14,15 +15,20 @@ async function logout() {
     <h1>Fishing House</h1>
     <p class="tagline muted">Домик рыбака у реки. Общий причал, своё ведро и пять видов рыб.</p>
 
-    <nav v-if="loggedIn && user" class="buttons">
+    <ClientOnly v-if="settings">
+      <MenuSettings @back="settings = false" />
+    </ClientOnly>
+    <nav v-else-if="loggedIn && user" class="buttons">
       <p class="hello">Привет, <b>{{ user.name }}</b>!</p>
       <NuxtLink to="/play" class="btn primary">Играть</NuxtLink>
       <NuxtLink :to="`/player/${user.id}`" class="btn">Мой улов и профиль</NuxtLink>
+      <button type="button" class="btn" @click="settings = true">Настройки</button>
       <button type="button" class="btn ghost" @click="logout">Выйти</button>
     </nav>
     <nav v-else class="buttons">
       <NuxtLink to="/login" class="btn primary">Войти</NuxtLink>
       <NuxtLink to="/register" class="btn">Регистрация</NuxtLink>
+      <button type="button" class="btn" @click="settings = true">Настройки</button>
     </nav>
 
     <details class="how">

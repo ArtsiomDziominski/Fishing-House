@@ -21,7 +21,6 @@ function endpoint() {
 }
 
 function setWeather(kind: WeatherKind | null, wind: boolean | null) { handle?.setWeather(kind, wind); }
-function setSound(on: boolean) { game.setSound(on); handle?.setSound(on); }
 
 // Вещи в рюкзаке и в руках: окно рюкзака просит, сервер решает и, если не согласен, присылает «items» с причиной.
 const send = <K extends keyof ClientMessages>(type: K, msg: ClientMessages[K]) => room?.send(type, msg);
@@ -86,7 +85,7 @@ async function connect() {
       game.status = reason === 'replaced' ? 'replaced' : 'offline';
     });
     handle = await startGame(canvas.value!, r, game.ui());
-    handle.setSound(game.sound);
+    handle.setSound(game.sound);   // звук включают и выключают в настройках главного меню
     if (room === r) game.status = 'online';
   } catch (e: any) {
     if (e?.statusCode === 401) return navigateTo({ path: '/login', query: { next: '/play' } });
@@ -118,11 +117,15 @@ const overlay = computed(() => {
       <canvas ref="canvas" width="569" height="320" aria-label="Домик рыбака у реки" />
     </main>
 
-    <GameCatch @take="handle?.takeFish($event)" />
+    <!-- слева вверху колонкой: ведро и под ним сытость — каждая своей панелью, одной ширины -->
+    <div class="hud-left">
+      <GameCatch @take="handle?.takeFish($event)" />
+      <GameHunger />
+    </div>
     <GameToast />
     <GameDock @left="handle?.handAction('left')" @right="handle?.handAction('right')" @pack="handle?.packAction()" @fish="handle?.fishAction()" @stand="handle?.standUp()" @open="game.togglePack()" @lamp="handle?.lampAction()" @eat="handle?.eatAction()" @dig="handle?.digAction()" @door="handle?.doorAction()" />
     <GamePack @pick="handle?.setPack($event)" />
-    <GameOnline @clock="handle?.setClock($event)" @weather="setWeather" @sound="setSound" />
+    <GameOnline @clock="handle?.setClock($event)" @weather="setWeather" />
     <GameBackpack @move="moveItem" @drop="dropItem" @take="takeItem" @stow="stowItem" @give="giveItem" />
     <GameFridge @put="send('fridgePut', {})" @take="send('fridgeTake', { id: $event })" @stock="send('fridgeStock', undefined)" />
     <GameSleep />
@@ -149,6 +152,10 @@ canvas {
   display: block;
   cursor: pointer;
   box-shadow: 0 0 0 2px rgba(20, 8, 4, 0.9), 0 18px 60px rgba(0, 0, 0, 0.6);
+}
+.hud-left { position: fixed; left: 12px; top: 12px; display: grid; gap: 8px; }
+@media (max-width: 560px) {
+  .hud-left { right: 12px; }
 }
 .overlay { position: fixed; inset: 0; display: grid; place-items: center; padding: 16px; background: rgba(8, 4, 2, 0.6); }
 .overlay.soft { background: rgba(8, 4, 2, 0.25); pointer-events: none; }

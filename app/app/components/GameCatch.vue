@@ -1,4 +1,4 @@
-<!-- Что лежит в ведре — панель слева вверху: нажать на рыбу — достать её в руку (take). Под ней — сытость. -->
+<!-- Что лежит в ведре — панель слева вверху: нажать на рыбу — достать её в руку (take). Где она стоит, решает страница игры (.hud-left). -->
 <script setup lang="ts">
 import { FISH } from '@fh/shared';
 
@@ -14,13 +14,11 @@ const game = useGameStore();
       <b>{{ game.bag.total ? `${game.bag.total} · ${FISH.weightText(game.bag.grams)}` : 'пусто' }}</b>
     </div>
     <CatchList :bag="game.bag" compact pickable @pick="emit('take', $event)" />
-    <GameHunger />
   </aside>
 </template>
 
 <style scoped>
 .catch {
-  position: fixed; left: 12px; top: 12px;
   padding: 8px 12px 9px;
   border: 1px solid var(--line); border-radius: 9px;
   background: var(--wood);
@@ -31,7 +29,7 @@ const game = useGameStore();
 .head img { width: 34px; height: 36px; image-rendering: pixelated; }
 .head b { margin-left: auto; padding-left: 14px; font-weight: 600; }
 @media (max-width: 560px) {
-  .catch { right: 12px; padding: 6px 10px; }
+  .catch { padding: 6px 10px; }
   .head { display: none; }
 }
 </style>
