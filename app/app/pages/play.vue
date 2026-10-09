@@ -123,6 +123,7 @@ async function enter() {
     handle = await startGame(canvas.value!, r, game.ui());
     handle.setSound(game.sound);   // звук включают и выключают в настройках главного меню
     if (room === r) game.status = 'online';
+    if (user.value?.id) game.startSteps(user.value.id);   // новичку — шаги в углу
   } catch (e: any) {
     if (e?.statusCode === 401) return navigateTo({ path: '/login', query: { next: route.fullPath } });
     stop()?.leave().catch(() => {});
@@ -153,10 +154,11 @@ const overlay = computed(() => {
       <canvas ref="canvas" width="569" height="320" aria-label="Домик рыбака у реки" />
     </main>
 
-    <!-- слева вверху колонкой: что в руках (у ведра — улов) и под ним сытость — каждая своей панелью, одной ширины -->
+    <!-- слева вверху колонкой: что в руках (у ведра — улов), под ним сытость, а новичку — первые шаги; каждое своей панелью, одной ширины -->
     <div class="hud-left">
       <GameHands @take="takeFish" />
       <GameHunger />
+      <GameSteps />
     </div>
     <GameToast />
     <GameDock @left="handle?.handAction('left')" @right="handle?.handAction('right')" @pack="handle?.packAction()" @fish="handle?.fishAction()" @stand="handle?.standUp()" @open="game.togglePack()" @lamp="handle?.lampAction()" @eat="handle?.eatAction()" @dig="handle?.digAction()" @door="handle?.doorAction()" />

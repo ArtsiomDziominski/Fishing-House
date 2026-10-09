@@ -1,12 +1,16 @@
-// Всё, что показывает интерфейс вокруг холста игры: вёдра и улов в них, рюкзак и вещи в нём, холодильник и сундук в доме, сытость и сон, кнопки действий, сообщения, время суток, чей причал и кто на нём, куда сходить в гости, связь.
+// Всё, что показывает интерфейс вокруг холста игры: вёдра и улов в них, рюкзак и вещи в нём, холодильник и сундук в доме, сытость и сон, кнопки действий, сообщения, время суток и клёв, шаги новичка, чей причал и кто на нём, куда сходить в гости, связь.
 // Пишет сюда движок (через GameUI), читают компоненты.
 
 import { defineStore } from 'pinia';
 import { CHESTS, HUNGER, PACKS, type Item, type PackKind, type PierInfo, type ServerMessages } from '@fh/shared';
-import type { Actions, GameUI, HungerInfo, NearPail, PierOwner, SkyInfo, Tone } from '~/game/engine';
+import type { Actions, BiteInfo, GameUI, HungerInfo, NearPail, PierOwner, SkyInfo, Step, Tone } from '~/game/engine';
 
 const SOUND_KEY = 'fh-sound';
 const recall = (key: string) => { try { return localStorage.getItem(key); } catch { return null; } };   // на сервере и в частном окне хранилища нет
+const keep = (key: string, value: string) => { try { localStorage.setItem(key, value); } catch { /* в частном окне хранилища может не быть — проживёт до перезагрузки */ } };
+// Шаги новичка — в этом браузере, у каждого игрока свои: 'off' — не показывать (прошёл, закрыл или он не новичок), иначе — что уже сделано.
+export const STEPS: Step[] = ['pack', 'gear', 'fish', 'fried', 'house'];
+const STEPS_KEY = (pid: string) => 'fh-steps-' + pid;
 export type Status = 'idle' | 'connecting' | 'online' | 'reconnecting' | 'replaced' | 'offline' | 'error';
 
 export const useGameStore = defineStore('game', {
@@ -28,6 +32,10 @@ export const useGameStore = defineStore('game', {
     piers: null as PierInfo[] | null,   // где сейчас есть игроки — куда сходить в гости (null — ещё не спрашивали)
     // время суток и погода: часы, темнота фона, погода словами; можно ли их выставлять (разработка) и что выставлено
     sky: { label: '', dark: 0, minutes: 0, canSet: false, moved: false, weather: '', fixKind: null, fixWind: null } as SkyInfo,
+    bite: null as BiteInfo | null,   // какой сейчас клёв там, где герой
+    // шаги новичка: для кого (pid), показывать ли, что уже сделано; seen — что герой сделал за этот вход, ещё до того, как
+    // стало ясно, новичок ли он; all — всё сделано, панель скоро уйдёт
+    steps: { pid: '', show: false, done: [] as Step[], seen: [] as Step[], all: false },
     actions: { left: null, right: null, pack: null, fish: null, hot: false, stand: false, open: false, light: null, eat: null, dig: null, door: null, fridge: false, chest: false } as Actions,
     hunger: { food: HUNGER.MAX, until: 0 } as HungerInfo,   // сытость и сон от голода
     robbed: false,                // очнулся после голодного сна — пока спал, могли что-то украсть (GameSleep говорит об этом)
@@ -64,7 +72,36 @@ export const useGameStore = defineStore('game', {
       this.chestOpen = want;
       if (want) this.fridgeOpen = false; else this.packOpen = false;
     },
-    setSound(on: boolean) { this.sound = on; try { localStorage.setItem(SOUND_KEY, on ? '1' : '0'); } catch { /* в частном окне хранилища может не быть — выбор проживёт до перезагрузки */ } },
+    setSound(on: boolean) { this.sound = on; keep(SOUND_KEY, on ? '1' : '0'); },
+    // Шаги новичка: показываем тому, кто ещё не поймал ни одной рыбы (по профилю) и не прошёл и не закрыл их в этом браузере.
+    async startSteps(pid: string) {
+      if (!pid || this.steps.pid === pid) return;
+      this.steps.pid = pid;
+      let saved = recall(STEPS_KEY(pid));
+      if (saved === null) {
+        const profile = await $fetch<{ latest: unknown[] }>(`/api/players/${pid}`).catch(() => null);
+        if (!profile || this.steps.pid !== pid) return;
+        saved = profile.latest.length ? 'off' : '[]';
+        keep(STEPS_KEY(pid), saved);
+      }
+      if (saved === 'off') return;
+      let done: Step[] = [];
+      try { done = (JSON.parse(saved) as string[]).filter((s): s is Step => STEPS.includes(s as Step)); } catch { /* испорчено — начнём сначала */ }
+      this.steps.done = done; this.steps.show = true;
+      for (const s of this.steps.seen) this.stepDone(s);
+    },
+    stepDone(step: Step) {
+      const st = this.steps;
+      if (!st.seen.includes(step)) st.seen.push(step);
+      if (!st.show || st.done.includes(step)) return;
+      st.done.push(step);
+      keep(STEPS_KEY(st.pid), JSON.stringify(st.done));
+      if (STEPS.every(s => st.done.includes(s))) {   // всё сделано — похвалим и через несколько секунд уберём насовсем
+        st.all = true; keep(STEPS_KEY(st.pid), 'off');
+        setTimeout(() => { if (st.all) st.show = false; }, 8000);
+      }
+    },
+    closeSteps() { this.steps.show = false; if (this.steps.pid) keep(STEPS_KEY(this.steps.pid), 'off'); },
     // Мост от движка к хранилищу.
     ui(): GameUI {
       return {
@@ -82,6 +119,8 @@ export const useGameStore = defineStore('game', {
         debug: text => { this.debug = text; },
         online: list => { this.online = list; },
         hunger: info => { this.hunger = info; },
+        bite: info => { this.bite = info; },
+        step: done => this.stepDone(done),
         // сколько червей в банке: в рюкзаке она или в руке, у неё новый счёт
         worms: (id, n) => {
           const set = (list: Item[]) => (list.some(it => it.id === id) ? list.map(it => (it.id === id ? { ...it, worms: n } : it)) : list);

@@ -79,12 +79,13 @@ export const ITEMS = (() => {
     'fish-fried': { name: 'Жареная рыба', group: 'food', w: 1, h: 1, text: 'С костра, ещё тёплая. Плотва насыщает наполовину, остальные — досыта.' },
   };
   // Что лежит в рюкзаке у нового игрока. Влезает в самый маленький рюкзак — кожаный, с которого все начинают. Ведро в него
-  // не влезает — оно сразу в левой руке (held, left). Банка червей — пустая (её счёт в базе по умолчанию 0): червей сначала копают лопатой.
-  const STARTER: (Place & { kind: ItemKind; held?: boolean; left?: boolean })[] = [
+  // не влезает — оно сразу в левой руке (held, left). В банке пять червей: первую рыбу новичок ловит сразу, а копать лопатой
+  // учится, когда они кончатся (новая банка, не из набора, — пустая: её счёт в базе по умолчанию 0).
+  const STARTER: (Place & { kind: ItemKind; held?: boolean; left?: boolean; worms?: number })[] = [
     { kind: 'bucket', x: 0, y: 0, rot: false, held: true, left: true },
     { kind: 'rod-willow', x: 0, y: 0, rot: false },
     { kind: 'net-scoop', x: 0, y: 1, rot: false },
-    { kind: 'worms', x: 2, y: 1, rot: false },
+    { kind: 'worms', x: 2, y: 1, rot: false, worms: 5 },
     { kind: 'floats', x: 3, y: 1, rot: false },
     { kind: 'shovel-old', x: 0, y: 2, rot: false },
   ];

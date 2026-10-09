@@ -4,7 +4,7 @@
 // Кто здесь главный:
 // - ходит клиент сам (так нет задержки), а сервер проверяет каждый шаг: в проходимую ли клетку и не быстрее ли, чем можно;
 //   не принял — шлёт игроку «self», и тот встаёт туда, где сервер его видит;
-// - рыбалку ведёт только сервер: когда клюёт, кто клюнул, успел ли подсечь. Клиент шлёт лишь нажатия. Забросить можно
+// - рыбалку ведёт только сервер: когда клюёт, кто клюнул (по часам и погоде причала — FISH.pace, FISH.roll), успел ли подсечь. Клиент шлёт лишь нажатия. Забросить можно
 //   только с удочкой в одной руке и червями в другой (их берут из рюкзака) и с ведром на земле у места рыбака
 //   (или в руке, но тогда не хватит рук на червей), в котором есть место;
 // - улов лежит в ведре, а не у игрока (bags): ведро унесли — унесли и рыбу, из ведра на земле её достаёт любой;
@@ -35,7 +35,7 @@ import { UniqueSessionPlugin } from 'colyseus/plugins/unique-session';
 import { z } from 'zod';
 import {
   Indoor, Isle, FRIDGE, FISH, ITEMS, HUNGER, SCRAPS, FIRE, WORMS, CHESTS, DIRS, PACK_KINDS, CHEST_KINDS, ITEM_KINDS, WEATHERS, ROOM, ROOM_SIZE, PLAYER_ID_RE, pierPlace, islePlace, SPEED, RUN, REACH, PUT_REACH, nearFire, faceFire, HOOK_GRACE,
-  createFishing, addToBag, takeFromBag, emptyBag, haulText, bucketNearSeat, standPoint, standFrom, fisherAt, shoreCast, homePoint, nearDoor, nearBoat, boatPoint, gridOf, seatOf, startState, packInReach, dist, seat,
+  createFishing, dayHour, addToBag, takeFromBag, emptyBag, haulText, bucketNearSeat, standPoint, standFrom, fisherAt, shoreCast, homePoint, nearDoor, nearBoat, boatPoint, gridOf, seatOf, startState, packInReach, dist, seat,
   type Bag, type Catch, type ChestKind, type Fishing, type FishingEvent, type Hole, type Item, type ItemKind, type PierInfo, type Place, type Point, type ScrapEnd, type ServerMessages, type WorldState,
 } from '@fh/shared';
 import {
@@ -260,6 +260,7 @@ export class PierRoom extends Room<{ state: PierState; client: Client<{ auth: Au
         hasRod: () => s.hands.some(it => ITEMS.isRod(it.kind)), hasBait: () => s.hands.some(it => ITEMS.isBait(it.kind)), hasWorms: () => this.bait(s) !== null, useWorm: () => this.useWorm(s),
         hasBucket: () => this.hasBucket(s), hasRoom: () => this.bucketFor(s) !== null, emit: ev => this.onFishing(client, s, ev), grace: HOOK_GRACE,
         spot: () => (s.world.isle ? 'isle' : 'pier'),   // с мостков острова клюют и лещ с сомом
+        moment: () => ({ hour: dayHour(Sky.clock().now), weather: Sky.weather().kind }),   // клёв — по часам и погоде причала
       }),
     };
     if (world.sitting) s.fishing.sit();

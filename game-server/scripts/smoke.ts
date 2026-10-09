@@ -425,9 +425,10 @@ room.send('itemTake', { id: worms.id, left: false });
 await until('червей в правой руке', () => held() === 'rod-willow,worms');
 fish.length = 0;
 room.send('press');
-await until('noWorms', () => fish.some(f => f.e === 'noWorms'));
-check(!fish.some(f => f.e === 'cast'), 'стартовая банка пустая — забросить нельзя, червей сначала копают');
-// копаем: встаём, лопата — в левую руку вместо удочки, идём на траву
+await until('заброс со стартовыми червями', () => fish.some(f => f.e === 'cast'));
+const STARTER_WORMS = ITEMS.STARTER.find(it => it.kind === 'worms')!.worms ?? 0;
+check(STARTER_WORMS > 0, `в стартовой банке ${STARTER_WORMS} червей — забросить можно сразу, не копая`);
+// копаем: встаём, пока не клюнуло (червь цел), лопата — в левую руку вместо удочки, идём на траву
 room.send('stand');
 Object.assign(pos, standPoint());
 await sleep(200);
@@ -442,7 +443,7 @@ room.send('dig');
 await until('копает', () => seen()?.dig === true);
 await until('накопал', () => worm.some(w => w.e === 'dug'), (WORMS.DIG + 3) * 1000);
 const dug1 = worm.find(w => w.e === 'dug')!;
-check(dug1.e === 'dug' && dug1.id === worms.id && dug1.got >= 1 && dug1.n === dug1.got && !dug1.lost, `накопал в пустую банку: червей ${dug1.e === 'dug' ? dug1.n + (dug1.wet ? ' (после дождя вдвое)' : '') : 0}`);
+check(dug1.e === 'dug' && dug1.id === worms.id && dug1.got >= 1 && dug1.n === STARTER_WORMS + dug1.got && !dug1.lost, `накопал к стартовым: червей ${dug1.e === 'dug' ? dug1.n + (dug1.wet ? ' (после дождя вдвое)' : '') : 0}`);
 const wormsAfterDig = dug1.e === 'dug' ? dug1.n : 0;
 // обратно к воде: удочка — в левую руку вместо лопаты
 room.send('itemTake', { id: rod.id, left: true });

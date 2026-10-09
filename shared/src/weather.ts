@@ -11,7 +11,8 @@ export const WEATHER_NAMES: Record<WeatherKind, string> = { clear: 'Ясно', c
 export const weatherText = (w: Weather): string => WEATHER_NAMES[w.kind] + (w.wind ? ', ветер' : '');
 
 export const WEATHER_SPAN = 5 * 60;           // секунд настоящего времени держится одна погода
-const SHARES: [WeatherKind, number][] = [['clear', 44], ['cloudy', 24], ['rain', 18], ['fog', 14]];   // как часто какая погода, в процентах
+export const WEATHER_SHARES: [WeatherKind, number][] = [['clear', 44], ['cloudy', 24], ['rain', 18], ['fog', 14]];   // как часто какая погода, в процентах
+const SHARES = WEATHER_SHARES;
 const WIND_CHANCE = 0.35;                     // доля отрезков с ветром
 
 // Число 0..1 по номеру отрезка времени: одно и то же у всех, кто спросит.

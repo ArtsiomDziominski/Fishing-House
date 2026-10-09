@@ -16,7 +16,7 @@
 import type { Room } from '@colyseus/sdk';
 import {
   World, Indoor, INDOOR, Isle, ISLE, FISH, ITEMS, BUCKETS, HUNGER, SCRAPS, WORMS, PACKS, PACK_KINDS, MOVE_EVERY, SPEED, CARRY_SPEED, RUN, REACH, seat, fireOf, gridOf, nearSeat, standFrom, shoreCast, shoreSit, shoreToward, fisherAt, dist, nearFire, faceFire, nearDoor, nearBoat, BOAT_AT, bucketNearSeat, packInReach, haulOf, dayHour, dayPart, clockText, skyAt, weatherText,
-  type BucketKind, type Catch, type ClientMessages, type Dir, type GroundView, type Hand, type HoleView, type PackKind, type PierView, type PlayerView, type ScrapEnd, type Point, type ServerMessages, type ShoreCast, type Sky, type WeatherKind, type WorldState,
+  type BucketKind, type Catch, type ClientMessages, type DayPart, type Forecast, type Dir, type GroundView, type Hand, type HoleView, type PackKind, type PierView, type PlayerView, type ScrapEnd, type Point, type ServerMessages, type ShoreCast, type Sky, type WeatherKind, type WorldState,
 } from '@fh/shared';
 import { HERO } from './hero.ts';
 import { createFishingView, drawBite, drawFishing, createRod, rodAngle, type FishArt } from './fishing-view.ts';
@@ -58,6 +58,10 @@ export interface SkyInfo {
   weather: string; fixKind: WeatherKind | null; fixWind: boolean | null;
 }
 export type Tone = '' | 'good' | 'bad';
+// Клёв для интерфейса: какой он там, где герой (у причала или на острове), и почему — часть суток и погода (FISH.forecast).
+export interface BiteInfo extends Forecast { isle: boolean; part: DayPart['id']; weather: WeatherKind }
+// Шаги новичка — что герой уже сделал: надел рюкзак, взял удочку и червей в руки, поймал рыбу, пожарил её, зашёл в дом.
+export type Step = 'pack' | 'gear' | 'fish' | 'fried' | 'house';
 
 // Куда движок сообщает о том, что показывает интерфейс вокруг холста (его держит Pinia-хранилище).
 export interface GameUI {
@@ -76,6 +80,8 @@ export interface GameUI {
   fridge(open?: boolean): void;                         // открыть или закрыть холодильник (не сказали — наоборот)
   chest(open?: boolean): void;                          // открыть или закрыть сундук (не сказали — наоборот)
   pier(info: PierOwner): void;                           // на чьём ты причале
+  bite(info: BiteInfo): void;                           // какой сейчас клёв там, где герой
+  step(done: Step): void;                               // герой сделал это сам — шаг новичка выполнен (говорится раз за вход)
 }
 
 export interface GameHandle {
@@ -509,6 +515,7 @@ export async function startGame(canvas: HTMLCanvasElement, room: Room, ui: GameU
     if (to === scene) return;
     scene = to;
     wx.useWater(scene === 'isle' ? island.water : river.water);
+    if (scene === 'room') did('house');
   }
   const loadTime = () => (door?.boat ? DOOR.SAIL : DOOR.LOAD);   // сколько показывать экран загрузки
   // Как темно сейчас от двери: 0 — кадр виден, 1 — экран загрузки.
@@ -529,7 +536,7 @@ export async function startGame(canvas: HTMLCanvasElement, room: Room, ui: GameU
       else if (door.boat && scene === 'isle') {         // приплыли: впервые — что здесь особенного; без рюкзака — что он остался на том берегу
         const first = !sailed, bag = !pack.worn && !guest();
         sailed = true;
-        if (first || bag) ui.toast([first && 'Остров! С мостков и с берега тут клюют лещ и сом — у причала их нет', bag && 'Рюкзак остался у причала'].filter(Boolean).join('. '), first ? 'good' : '');
+        if (first || bag) ui.toast([first && 'Остров! С мостков и с берега тут клюют лещ и сом — у причала их нет. Сом берёт ночью', bag && 'Рюкзак остался у причала'].filter(Boolean).join('. '), first ? 'good' : '');
       }
     }
     if (door.shown !== Infinity && door.t >= door.shown + DOOR.IN) door = null;
@@ -561,6 +568,7 @@ export async function startGame(canvas: HTMLCanvasElement, room: Room, ui: GameU
   function landed(fish: Catch) {                        // рыба в ведре: показываем, что сервер уже засчитал
     const sp = FISH.byId[fish.id]!, h = hooked; hooked = null;
     if (h?.bags) { bags = h.bags; ui.bags(bags); }
+    did('fish');
     sound.cue('catch');
     const full = h?.pail && h.pail.n >= h.pail.size ? ` · ведро полное (${h.pail.n} из ${h.pail.size})` : '';
     ui.toast(`${sp.name} · ${FISH.weightText(fish.grams)}${h?.first ? ' — новый вид!' : h?.record ? ' — крупнее прежних!' : ''}${full}`, 'good', fish.id);
@@ -572,7 +580,7 @@ export async function startGame(canvas: HTMLCanvasElement, room: Room, ui: GameU
     else if (type === 'worms') wormsNews(m);
     else if (type === 'food') {
       const name = ITEMS.title({ kind: m.e === 'cooked' || !m.raw ? 'fish-fried' : 'fish', fish: m.fish });
-      if (m.e === 'cooked') { sound.cue('catch'); ui.toast(`${name} — готово! Съесть — X`, 'good', m.fish); }
+      if (m.e === 'cooked') { sound.cue('catch'); ui.toast(`${name} — готово! Съесть — X`, 'good', m.fish); did('fried'); }
       else ui.toast(m.gain ? `Съедено: ${name.toLowerCase()} · сытость +${m.gain}` : `Съедено: ${name.toLowerCase()} — ты и так сыт`, 'good', m.fish);
     }
     else if (m.e === 'needRod' || m.e === 'needBait') {   // рыбачат с удочкой в одной руке и червями в другой; заодно скажем и про ведро, чтобы не ходить дважды
@@ -634,7 +642,7 @@ export async function startGame(canvas: HTMLCanvasElement, room: Room, ui: GameU
     if (!ready || asleep()) return;
     if (mealInHand()) { if (!ownView()?.eat) send('eat', {}); return; }   // ещё жуёт прежнюю — подождать
     const sp = firstFish();
-    if (sp) takeFish(sp); else if (pailNear()) ui.toast('В ведре пусто — сначала налови рыбы', 'bad');
+    if (sp) takeFish(sp); else ui.toast(pailNear() ? 'В ведре пусто — сначала налови рыбы' : 'Ведро с уловом далеко — подойди к нему', 'bad');
   }
   const eatText = () => {
     const meal = mealInHand();
@@ -754,7 +762,7 @@ export async function startGame(canvas: HTMLCanvasElement, room: Room, ui: GameU
     sendIn -= dt;
     if (sendIn <= 0) flushMove();
     clockIn -= dt; flushClock();
-    refreshActions(); refreshSky();
+    refreshActions(); refreshSky(); refreshSteps();
   }
   // Что у героя в руке, где стоит его лампа и горит ли она — по состоянию комнаты: там то, что решил сервер и что видят остальные.
   // Чей это причал — в состоянии комнаты; хозяин не ты — ты в гостях.
@@ -871,9 +879,29 @@ export async function startGame(canvas: HTMLCanvasElement, room: Room, ui: GameU
     const hour = hourNow(), label = dayPart(hour).name + ' · ' + clockText(hour), c = frameTint(skyAt(hour));
     const dark = Math.round((1 - (0.299 * c[0] + 0.587 * c[1] + 0.114 * c[2]) / 255) * 20) / 20;
     const info: SkyInfo = { label, dark, minutes: Math.floor(((hour % 24) + 24) % 24 * 6) * 10, ...pier, weather: weatherText(weather), fixKind: weather.fixKind, fixWind: weather.fixWind };
+    refreshBite(hour);
     const key = JSON.stringify(info); if (key === skyKey) return; skyKey = key;
     ui.sky(info);
   }
+  // Клёв там, где герой: в доме — у причала, куда он выйдет. Меняется с частью суток, погодой и берегом — тогда и сообщаем.
+  let biteKey = '';
+  function refreshBite(hour: number) {
+    const part = dayPart(hour).id, isle = hero.isle, key = `${part}:${weather.kind}:${isle}`;
+    if (key === biteKey) return; biteKey = key;
+    ui.bite({ ...FISH.forecast(isle ? 'isle' : 'pier', { hour, weather: weather.kind }), isle, part, weather: weather.kind });
+  }
+
+  // ---------- шаги новичка ----------
+  // Что герой сделал — интерфейсу один раз за вход; галочки и то, показывать ли их вообще, решает он сам.
+  const steps = new Set<Step>();
+  function did(step: Step) { if (!steps.has(step)) { steps.add(step); ui.step(step); } }
+  function refreshSteps() {
+    if (!ready) return;
+    if (pack.worn) did('pack');
+    const held = ownHands();
+    if (held.some(ITEMS.isRod) && held.some(ITEMS.isBait)) did('gear');
+  }
+
   // Перевести часы причала: это делает сервер, и время меняется сразу у всех игроков (он разрешает это только в разработке).
   // Ползунок шлёт часы десятками в секунду, поэтому на сервер уходит последнее значение и не чаще, чем раз в CLOCK_EVERY.
   const CLOCK_EVERY = 0.1;

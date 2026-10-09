@@ -6,10 +6,10 @@
 // некуда лечь, и она уходит.
 //
 // Фазы: off — герой не сидит; rest — сидит, леска в воде, как на картинке; cast — заброс;
-// wait — ждём поклёвку; bite — клюёт, надо подсечь; pull — рыба идёт вверх по леске;
+// wait — ждём поклёвку (сколько — от клёва: FISH.pace); bite — клюёт, надо подсечь; pull — рыба идёт вверх по леске;
 // fly — летит в ведро; pause — короткая передышка; scare — рыба ушла (рано дёрнул или прозевал).
 
-import { FISH, type Catch, type FishSpot } from './fish.ts';
+import { FISH, type Catch, type FishSpot, type Moment } from './fish.ts';
 
 export const TIME = { cast: 0.55, waitMin: 2.2, waitMax: 6.5, pull: 0.5, fly: 0.7, pause: 0.6, scare: 0.9 };
 
@@ -36,14 +36,15 @@ export interface FishingOptions {
   emit: (ev: FishingEvent) => void;
   grace?: number;                     // сколько секунд прибавить к окну подсечки
   spot?: () => FishSpot;              // где рыбачат: у причала или с мостков острова — там клюют разные рыбы (FISH.roll)
+  moment?: () => Moment;              // который час и какая погода: от них зависит, кто клюёт и как скоро (FISH.pace); не сказали — как в ясный полдень
 }
 
-export function createFishing({ rnd = Math.random, hasRod, hasBait, hasWorms = () => true, useWorm = () => {}, hasBucket, hasRoom = () => true, emit, grace = 0, spot = () => 'pier' }: FishingOptions) {
+export function createFishing({ rnd = Math.random, hasRod, hasBait, hasWorms = () => true, useWorm = () => {}, hasBucket, hasRoom = () => true, emit, grace = 0, spot = () => 'pier', moment }: FishingOptions) {
   const st: FishingState = { phase: 'off', t: 0, wait: 0, nibble: -1, fish: null };
   const set = (phase: Phase) => { st.phase = phase; st.t = 0; };
   function cast() {
     set('cast');
-    st.wait = TIME.waitMin + rnd() * (TIME.waitMax - TIME.waitMin);
+    st.wait = (TIME.waitMin + rnd() * (TIME.waitMax - TIME.waitMin)) / FISH.pace(spot(), moment?.());   // хороший клёв — ждать меньше
     st.nibble = st.wait > 3.4 && rnd() < 0.6 ? st.wait * (0.3 + rnd() * 0.35) : -1;   // ложный тычок перед настоящей поклёвкой
     emit({ e: 'cast' });
   }
@@ -75,7 +76,7 @@ export function createFishing({ rnd = Math.random, hasRod, hasBait, hasWorms = (
     if (st.phase === 'cast' && st.t >= TIME.cast) set('wait');
     else if (st.phase === 'wait') {
       if (st.nibble > 0 && t0 < st.nibble && st.t >= st.nibble) emit({ e: 'nibble' });
-      if (st.t >= st.wait) { st.fish = FISH.roll(rnd, spot()); useWorm(); set('bite'); emit({ e: 'bite' }); }   // клюнула — червя объела, поймай её или нет
+      if (st.t >= st.wait) { st.fish = FISH.roll(rnd, spot(), moment?.()); useWorm(); set('bite'); emit({ e: 'bite' }); }   // клюнула — червя объела, поймай её или нет
     }
     else if (st.phase === 'bite' && st.fish && st.t >= FISH.byId[st.fish.id]!.window + grace) { st.fish = null; set('scare'); emit({ e: 'miss' }); }
     else if (st.phase === 'scare' && st.t >= TIME.scare) recast();
