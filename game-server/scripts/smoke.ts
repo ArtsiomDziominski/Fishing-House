@@ -1,7 +1,8 @@
 // Проверка игрового сервера целиком: бот заводит игрока в базе, входит по билету (ведро у него в руке), идёт за рюкзаком,
 // перекладывает вещи в рюкзаке и берёт их в руку, ставит и поднимает ведро, выкладывает их на землю и поднимает (и чужие — в другой копии причала), несёт всё к причалу, садится и ловит рыбу;
 // достаёт рыбу из ведра, жарит её у костра (в дождь костёр гаснет, и его разжигают) и съедает, выложенную на землю рыбу уносит чайка,
-// а голодным засыпает и просыпается у дома;
+// входит в дом и выходит из него, садится в кресло у камина (второй игрок там жарит рыбу, кладёт улов в холодильник и
+// достаёт его, спит в кровати), а голодным засыпает и просыпается у дома;
 // заодно проверяет, что телепорт сервер не принимает.
 //
 //   npm run smoke -w game-server            (нужны запущенные база и игровой сервер, .env с DATABASE_URL и GAME_SECRET)
@@ -9,8 +10,8 @@
 //   npm run smoke:own -w game-server        (то же, но сервер бот поднимает сам — smoke-own.ts)
 
 import { Client, type Room } from '@colyseus/sdk';
-import { World, ITEMS, HUNGER, SCRAPS, FIRE, ROOM, DAY_LENGTH, WEATHERS, REACH, dayHour, weatherText, dist, WORMS, seat, standPoint, homePoint, type Bag, type GroundView, type Item, type PlayerView, type ServerMessages, type WorldState } from '@fh/shared';
-import { createDb, createAccount, issueTicket, getProfile, loadItems, loadGround, loadPlayer, saveWorld, recordCatch } from '@fh/shared/server';
+import { World, Indoor, ITEMS, HUNGER, SCRAPS, FIRE, ROOM, DAY_LENGTH, WEATHERS, REACH, dayHour, weatherText, dist, WORMS, seat, standPoint, homePoint, type Bag, type GroundView, type Item, type PlayerView, type ServerMessages, type WorldState } from '@fh/shared';
+import { createDb, createAccount, issueTicket, getProfile, loadItems, loadGround, loadPlayer, saveWorld, recordCatch, loadFridge } from '@fh/shared/server';
 
 const url = process.env.GAME_URL || 'http://localhost:2567';
 const db = createDb(undefined, 2);
@@ -39,6 +40,7 @@ room.onMessage('hunger', (m: ServerMessages['hunger']) => { hunger = m; });
 room.onMessage('food', (m: ServerMessages['food']) => { food.push(m); });
 const worm: ServerMessages['worms'][] = [];
 room.onMessage('worms', (m: ServerMessages['worms']) => { worm.push(m); });
+room.onMessage('fridge', () => {});
 
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
 const until = async (what: string, ok: () => boolean, ms = 15000) => {
@@ -340,7 +342,7 @@ if (before.canSet) {
   let theirs: ServerMessages['items'] | null = null, there: WorldState | null = null;
   other.onMessage('items', (m: ServerMessages['items']) => { theirs = m; });
   other.onMessage('self', (m: WorldState) => { there = m; });
-  for (const type of ['bag', 'fish', 'clock', 'weather', 'hunger', 'food']) other.onMessage(type, () => {});
+  for (const type of ['bag', 'fish', 'clock', 'weather', 'hunger', 'food', 'fridge']) other.onMessage(type, () => {});
   await until('второго игрока', () => !!theirs && !!there);
   await until('лампу в другой копии', () => !!onGround(lamp.id, other));
   check(other.roomId !== room.roomId && onGround(lamp.id, other)!.x === spot.x, 'во второй копии причала лампа лежит там же — земля у всех одна');
@@ -478,6 +480,7 @@ again.onMessage('hunger', (m: ServerMessages['hunger']) => { hunger = m; });
 again.onMessage('food', (m: ServerMessages['food']) => { food.push(m); });
 worm.length = 0;
 again.onMessage('worms', (m: ServerMessages['worms']) => { worm.push(m); });
+again.onMessage('fridge', () => {});
 items = null;
 await until('себя после входа', () => !!self);
 const pailNow = (await loadGround(db)).find(g => g.id === pail.id);
@@ -550,6 +553,130 @@ check(!items!.hands.some(it => ITEMS.isFish(it.kind)) && hunger!.food === HUNGER
 await sleep(300);
 check(!(await loadItems(db, me.id)).hands.some(it => ITEMS.isFish(it.kind)) && (await getProfile(db, me.id))!.bag.total === 1, 'в базе рыбы больше нет, а в профиле улов прежний');
 
+// дом: войти можно только от двери, внутри свой кадр (Indoor), на пол ничего не кладут, в кресла у камина садятся по одному,
+// в кровати спят, в холодильнике у каждого своя полка; выйти — от порога
+{
+  again.send('stand');
+  await until('встал от костра', () => hand()?.rest === false && !hand()?.eat, (HUNGER.EAT + 2) * 1000);
+  self = null;
+  again.send('enter');
+  await until('отказ войти издалека', () => !!self);
+  check(!self!.inside && hand()?.inside === false, 'издалека в дом не войти');
+  await walk(homePoint(), again, at);
+  self = null;
+  again.send('enter');
+  await until('вошёл в дом', () => !!self && hand()?.inside === true);
+  check(self!.inside && self!.x === Indoor.door.x && self!.y === Indoor.door.y, 'у двери вошёл в дом — стоит на пороге внутри, и это видно всем');
+  const inAt = { x: self!.x, y: self!.y };
+  const walkIn = async (to: { x: number; y: number }, who: Room = again, p: { x: number; y: number } = inAt) => {
+    for (const q of Indoor.findPath(p, to)!) for (;;) {
+      const dx = q.x - p.x, dy = q.y - p.y, d = Math.hypot(dx, dy); if (d < 0.5) break;
+      const k = Math.min(1, 4 / d); p.x += dx * k; p.y += dy * k;
+      who.send('move', { x: p.x, y: p.y, dir: 'up' }); await sleep(100);
+    }
+  };
+  const [chairL, chairR] = Indoor.chairs as [typeof Indoor.chairs[0], typeof Indoor.chairs[0]];
+  await walkIn(chairL.stand);
+  await sleep(300);
+  check(hand()?.inside === true && Math.abs(hand()!.x - inAt.x) < 1 && Math.abs(hand()!.y - inAt.y) < 1, 'по дому ходят по его собственной проходимости');
+  self = null;
+  again.send('exit');
+  await until('отказ выйти от камина', () => !!self);
+  check(self!.inside, 'от камина из дома не выйти — только от порога');
+  again.send('rest');
+  await until('сел в кресло', () => hand()?.rest === true);
+  check(hand()!.x === chairL.x && hand()!.y === chairL.y && hand()!.dir === chairL.dir, 'сел в кресло у камина — лицом к огню');
+
+  // второй игрок с уловом в ведре: в занятое кресло не сесть; улов — в холодильник, рыбу оттуда — в руку, во втором кресле
+  // она жарится, жареную — обратно на полку; потом поспать в кровати
+  {
+    const cook = await createAccount(db, 'повар_' + Math.random().toString(36).slice(2, 8), 'не-для-входа');
+    for (const [id, grams] of [['perch', 300], ['roach', 120], ['pike', 1500]] as const) await recordCatch(db, cook.id, { id, grams });
+    const c: Room = await client.joinOrCreate(ROOM, { ticket: issueTicket(cook.id, cook.name) });
+    let cSelf: WorldState | null = null, cItems: ServerMessages['items'] | null = null, cFridge: ServerMessages['fridge'] | null = null, cBag: Bag | null = null;
+    const cFood: ServerMessages['food'][] = [];
+    c.onMessage('self', (m: WorldState) => { cSelf = m; });
+    c.onMessage('items', (m: ServerMessages['items']) => { cItems = m; });
+    c.onMessage('fridge', (m: ServerMessages['fridge']) => { cFridge = m; });
+    c.onMessage('bag', (m: Bag) => { cBag = m; });
+    c.onMessage('food', (m: ServerMessages['food']) => { cFood.push(m); });
+    for (const type of ['fish', 'clock', 'weather', 'hunger']) c.onMessage(type, () => {});
+    const seen = () => (c.state as { players: { get(sid: string): PlayerView | undefined } }).players.get(c.sessionId);
+    const shelf = async (send: () => void, what: string, ok: (f: ServerMessages['fridge']) => boolean = () => true) => { cFridge = null; send(); await until(what, () => !!cFridge && ok(cFridge)); return cFridge!; };
+    await until('повара в комнате', () => !!cSelf && !!cItems && !!cFridge && !!cBag && !!seen());
+    check(cFridge!.list.length === 0 && cBag!.total === 3 && cItems!.hands.some(it => ITEMS.isBucket(it.kind)), 'у нового игрока холодильник пуст, в ведре три рыбы, ведро в руке');
+    c.send('stand');
+    const cAt = { ...standPoint() };
+    await walk(homePoint(), c, cAt);
+    check((await shelf(() => c.send('fridgeStock'), 'отказ снаружи')).note === 'far', 'с улицы до холодильника не дотянуться');
+    c.send('enter');
+    await until('повар в доме', () => cSelf?.inside === true);
+    const cIn = { x: cSelf!.x, y: cSelf!.y };
+    await walkIn(chairL.stand, c, cIn);
+    cSelf = null;
+    c.send('rest');
+    await until('отказ сесть в занятое кресло', () => !!cSelf);
+    check(!cSelf!.rest && seen()?.rest === false, 'в кресло, где уже сидят, не сесть');
+    await walkIn(Indoor.fridge, c, cIn);
+    const stocked = await shelf(() => c.send('fridgeStock'), 'улов в холодильнике', f => f.stocked !== undefined || !!f.note);
+    check(stocked.stocked === 3 && stocked.list.length === 3 && cBag!.total === 0, 'улов из ведра в руке переложен в холодильник — ведро пустое');
+    check((await shelf(() => c.send('fridgeStock'), 'отказ — ведро пустое')).note === 'empty', 'из пустого ведра перекладывать нечего');
+    const perch = stocked.list.find(f => f.fish === 'perch')!;
+    cItems = null;
+    await shelf(() => c.send('fridgeTake', { id: perch.id }), 'окунь из холодильника', f => !f.list.some(x => x.id === perch.id));
+    await until('окунь в руке', () => !!cItems && cItems.hands.some(it => it.id === perch.id));
+    check(!cItems!.hands.find(it => it.id === perch.id)!.left && seen()?.hand === 'fish', 'рыбу из холодильника достал в свободную руку');
+    check((await shelf(() => c.send('fridgeTake', { id: perch.id }), 'отказ — окуня уже нет')).note === 'empty', 'вынутую рыбу второй раз не достать');
+    await walkIn(chairR.stand, c, cIn);
+    c.send('rest');
+    await until('повар во втором кресле', () => seen()?.rest === true);
+    check(seen()!.x === chairR.x && seen()!.dir === chairR.dir, 'во второе кресло сел — лицом к огню');
+    await until('окунь пожарился', () => cFood.some(f => f.e === 'cooked') && seen()?.hand === 'fish-fried', (HUNGER.COOK + 4) * 1000);
+    check(cFood.find(f => f.e === 'cooked')!.fish === 'perch', `у камина рыба пожарилась за ${HUNGER.COOK} с — дождь ему не страшен`);
+    c.send('stand');
+    await until('повар встал', () => seen()?.rest === false);
+    check(seen()!.x === chairR.stand.x && seen()!.y === chairR.stand.y, 'из кресла встал рядом с ним');
+    Object.assign(cIn, chairR.stand);
+    await walkIn(Indoor.fridge, c, cIn);
+    const back = await shelf(() => c.send('fridgePut', {}), 'окунь на полке', f => f.list.length === 3);
+    await until('руки повара пусты', () => seen()?.hand === '');
+    check(back.list.some(f => f.id === perch.id && f.kind === 'fish-fried'), 'жареную рыбу положил обратно в холодильник');
+    check((await shelf(() => c.send('fridgePut', {}), 'отказ — в руках нет рыбы')).note === 'empty', 'без рыбы в руках класть нечего');
+    await sleep(300);
+    check((await loadFridge(db, cook.id)).some(f => f.id === perch.id && f.kind === 'fish-fried') && !(await loadItems(db, cook.id)).hands.some(it => ITEMS.isFish(it.kind)), 'в базе жареный окунь — на полке, а не в руке');
+    await walkIn(Indoor.bed.stand, c, cIn);
+    c.send('bed');
+    await until('повар в кровати', () => seen()?.bed === true);
+    check(seen()!.x === Indoor.bed.x && seen()!.y === Indoor.bed.y, 'лёг спать в кровать — это видно всем');
+    c.send('stand');
+    await until('повар встал с кровати', () => seen()?.bed === false);
+    check(seen()!.x === Indoor.bed.stand.x && seen()!.y === Indoor.bed.stand.y, 'с кровати встал рядом с ней');
+    await c.leave();
+    await sleep(300);
+    const cWorld = (await loadPlayer(db, cook.id))!.world!;
+    check(cWorld.inside && !cWorld.bed && !cWorld.rest, 'вышел из игры в доме — в доме и войдёт, стоя');
+  }
+
+  again.send('stand');
+  await until('встал из кресла', () => hand()?.rest === false);
+  check(hand()!.x === chairL.stand.x && hand()!.y === chairL.stand.y, 'встал из кресла рядом с ним');
+  Object.assign(inAt, chairL.stand);
+  items = null;
+  again.send('itemDrop', { id: rod.id });
+  await until('отказ положить на пол', () => !!items);
+  check(items!.note === 'indoor' && items!.hands.some(it => it.id === rod.id), 'в доме на пол ничего не кладут');
+  worm.length = 0;
+  again.send('dig');
+  await until('отказ копать в доме', () => worm.length > 0);
+  check(worm[0]!.e === 'ground', 'в доме не копают');
+  await walkIn(Indoor.door);
+  self = null;
+  again.send('exit');
+  await until('вышел из дома', () => !!self && hand()?.inside === false);
+  check(!self!.inside && dist(self!, homePoint()) < 1, 'от порога вышел из дома — стоит у крыльца');
+  at.x = self!.x; at.y = self!.y;
+}
+
 // черви: копают лопатой на траве, держа банку в другой руке; в полную банку не копают
 {
   again.send('stand');
@@ -596,7 +723,7 @@ await sleep(500);
   const ate: ServerMessages['food'][] = [];
   r.onMessage('items', (m: ServerMessages['items']) => { plate = m; });
   r.onMessage('food', (m: ServerMessages['food']) => { ate.push(m); });
-  for (const type of ['self', 'bag', 'fish', 'clock', 'weather', 'hunger']) r.onMessage(type, () => {});
+  for (const type of ['self', 'bag', 'fish', 'clock', 'weather', 'hunger', 'fridge']) r.onMessage(type, () => {});
   const seen = () => (r.state as { players: { get(sid: string): PlayerView | undefined } }).players.get(r.sessionId);
   const take = async () => { plate = null; r.send('fishTake', { species: 'roach' }); await until('рыбу у едока', () => !!plate && plate.hands.some(it => it.kind === 'fish' && it.id > 0)); };
   await until('едока в комнате', () => !!plate && !!seen());
@@ -624,7 +751,7 @@ await sleep(500);
   const r: Room = await client.joinOrCreate(ROOM, { ticket: issueTicket(host.id, host.name) });
   let plate: ServerMessages['items'] | null = null;
   r.onMessage('items', (m: ServerMessages['items']) => { plate = m; });
-  for (const type of ['self', 'bag', 'fish', 'clock', 'weather', 'hunger', 'food']) r.onMessage(type, () => {});
+  for (const type of ['self', 'bag', 'fish', 'clock', 'weather', 'hunger', 'food', 'fridge']) r.onMessage(type, () => {});
   const lying = (id: number) => onGround(id, r);
   const stored = async (id: number) => (await loadGround(db)).some(g => g.id === id) || (await loadItems(db, host.id)).hands.some(it => it.id === id);
   await until('рыбака в комнате', () => !!plate);
@@ -682,7 +809,7 @@ async function enter() {
   r.onMessage('self', (m: WorldState) => { self = m; });
   r.onMessage('bag', (m: Bag) => { bag = m; });
   r.onMessage('hunger', (m: ServerMessages['hunger']) => { hunger = m; });
-  for (const type of ['fish', 'clock', 'weather', 'items', 'food']) r.onMessage(type, () => {});
+  for (const type of ['fish', 'clock', 'weather', 'items', 'food', 'fridge']) r.onMessage(type, () => {});
   await until('себя после входа', () => !!self && !!hunger && !!bag);
   return r;
 }

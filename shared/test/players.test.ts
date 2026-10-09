@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { cleanWorld } from '../src/server/players.ts';
 import { startPack, startState, type WorldState } from '../src/rules.ts';
 import { World } from '../src/world.ts';
+import { INDOOR, Indoor } from '../src/indoor.ts';
 
 const SHIFT = World.pic.x, DROP = World.pic.y;   // на столько картинка сдвинута вправо и вниз на нынешней карте
 
@@ -47,4 +48,16 @@ test('герой из непроходимого места встаёт на б
   const lost = { ...startState(), x: 5, y: 5, sitting: false };   // в левом верхнем углу: там герой не помещается в кадр
   const now = cleanWorld(lost)!;
   assert.ok(World.canWalk(now.x, now.y));
+});
+
+test('герой в доме остаётся в доме, а с места, где теперь мебель, встаёт рядом', () => {
+  const home = { ...startState(), sitting: false, inside: true, x: Indoor.door.x, y: Indoor.door.y - 20 };
+  assert.deepEqual(cleanWorld(home), home);
+  const inBed = cleanWorld({ ...home, x: INDOOR.blocks.bed![0] + 20, y: INDOOR.blocks.bed![1] + 30, sitting: true })!;
+  assert.ok(inBed.inside && !inBed.sitting && Indoor.canWalk(inBed.x, inBed.y));
+  const lay = cleanWorld({ ...home, x: Indoor.bed.x, y: Indoor.bed.y, bed: true, rest: false })!;
+  assert.ok(!lay.bed && Indoor.canWalk(lay.x, lay.y), 'войдя, герой не лежит в кровати, а стоит рядом');
+  const old = { ...startState() } as Partial<WorldState>;
+  delete old.inside;
+  assert.equal(cleanWorld(old as WorldState)!.inside, false);
 });

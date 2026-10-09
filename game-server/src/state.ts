@@ -11,7 +11,9 @@ export const PlayerState = schema({
   y: t.float32(),
   dir: t.string(),
   sitting: t.boolean(),       // сидит на краю причала с удочкой
-  rest: t.boolean(),          // сидит у костра
+  rest: t.boolean(),          // сидит у костра, а в доме — у камина
+  bed: t.boolean(),           // спит в кровати в доме
+  inside: t.boolean(),        // в доме: x, y — в кадре комнаты (Indoor)
   wearing: t.boolean(),       // рюкзак на спине
   px: t.int16(),              // где лежит рюкзак, если не на спине
   py: t.int16(),

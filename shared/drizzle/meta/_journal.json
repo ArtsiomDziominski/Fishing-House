@@ -78,6 +78,13 @@
       "when": 1791487902933,
       "tag": "0010_worms_empty",
       "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1791492071887,
+      "tag": "0011_fridge",
+      "breakpoints": true
     }
   ]
 }

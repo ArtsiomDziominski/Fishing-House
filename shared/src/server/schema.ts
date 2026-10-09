@@ -3,7 +3,8 @@
 // users   — учётные записи: имя для входа и хеш пароля. Наружу не отдаётся никогда.
 // players — игровой профиль: публичный id, имя, деньги, где игрок оставил героя и рюкзак.
 // catches — каждая пойманная рыба. Из неё собирается улов (панель ведра — что ещё не вынуто, gone = false) и рекорды (все).
-// items   — вещи игрока: что это и в какой клетке сетки рюкзака лежит, что она в руке или лежит на земле (правила — shared/src/items.ts).
+// items   — вещи игрока: что это и в какой клетке сетки рюкзака лежит, что она в руке, лежит на земле или в холодильнике в доме
+//           (правила — shared/src/items.ts, холодильник — FRIDGE в shared/src/indoor.ts).
 
 import { sql } from 'drizzle-orm';
 import { bigserial, boolean, index, integer, jsonb, pgTable, serial, smallint, text, timestamp, uniqueIndex } from 'drizzle-orm/pg-core';
@@ -49,6 +50,7 @@ export const items = pgTable('items', {
   lit: boolean('lit').notNull().default(false),                    // горит на земле (лампа); в руке горит ли лампа — players.world.lamp
   fish: text('fish').notNull().default(''),                        // ведро на земле: хвосты последних рыб в нём, id через запятую; рыба (fish, fish-fried) — её вид
   worms: smallint('worms').notNull().default(0),                   // банка червей: сколько в ней (новая — пустая, WORMS.MAX — полная); у других вещей ничего не значит
+  fridge: boolean('fridge').notNull().default(false),              // рыба лежит в холодильнике в доме — на полке игрока player_id; x, y тогда не значат ничего
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 }, t => [index('items_player_idx').on(t.playerId), index('items_ground_idx').on(t.ground).where(sql`${t.ground}`)]);
 

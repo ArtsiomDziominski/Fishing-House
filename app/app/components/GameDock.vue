@@ -1,12 +1,12 @@
-<!-- Низ экрана: кнопки действий (то же, что Q, E, B, I, L, X, G, F и Esc) и подсказка по управлению. -->
+<!-- Низ экрана: кнопки действий (то же, что Q, E, B, I, L, X, G, H, F и Esc) и подсказка по управлению. -->
 <script setup lang="ts">
-const emit = defineEmits<{ left: []; right: []; pack: []; open: []; lamp: []; eat: []; dig: []; fish: []; stand: [] }>();
+const emit = defineEmits<{ left: []; right: []; pack: []; open: []; lamp: []; eat: []; dig: []; door: []; fish: []; stand: [] }>();
 const game = useGameStore();
 
 // после клика снимаем фокус с кнопки, иначе пробел и Enter будут нажимать её, а не подсекать
-function press(ev: MouseEvent, what: 'left' | 'right' | 'pack' | 'open' | 'lamp' | 'eat' | 'dig' | 'fish' | 'stand') {
+function press(ev: MouseEvent, what: 'left' | 'right' | 'pack' | 'open' | 'lamp' | 'eat' | 'dig' | 'door' | 'fish' | 'stand') {
   (ev.currentTarget as HTMLElement).blur();
-  if (what === 'left') emit('left'); else if (what === 'right') emit('right'); else if (what === 'pack') emit('pack'); else if (what === 'open') emit('open'); else if (what === 'lamp') emit('lamp'); else if (what === 'eat') emit('eat'); else if (what === 'dig') emit('dig'); else if (what === 'fish') emit('fish'); else emit('stand');
+  if (what === 'left') emit('left'); else if (what === 'right') emit('right'); else if (what === 'pack') emit('pack'); else if (what === 'open') emit('open'); else if (what === 'lamp') emit('lamp'); else if (what === 'eat') emit('eat'); else if (what === 'dig') emit('dig'); else if (what === 'door') emit('door'); else if (what === 'fish') emit('fish'); else emit('stand');
 }
 </script>
 
@@ -20,6 +20,7 @@ function press(ev: MouseEvent, what: 'left' | 'right' | 'pack' | 'open' | 'lamp'
       <button v-if="game.actions.light" type="button" @click="press($event, 'lamp')"><kbd>L</kbd><span>{{ game.actions.light }}</span></button>
       <button v-if="game.actions.eat" type="button" @click="press($event, 'eat')"><kbd>X</kbd><span>{{ game.actions.eat }}</span></button>
       <button v-if="game.actions.dig" type="button" @click="press($event, 'dig')"><kbd>G</kbd><span>{{ game.actions.dig }}</span></button>
+      <button v-if="game.actions.door" type="button" @click="press($event, 'door')"><kbd>H</kbd><span>{{ game.actions.door }}</span></button>
       <button v-if="game.actions.fish" type="button" :class="{ hot: game.actions.hot }" @click="press($event, 'fish')"><kbd>F</kbd><span>{{ game.actions.fish }}</span></button>
       <button v-if="game.actions.stand" type="button" @click="press($event, 'stand')"><kbd>Esc</kbd><span>Встать</span></button>
     </div>
@@ -32,10 +33,11 @@ function press(ev: MouseEvent, what: 'left' | 'right' | 'pack' | 'open' | 'lamp'
       <span class="for-keys"><kbd>I</kbd> — заглянуть в рюкзак</span>
       <span v-if="game.actions.light" class="for-keys"><kbd>L</kbd> — зажечь или погасить лампу</span>
       <span class="for-keys"><kbd>F</kbd> или пробел — рыбачить</span>
+      <span class="for-keys"><kbd>H</kbd> у двери — войти в дом или выйти; в доме <kbd>F</kbd> — сесть в кресло у камина, лечь в кровать, открыть холодильник</span>
       <span class="for-keys"><kbd>X</kbd> — достать рыбу из ведра или съесть; у костра она жарится</span>
       <span v-if="game.actions.dig" class="for-keys"><kbd>G</kbd> — копать червей на траве: лопата в одной руке, банка в другой</span>
       <span class="for-touch">Коснись места — рыбак пойдёт туда</span>
-      <span class="for-touch">Руки, ведро, рюкзак, еда, лопата и рыбалка — кнопками внизу</span>
+      <span class="for-touch">Руки, ведро, рюкзак, еда, лопата, дверь и рыбалка — кнопками внизу</span>
     </div>
   </div>
 </template>

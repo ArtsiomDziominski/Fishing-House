@@ -40,7 +40,8 @@ export type Place = Pick<Item, 'x' | 'y' | 'rot'>;
 export interface GroundItem { id: number; kind: ItemKind; x: number; y: number; lit: boolean; fish: string }
 
 // Заглянуть в рюкзак можно, когда он на спине или лежит рядом с героем. slack — запас сервера на рывки сети.
-export const packInReach = (hero: Point, pack: PackState, slack = 0) => pack.worn || dist(hero, pack) <= REACH + slack;
+// Снятый рюкзак лежит снаружи: из дома (inside) до него не дотянуться, как бы ни совпали числа.
+export const packInReach = (hero: Point & { inside?: boolean }, pack: PackState, slack = 0) => pack.worn || (!hero.inside && dist(hero, pack) <= REACH + slack);
 
 export const ITEMS = (() => {
   // w и h — клеток в ширину и в высоту, когда вещь не повёрнута; heavy — тяжёлая: её держат двумя руками; text — подпись в рюкзаке

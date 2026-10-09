@@ -2,7 +2,7 @@
      входим в комнату-причал на игровом сервере и запускаем движок на холсте. -->
 <script setup lang="ts">
 import { Client, type Room } from '@colyseus/sdk';
-import { ROOM, World, ITEMS, type ClientMessages, type ItemKind, type Place, type ServerMessages, type WeatherKind } from '@fh/shared';
+import { ROOM, World, ITEMS, FRIDGE, type ClientMessages, type ItemKind, type Place, type ServerMessages, type WeatherKind } from '@fh/shared';
 import { startGame, type GameHandle } from '~/game/engine';
 
 definePageMeta({ layout: false, middleware: 'auth' });
@@ -36,7 +36,17 @@ const ITEM_NOTES: Record<NonNullable<ServerMessages['items']['note']>, string> =
   raw: 'Сырую рыбу в рюкзак не убрать — пожарь её у костра или съешь',
   pail: 'Ведро далеко — подойди к нему или возьми его в руку',
   empty: 'Такой рыбы в ведре уже нет',
+  indoor: 'В доме на пол ничего не кладут — выйди на улицу',
 };
+// Холодильник в доме: окно просит, сервер решает и присылает полку целиком («fridge»), а если не вышло — почему.
+const FRIDGE_NOTES: Record<NonNullable<ServerMessages['fridge']['note']>, string> = {
+  far: 'Холодильник далеко — подойди к нему',
+  full: `Холодильник полон — в нём уже ${FRIDGE.MAX} рыб`,
+  busy: 'Руки заняты — освободи одну, чтобы взять рыбу',
+  pail: 'Возьми ведро в руку — улов перекладывают из него',
+  empty: 'Класть нечего: ни в руках, ни в ведре рыбы нет',
+};
+const fishWord = (n: number) => (n % 10 === 1 && n % 100 !== 11 ? 'рыба' : [2, 3, 4].includes(n % 10) && ![12, 13, 14].includes(n % 100) ? 'рыбы' : 'рыб');
 function moveItem(id: number, x: number, y: number, rot: boolean) { send('itemMove', { id, x, y, rot }); }
 function dropItem(id: number) { send('itemDrop', { id }); }
 function takeItem(id: number, left?: boolean) { send('itemTake', left === undefined ? { id } : { id, left }); }
@@ -62,6 +72,11 @@ async function connect() {
     r.onMessage('items', (m: ServerMessages['items']) => {
       game.items = m.list; game.hands = m.hands;
       if (m.note) game.showToast(ITEM_NOTES[m.note], 'bad');
+    });
+    r.onMessage('fridge', (m: ServerMessages['fridge']) => {
+      game.fridge = m.list;
+      if (m.note) game.showToast(FRIDGE_NOTES[m.note], 'bad');
+      else if (m.stocked) game.showToast(`В холодильник легло: ${m.stocked} ${fishWord(m.stocked)}${game.bag.total ? ' — остальное не влезло' : ''}`, 'good');
     });
     r.onDrop(() => { game.status = 'reconnecting'; });
     r.onReconnect(() => { game.status = 'online'; });
@@ -105,10 +120,11 @@ const overlay = computed(() => {
 
     <GameCatch @take="handle?.takeFish($event)" />
     <GameToast />
-    <GameDock @left="handle?.handAction('left')" @right="handle?.handAction('right')" @pack="handle?.packAction()" @fish="handle?.fishAction()" @stand="handle?.standUp()" @open="game.togglePack()" @lamp="handle?.lampAction()" @eat="handle?.eatAction()" @dig="handle?.digAction()" />
+    <GameDock @left="handle?.handAction('left')" @right="handle?.handAction('right')" @pack="handle?.packAction()" @fish="handle?.fishAction()" @stand="handle?.standUp()" @open="game.togglePack()" @lamp="handle?.lampAction()" @eat="handle?.eatAction()" @dig="handle?.digAction()" @door="handle?.doorAction()" />
     <GamePack @pick="handle?.setPack($event)" />
     <GameOnline @clock="handle?.setClock($event)" @weather="setWeather" @sound="setSound" />
     <GameBackpack @move="moveItem" @drop="dropItem" @take="takeItem" @stow="stowItem" @give="giveItem" />
+    <GameFridge @put="send('fridgePut', {})" @take="send('fridgeTake', { id: $event })" @stock="send('fridgeStock', undefined)" />
     <GameSleep />
 
     <div v-if="overlay" class="overlay" :class="{ soft: game.status === 'reconnecting' || game.status === 'connecting' }">

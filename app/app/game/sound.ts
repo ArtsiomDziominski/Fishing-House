@@ -7,7 +7,7 @@ type Wave = OscillatorType;
 // dark — насколько темно, 0..1; clouds, rain, wind — сила погоды, 0..1; walk — герой идёт (2 — бежит);
 // fire — насколько близко костёр, 0..1
 export interface SoundScene { dark: number; clouds: number; rain: number; wind: number; walk: 0 | 1 | 2; fire: number }
-export type SoundCue = 'cast' | 'bite' | 'catch' | 'miss';
+export type SoundCue = 'cast' | 'bite' | 'catch' | 'miss' | 'door';
 
 const VOL = { master: 0.8, rain: 0.17, wind: 0.11, cricket: 0.022, frog: 0.03, owl: 0.035, bird: 0.016, step: 0.028, fire: 0.05, cue: 0.07 };
 const DUSK = [0.3, 0.46];          // темнота, с которой начинается ночной хор и с которой он в полную силу (как у светлячков)
@@ -110,6 +110,7 @@ export function createSoundView() {
     if (what === 'cast') tone('sine', 520, 140, 0, 0.14, v);
     else if (what === 'bite') { tone('triangle', 880, 880, 0, 0.07, v); tone('triangle', 1320, 1320, 0.09, 0.1, v); }
     else if (what === 'catch') [523, 659, 784, 1047].forEach((f, i) => tone('triangle', f, f, i * 0.085, 0.16, v));
+    else if (what === 'door') { tone('triangle', 180, 150, 0, 0.12, v * 0.8); tone('triangle', 330, 260, 0.12, 0.22, v * 0.5); }   // дверь: стук щеколды и скрип
     else tone('sine', 240, 130, 0, 0.24, v);
   }
 

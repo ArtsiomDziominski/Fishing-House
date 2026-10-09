@@ -31,9 +31,12 @@ export function addToBag(bag: Bag, fish: Catch): { first: boolean; record: boole
 export interface ClientMessages {
   move: { x: number; y: number; dir: Dir };   // где герой сейчас
   sit: void;                                  // сесть на край причала; ведро в руке остаётся в руке (рисуется рядом с рыбаком)
-  rest: void;                                 // сесть у костра — там, где стоишь; встают тем же stand или просто уходят
+  rest: void;                                 // сесть у костра — там, где стоишь (в доме — в свободное кресло у камина рядом); встают тем же stand или просто уходят
   kindle: void;                               // разжечь погасший костёр: стоя или сидя у огня, когда нет дождя
-  stand: void;                                // встать
+  stand: void;                                // встать (из кресла и с кровати — рядом с ними)
+  bed: void;                                  // лечь спать в кровать: в доме, стоя у неё, если она свободна (Indoor.nearBed)
+  enter: void;                                // войти в дом: стоя у двери снаружи (nearDoor); в ответ — «self» уже в доме
+  exit: void;                                 // выйти из дома: стоя у порога внутри (Indoor.nearExit); в ответ — «self» у крыльца
   press: void;                                // забросить, подсечь — как F или пробел
   packOn: void;                               // надеть рюкзак (он должен лежать рядом)
   packOff: { x: number; y: number };          // снять рюкзак и положить сюда
@@ -47,6 +50,9 @@ export interface ClientMessages {
   lamp: { on: boolean; id?: number };         // зажечь или погасить лампу: ту, что в руке, или (id) ту, что стоит на земле рядом
   fishTake: { species: string; left?: boolean };   // достать рыбу этого вида из ведра (в руке или на земле рядом) в руку left; не назвали — в свободную
   eat: { left?: boolean };                    // съесть рыбу из руки left (не назвали — жареную первой, потом сырую)
+  fridgePut: { left?: boolean };              // положить рыбу из руки left в холодильник (не назвали — из любой); стоя у него (Indoor.nearFridge)
+  fridgeTake: { id: number; left?: boolean }; // достать рыбу id из холодильника в руку left (не назвали — в свободную)
+  fridgeStock: void;                          // переложить улов из ведра в холодильник — сколько влезет; ведро — в руке
   dig: void;                                  // копать червей: лопата в одной руке, банка в другой, перед героем трава (WORMS)
   itemGive: { kind: ItemKind };               // положить в рюкзак новую вещь. Только в разработке
   scrap: { id: number; by: ScrapEnd };        // позвать к рыбе на земле чайку или кота (или дать ей растаять) прямо сейчас. Только в разработке
@@ -66,8 +72,8 @@ export interface ServerMessages {
   // (тогда сервер шлёт и «self» со старым рюкзаком), busy — руки заняты, а в рюкзак вещь с земли не убрать,
   // hands — тяжёлую вещь берут только двумя свободными руками, gone — вещь с земли успел поднять кто-то другой,
   // litter — на земле уже ITEMS.GROUND_MAX твоих вещей, raw — сырую рыбу в рюкзак не убрать, pail — ведра под рукой нет,
-  // empty — такой рыбы в ведре нет.
-  items: { list: Item[]; hands: Item[]; note?: 'far' | 'full' | 'tight' | 'busy' | 'hands' | 'gone' | 'litter' | 'raw' | 'pail' | 'empty' };
+  // empty — такой рыбы в ведре нет, indoor — в доме на пол ничего не кладут и с земли не поднимают (земля — снаружи).
+  items: { list: Item[]; hands: Item[]; note?: 'far' | 'full' | 'tight' | 'busy' | 'hands' | 'gone' | 'litter' | 'raw' | 'pail' | 'empty' | 'indoor' };
   // Голод (hunger.ts): food — сытость 0..100; sleep — сколько ещё мс герой спит от усталости (0 — не спит);
   // lost — сколько рыб пропало из ведра, пока он спал (приходит, когда это стало известно).
   // Приходит при входе, когда сытость убывает на целую единицу, когда герой поел, уснул и проснулся.
@@ -79,6 +85,10 @@ export interface ServerMessages {
   // здесь не копают (не трава); jar — нет банки в другой руке; shovel — нет лопаты в руке; busy — сидит, ест или уже копает.
   worms: { e: 'used'; id: number; n: number } | { e: 'dug'; id: number; n: number; got: number; lost: number; wet: boolean }
     | { e: 'none' | 'full' | 'ground' | 'jar' | 'shovel' | 'busy' };
+  // Холодильник в доме — полка игрока (FRIDGE): list — рыба на ней. Приходит при входе и после каждой перемены.
+  // note — почему не вышло: far — до холодильника далеко, full — полка полна, busy — руки заняты, pail — ведра нет в руке,
+  // empty — нечего класть (в руках нет рыбы, в ведре пусто) или такой рыбы уже нет на полке; stocked — сколько рыб переложено из ведра.
+  fridge: { list: { id: number; kind: 'fish' | 'fish-fried'; fish: string }[]; note?: 'far' | 'full' | 'busy' | 'pail' | 'empty'; stocked?: number };
   // Часы причала, мс: по ним у всех одно время суток. Приходят при входе и когда часы перевели.
   // canSet — сервер разрешает их переводить (разработка), moved — сейчас они переведены.
   clock: { now: number; canSet: boolean; moved: boolean };
@@ -91,7 +101,9 @@ export interface ServerMessages {
 export interface PlayerView {
   pid: string; name: string;
   x: number; y: number; dir: Dir; sitting: boolean;
-  rest: boolean;                                            // сидит у костра
+  rest: boolean;                                            // сидит у костра, а в доме — в кресле у камина
+  bed: boolean;                                             // спит в кровати в доме
+  inside: boolean;                                          // в доме: x, y — в кадре комнаты (indoor.ts); видят его только те, кто тоже внутри
   wearing: boolean; px: number; py: number; pack: string;   // рюкзак: на спине или лежит в px, py; pack — его вид
   hand: string; off: string;                                // что в правой и в левой руке: вид вещи (ITEM_KINDS, ведро тоже) или пусто.
                                                             // Тяжёлая вещь — только в hand (держат её двумя руками)
