@@ -35,7 +35,7 @@
 |---|---|---|---|
 | Карта, проходимость | `world.ts`, `world-data.ts` (собирает `tools/`) | `PierRoom.move` | `game/engine.ts` |
 | Рыбалка, рыбы | `fishing.ts`, `fish.ts` | `PierRoom.onFishing` | `game/fishing-view.ts` |
-| Ведро (вещь), улов, расстояния | `rules.ts` (`bucketNearSeat`), `ITEMS.isBucket`, `Bag` в `protocol.ts` | `bucketFor`, `sit`, `onFishing` | `drawBucket` в движке, `components/GameCatch.vue` |
+| Ведро (вещь), улов, расстояния | `rules.ts` (`bucketNearSeat`), `ITEMS.isBucket`, `Bag` в `protocol.ts` | `bucketFor`, `sit`, `onFishing` | `drawBucket` в движке, `components/GameHands.vue` (что в руках, у ведра — улов) |
 | Дом снаружи | `house.ts` | — | `game/house.ts` |
 | Дом внутри: вход, кресла, кровать, холодильник | `indoor.ts` (`INDOOR`, `Indoor`, `FRIDGE`), `nearDoor`, `WorldState.inside`/`bed`, `server/items.ts` (`loadFridge`, `fridge*`) | `enter`, `exit`, `rest`/`cook` в кресле, `toBed`, `fridgePut`/`fridgeTake`/`fridgeStock` | `game/interior.ts`, `doorAction`, `drawRoom`, `drawDoorScreen`, `restDown`, `bedDown` в движке, `components/GameFridge.vue` |
 | Костёр (гаснет в дождь) | `campfire.ts` (`FIRE.douse`) | `rest`, `kindle`, `watchRain` | `game/campfire.ts`, `fireLit`/`kindle` в движке |

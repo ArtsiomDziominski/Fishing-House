@@ -117,9 +117,9 @@ const overlay = computed(() => {
       <canvas ref="canvas" width="569" height="320" aria-label="Домик рыбака у реки" />
     </main>
 
-    <!-- слева вверху колонкой: ведро и под ним сытость — каждая своей панелью, одной ширины -->
+    <!-- слева вверху колонкой: что в руках (у ведра — улов) и под ним сытость — каждая своей панелью, одной ширины -->
     <div class="hud-left">
-      <GameCatch @take="handle?.takeFish($event)" />
+      <GameHands @take="handle?.takeFish($event)" />
       <GameHunger />
     </div>
     <GameToast />
