@@ -19,7 +19,7 @@ const port = Number(process.env.GAME_PORT) || 2567;
 const redis = process.env.REDIS_URL || '';
 
 const server = defineServer({
-  rooms: { [ROOM]: defineRoom(PierRoom) },
+  rooms: { [ROOM]: defineRoom(PierRoom).filterBy(['pier']) },   // у каждого игрока свой причал (pier — id хозяина), копии — по нему
   ...(redis ? { presence: new RedisPresence(redis), driver: new RedisDriver(redis) } : {}),
   ...(process.env.PUBLIC_ADDRESS ? { publicAddress: process.env.PUBLIC_ADDRESS } : {}),
   greet: false,

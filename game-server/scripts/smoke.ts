@@ -1,8 +1,9 @@
 // Проверка игрового сервера целиком: бот заводит игрока в базе, входит по билету (ведро у него в руке), идёт за рюкзаком,
-// перекладывает вещи в рюкзаке и берёт их в руку, ставит и поднимает ведро, выкладывает их на землю и поднимает (и чужие — в другой копии причала), несёт всё к причалу, садится и ловит рыбу;
-// достаёт рыбу из ведра, жарит её у костра (в дождь костёр гаснет, и его разжигают) и съедает, выложенную на землю рыбу уносит чайка,
+// перекладывает вещи в рюкзаке и берёт их в руку, ставит и поднимает ведро, выкладывает их на землю и поднимает (и чужие — в другой копии причала), несёт всё к причалу, садится и ловит рыбу
+// в ведро на настиле; достаёт рыбу из ведра, жарит её у костра (в дождь костёр гаснет, и его разжигают) и съедает, выложенную на землю рыбу уносит чайка,
+// сосед достаёт рыбу из чужого ведра на земле и уносит ведро вместе с уловом,
 // входит в дом и выходит из него, садится в кресло у камина (второй игрок там жарит рыбу, кладёт улов в холодильник и
-// достаёт его, спит в кровати), а голодным засыпает и просыпается у дома;
+// достаёт его, спит в кровати), а голодным засыпает (у него крадут часть вещей) и просыпается у дома;
 // заодно проверяет, что телепорт сервер не принимает.
 //
 //   npm run smoke -w game-server            (нужны запущенные база и игровой сервер, .env с DATABASE_URL и GAME_SECRET)
@@ -10,8 +11,8 @@
 //   npm run smoke:own -w game-server        (то же, но сервер бот поднимает сам — smoke-own.ts)
 
 import { Client, type Room } from '@colyseus/sdk';
-import { World, Indoor, ITEMS, HUNGER, SCRAPS, FIRE, ROOM, DAY_LENGTH, WEATHERS, REACH, dayHour, weatherText, dist, WORMS, seat, standPoint, homePoint, type Bag, type GroundView, type Item, type PlayerView, type ServerMessages, type WorldState } from '@fh/shared';
-import { createDb, createAccount, issueTicket, getProfile, loadItems, loadGround, loadPlayer, saveWorld, recordCatch, loadFridge } from '@fh/shared/server';
+import { World, Indoor, ITEMS, HUNGER, SCRAPS, FIRE, ROOM, pierPlace, DAY_LENGTH, WEATHERS, REACH, dayHour, weatherText, dist, WORMS, seat, standPoint, homePoint, haulOf, type GroundView, type Item, type PlayerView, type ServerMessages, type WorldState } from '@fh/shared';
+import { createDb, createAccount, issueTicket, getProfile, loadItems, loadGround, loadBags, loadPlayer, saveWorld, recordCatch, loadFridge, loadChest, robItems } from '@fh/shared/server';
 
 const url = process.env.GAME_URL || 'http://localhost:2567';
 const db = createDb(undefined, 2);
@@ -20,13 +21,13 @@ const me = await createAccount(db, name, 'не-для-входа');
 console.log('игрок', me.name, me.id);
 
 const client = new Client(url);
-const room: Room = await client.joinOrCreate(ROOM, { ticket: issueTicket(me.id, me.name) });
+const room: Room = await client.joinOrCreate(ROOM, { ticket: issueTicket(me.id, me.name), pier: me.id });
 console.log('в комнате', room.roomId, 'сессия', room.sessionId);
 
-let self: WorldState | null = null, bag: Bag | null = null;
+let self: WorldState | null = null, bags: ServerMessages['bags'] | null = null;   // вёдра в руках и что в них
 const fish: ServerMessages['fish'][] = [];
 room.onMessage('self', (m: WorldState) => { self = m; });
-room.onMessage('bag', (m: Bag) => { bag = m; });
+room.onMessage('bags', (m: ServerMessages['bags']) => { bags = m; });
 room.onMessage('fish', (m: ServerMessages['fish']) => { fish.push(m); });
 let items: ServerMessages['items'] | null = null;
 room.onMessage('items', (m: ServerMessages['items']) => { items = m; });
@@ -41,6 +42,7 @@ room.onMessage('food', (m: ServerMessages['food']) => { food.push(m); });
 const worm: ServerMessages['worms'][] = [];
 room.onMessage('worms', (m: ServerMessages['worms']) => { worm.push(m); });
 room.onMessage('fridge', () => {});
+room.onMessage('chest', () => {});
 
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
 const until = async (what: string, ok: () => boolean, ms = 15000) => {
@@ -49,13 +51,14 @@ const until = async (what: string, ok: () => boolean, ms = 15000) => {
 };
 const check = (cond: unknown, what: string) => { if (!cond) throw new Error('не так: ' + what); console.log('  ✓', what); };
 
-await until('себя и ведро', () => !!self && !!bag);
+await until('себя и ведро', () => !!self && !!bags);
 await until('вещи в рюкзаке', () => !!items);
 const kit = items!.list, packed = ITEMS.STARTER.filter(st => !st.held);
 check(kit.length === packed.length && packed.every(st => kit.some(it => it.kind === st.kind && it.x === st.x && it.y === st.y)), 'новому игроку в рюкзак положен стартовый набор');
 const thing = (list: Item[], kind: string) => list.find(it => it.kind === kind)!;
 const pail = items!.hands[0]!;
 check(items!.hands.length === 1 && pail.kind === 'bucket' && pail.left, 'ведро у нового игрока — в левой руке');
+check(bags!.length === 1 && bags![0]!.id === pail.id && bags![0]!.left && bags![0]!.bag.total === 0, 'ведро в руке пустое — сервер сказал, что в нём');
 await until('сытость', () => !!hunger);
 check(hunger!.food === HUNGER.MAX && hunger!.sleep === 0, 'новый игрок сыт и не спит');
 await until('часы причала', () => !!clock);
@@ -333,16 +336,16 @@ if (before.canSet) {
   room.send('itemPick', { id: lamp.id });
   await until('лампу снова в руке', () => seen()?.hand === 'lamp' && !onGround(lamp.id));
   check(seen()?.lamp === true, 'пустой рукой лампа берётся с земли в руку');
-  // земля одна на все копии причала: второй игрок входит в другую копию, видит там лампу и поднимает её — у вещи меняется хозяин
+  // земля одна на все копии причала: второй игрок приходит в гости в другую копию, видит там лампу и поднимает её — у вещи меняется хозяин
   room.send('itemPut', spot);
   await until('лампу на земле', () => !!onGround(lamp.id));
   await sleep(300);
   const guest = await createAccount(db, 'гость_' + Math.random().toString(36).slice(2, 8), 'не-для-входа');
-  const other: Room = await client.create(ROOM, { ticket: issueTicket(guest.id, guest.name) });
+  const other: Room = await client.create(ROOM, { ticket: issueTicket(guest.id, guest.name), pier: me.id });
   let theirs: ServerMessages['items'] | null = null, there: WorldState | null = null;
   other.onMessage('items', (m: ServerMessages['items']) => { theirs = m; });
   other.onMessage('self', (m: WorldState) => { there = m; });
-  for (const type of ['bag', 'fish', 'clock', 'weather', 'hunger', 'food', 'fridge']) other.onMessage(type, () => {});
+  for (const type of ['bags', 'fish', 'clock', 'weather', 'hunger', 'food', 'fridge', 'chest']) other.onMessage(type, () => {});
   await until('второго игрока', () => !!theirs && !!there);
   await until('лампу в другой копии', () => !!onGround(lamp.id, other));
   check(other.roomId !== room.roomId && onGround(lamp.id, other)!.x === spot.x, 'во второй копии причала лампа лежит там же — земля у всех одна');
@@ -366,12 +369,12 @@ if (before.canSet) {
   await sleep(300);
   await other.leave();
   await sleep(400);
-  check(!!onGround(lamp.id) && (await loadGround(db)).some(g => g.id === lamp.id && g.owner === guest.id), 'гость ушёл из игры, а его лампа лежит на земле — и в базе тоже');
+  check(!!onGround(lamp.id) && (await loadGround(db, pierPlace(me.id))).some(g => g.id === lamp.id && g.owner === guest.id), 'гость ушёл из игры, а его лампа лежит на земле — и в базе тоже');
   await walk({ x: spot2.x, y: spot2.y + 4 });
   room.send('itemPick', { id: lamp.id });
   await until('лампу гостя в руке', () => seen()?.hand === 'lamp' && !onGround(lamp.id));
   await sleep(300);
-  check((await loadItems(db, me.id)).hands.some(it => it.id === lamp.id) && !(await loadGround(db)).some(g => g.id === lamp.id), 'лампа гостя теперь у первого игрока — и в базе');
+  check((await loadItems(db, me.id)).hands.some(it => it.id === lamp.id) && !(await loadGround(db, pierPlace(me.id))).some(g => g.id === lamp.id), 'лампа гостя теперь у первого игрока — и в базе');
 } else {
   items = null;
   room.send('itemGive', { kind: 'net-seine' });
@@ -455,9 +458,9 @@ await until('поклёвку', () => fish.some(f => f.e === 'bite'), 12000);
 room.send('press');
 await until('подсечку', () => fish.some(f => f.e === 'hook'));
 const hook = fish.find(f => f.e === 'hook')!;
-check(hook.e === 'hook' && hook.bag?.total === 1, `поймана: ${hook.e === 'hook' ? hook.fish.id + ' ' + hook.fish.grams + ' г' : ''}`);
+check(hook.e === 'hook' && hook.pail?.id === pail.id && hook.pail.n === 1 && hook.pail.size === ITEMS.capacity('bucket') && hook.first === true, `поймана в ведро на настиле: ${hook.e === 'hook' ? hook.fish.id + ' ' + hook.fish.grams + ' г' : ''}`);
 await until('хвост над ведром', () => onGround(pail.id)?.fish === (hook.e === 'hook' ? hook.fish.id : ''));
-check(true, 'рыба легла в ведро на настиле — её хвост видят все');
+check(onGround(pail.id)?.haul === `${hook.e === 'hook' ? hook.fish.id : ''}:1`, 'рыба легла в ведро на настиле — её хвост и сколько рыбы в ведре видят все');
 await until('червя на крючке', () => worm.some(w => w.e === 'used'));
 check(worm.some(w => w.e === 'used' && w.id === worms.id && w.n === wormsAfterDig - 1), 'рыба клюнула — из банки ушёл один червь');
 
@@ -468,11 +471,12 @@ const profile = await getProfile(db, me.id);
 check(profile?.bag.total === 1 && profile.latest.length === 1, 'улов записан в базу и виден в профиле');
 
 // второй вход: место и ведро сохранились
-const again: Room = await client.joinOrCreate(ROOM, { ticket: issueTicket(me.id, me.name) });
+const again: Room = await client.joinOrCreate(ROOM, { ticket: issueTicket(me.id, me.name), pier: me.id });
 self = null;
 again.onMessage('self', (m: WorldState) => { self = m; });
-again.onMessage('bag', (m: Bag) => { bag = m; });
+again.onMessage('bags', (m: ServerMessages['bags']) => { bags = m; });
 again.onMessage('fish', () => {});
+again.onMessage('chest', () => {});
 again.onMessage('clock', () => {});
 again.onMessage('weather', () => {});
 again.onMessage('items', (m: ServerMessages['items']) => { items = m; });
@@ -483,10 +487,11 @@ again.onMessage('worms', (m: ServerMessages['worms']) => { worm.push(m); });
 again.onMessage('fridge', () => {});
 items = null;
 await until('себя после входа', () => !!self);
-const pailNow = (await loadGround(db)).find(g => g.id === pail.id);
-check(self!.sitting && pailNow?.x === bucketSpot.x && pailNow.fish === (hook.e === 'hook' ? hook.fish.id : ''), 'после перезахода герой на причале, ведро там, где поставили, с хвостом рыбы');
+const pailNow = (await loadGround(db, pierPlace(me.id))).find(g => g.id === pail.id);
+await until('ведро после входа', () => !!onGround(pail.id, again));
+check(self!.sitting && pailNow?.x === bucketSpot.x && onGround(pail.id, again)!.fish === (hook.e === 'hook' ? hook.fish.id : ''), 'после перезахода герой на причале, ведро там, где поставили, с хвостом рыбы');
 check(self!.pack.worn && self!.pack.kind === 'sailor', 'рюкзак после перезахода на спине, тот же морской');
-check(bag!.total === 1, 'улов после перезахода тот же');
+check(haulOf(onGround(pail.id, again)?.haul ?? '')[hook.e === 'hook' ? hook.fish.id : ''] === 1, 'улов в ведре после перезахода тот же');
 await until('вещи после входа', () => !!items);
 check(items!.list.length === kit.length - 2 + (before.canSet ? 4 : 0) && thing(items!.list, 'floats').x === 5 && thing(items!.list, 'floats').y === 4 && thing(items!.list, 'net-scoop').rot, 'вещи после перезахода лежат там, куда их переложили (поплавки — на месте червей), стартовый набор не задвоился');
 check(items!.hands.map(it => it.kind + (it.left ? ':левая' : ':правая')).join() === 'worms:правая,rod-willow:левая' && !items!.list.some(it => it.id === rod.id || it.id === worms.id), 'черви в правой руке, удочка в левой — и после перезахода');
@@ -496,18 +501,18 @@ check(items!.hands.find(it => it.id === worms.id)?.worms === wormsAfterDig - 1, 
 const caught = hook.e === 'hook' ? hook.fish.id : '';
 const hand = () => (again.state as { players: { get(sid: string): PlayerView | undefined } }).players.get(again.sessionId);
 items = null;
-again.send('fishTake', { species: caught });
+again.send('fishTake', { species: caught, pail: pail.id });
 await until('отказ достать рыбу', () => !!items);
 check(items!.note === 'busy', 'обе руки заняты — рыбу из ведра не достать');
 again.send('itemStow', { id: worms.id, at: null });
 await until('свободную правую руку', () => hand()?.hand === '');
 items = null;
-again.send('fishTake', { species: caught });
-await until('рыбу в руке', () => !!items && items.hands.some(it => it.kind === 'fish' && it.id > 0) && bag!.total === 0 && hand()?.hand === 'fish');
+again.send('fishTake', { species: caught, pail: pail.id });
+await until('рыбу в руке', () => !!items && items.hands.some(it => it.kind === 'fish' && it.id > 0) && onGround(pail.id, again)?.haul === '' && hand()?.hand === 'fish');
 const raw = items!.hands.find(it => it.kind === 'fish')!;
 check(raw.fish === caught && !raw.left, 'рыба из ведра — в правой руке, ведро опустело');
 items = null;
-again.send('fishTake', { species: caught });
+again.send('fishTake', { species: caught, pail: pail.id });
 await until('отказ — рыбы нет', () => !!items);
 check(items!.note === 'empty', 'в пустом ведре рыбы не достать');
 items = null;
@@ -587,44 +592,56 @@ check(!(await loadItems(db, me.id)).hands.some(it => ITEMS.isFish(it.kind)) && (
   await until('сел в кресло', () => hand()?.rest === true);
   check(hand()!.x === chairL.x && hand()!.y === chairL.y && hand()!.dir === chairL.dir, 'сел в кресло у камина — лицом к огню');
 
-  // второй игрок с уловом в ведре: в занятое кресло не сесть; улов — в холодильник, рыбу оттуда — в руку, во втором кресле
+  // второй игрок с уловом в ведре: дом у каждого свой — садится в то же кресло, где сидит первый; улов — в холодильник, рыбу оттуда — в руку, во втором кресле
   // она жарится, жареную — обратно на полку; потом поспать в кровати
   {
     const cook = await createAccount(db, 'повар_' + Math.random().toString(36).slice(2, 8), 'не-для-входа');
-    for (const [id, grams] of [['perch', 300], ['roach', 120], ['pike', 1500]] as const) await recordCatch(db, cook.id, { id, grams });
-    const c: Room = await client.joinOrCreate(ROOM, { ticket: issueTicket(cook.id, cook.name) });
-    let cSelf: WorldState | null = null, cItems: ServerMessages['items'] | null = null, cFridge: ServerMessages['fridge'] | null = null, cBag: Bag | null = null;
+    const cookPail = (await loadItems(db, cook.id)).hands.find(it => ITEMS.isBucket(it.kind))!.id;   // стартовый набор кладёт первый же loadItems
+    for (const [id, grams] of [['perch', 300], ['roach', 120], ['pike', 1500]] as const) await recordCatch(db, cook.id, { id, grams }, cookPail);
+    const c: Room = await client.joinOrCreate(ROOM, { ticket: issueTicket(cook.id, cook.name), pier: cook.id });
+    let cSelf: WorldState | null = null, cItems: ServerMessages['items'] | null = null, cFridge: ServerMessages['fridge'] | null = null, cBags: ServerMessages['bags'] | null = null, cChest: ServerMessages['chest'] | null = null;
+    c.onMessage('chest', (m: ServerMessages['chest']) => { cChest = m; });
     const cFood: ServerMessages['food'][] = [];
     c.onMessage('self', (m: WorldState) => { cSelf = m; });
     c.onMessage('items', (m: ServerMessages['items']) => { cItems = m; });
     c.onMessage('fridge', (m: ServerMessages['fridge']) => { cFridge = m; });
-    c.onMessage('bag', (m: Bag) => { cBag = m; });
+    c.onMessage('bags', (m: ServerMessages['bags']) => { cBags = m; });
+    const cBag = () => cBags?.find(b => b.id === cookPail)?.bag;
     c.onMessage('food', (m: ServerMessages['food']) => { cFood.push(m); });
     for (const type of ['fish', 'clock', 'weather', 'hunger']) c.onMessage(type, () => {});
     const seen = () => (c.state as { players: { get(sid: string): PlayerView | undefined } }).players.get(c.sessionId);
     const shelf = async (send: () => void, what: string, ok: (f: ServerMessages['fridge']) => boolean = () => true) => { cFridge = null; send(); await until(what, () => !!cFridge && ok(cFridge)); return cFridge!; };
-    await until('повара в комнате', () => !!cSelf && !!cItems && !!cFridge && !!cBag && !!seen());
-    check(cFridge!.list.length === 0 && cBag!.total === 3 && cItems!.hands.some(it => ITEMS.isBucket(it.kind)), 'у нового игрока холодильник пуст, в ведре три рыбы, ведро в руке');
+    await until('повара в комнате', () => !!cSelf && !!cItems && !!cFridge && !!cBag() && !!seen());
+    check(cFridge!.list.length === 0 && cBag()!.total === 3 && cItems!.hands.some(it => it.id === cookPail), 'у нового игрока холодильник пуст, в ведре три рыбы, ведро в руке');
     c.send('stand');
     const cAt = { ...standPoint() };
+    await walk({ x: World.pack.baseX, y: World.pack.baseY + 6 }, c, cAt);   // рюкзак — на спину: из него вещи пойдут в сундук
+    c.send('packOn');
+    await until('рюкзак повара на спине', () => !!seen()?.wearing);
     await walk(homePoint(), c, cAt);
     check((await shelf(() => c.send('fridgeStock'), 'отказ снаружи')).note === 'far', 'с улицы до холодильника не дотянуться');
     c.send('enter');
     await until('повар в доме', () => cSelf?.inside === true);
     const cIn = { x: cSelf!.x, y: cSelf!.y };
+    await walkIn(Indoor.chest, c, cIn);   // ведро с уловом в сундук не убрать: рыбе место в холодильнике
+    cChest = null; c.send('chestPut', { id: cookPail, at: null });
+    await until('отказ — ведро с уловом', () => cChest?.note === 'catch');
+    check(cBag()!.total === 3 && !cChest!.list.length, 'ведро с уловом в сундук не положить — рыба в нём, сундук пуст');
     await walkIn(chairL.stand, c, cIn);
-    cSelf = null;
     c.send('rest');
-    await until('отказ сесть в занятое кресло', () => !!cSelf);
-    check(!cSelf!.rest && seen()?.rest === false, 'в кресло, где уже сидят, не сесть');
+    await until('повар в кресле, где сидит первый', () => seen()?.rest === true);
+    check(seen()!.x === chairL.x && hand()?.rest === true, 'дом у каждого свой: в кресло, где сидит другой игрок в своём доме, садятся');
+    c.send('stand');
+    await until('повар встал из кресла', () => seen()?.rest === false);
+    Object.assign(cIn, chairL.stand);
     await walkIn(Indoor.fridge, c, cIn);
     const stocked = await shelf(() => c.send('fridgeStock'), 'улов в холодильнике', f => f.stocked !== undefined || !!f.note);
-    check(stocked.stocked === 3 && stocked.list.length === 3 && cBag!.total === 0, 'улов из ведра в руке переложен в холодильник — ведро пустое');
+    check(stocked.stocked === 3 && stocked.list.length === 3 && cBag()!.total === 0, 'улов из ведра в руке переложен в холодильник — ведро пустое');
     check((await shelf(() => c.send('fridgeStock'), 'отказ — ведро пустое')).note === 'empty', 'из пустого ведра перекладывать нечего');
     const perch = stocked.list.find(f => f.fish === 'perch')!;
     cItems = null;
     await shelf(() => c.send('fridgeTake', { id: perch.id }), 'окунь из холодильника', f => !f.list.some(x => x.id === perch.id));
-    await until('окунь в руке', () => !!cItems && cItems.hands.some(it => it.id === perch.id));
+    await until('окунь в руке', () => !!cItems && cItems.hands.some(it => it.id === perch.id) && seen()?.hand === 'fish');   // руки в состоянии комнаты приходят чуть позже личного сообщения
     check(!cItems!.hands.find(it => it.id === perch.id)!.left && seen()?.hand === 'fish', 'рыбу из холодильника достал в свободную руку');
     check((await shelf(() => c.send('fridgeTake', { id: perch.id }), 'отказ — окуня уже нет')).note === 'empty', 'вынутую рыбу второй раз не достать');
     await walkIn(chairR.stand, c, cIn);
@@ -651,6 +668,31 @@ check(!(await loadItems(db, me.id)).hands.some(it => ITEMS.isFish(it.kind)) && (
     c.send('stand');
     await until('повар встал с кровати', () => seen()?.bed === false);
     check(seen()!.x === Indoor.bed.stand.x && seen()!.y === Indoor.bed.stand.y, 'с кровати встал рядом с ней');
+    // сундук: положить из рюкзака (на свободное место и в названную клетку), переложить, сменить сундук на большой, вынуть
+    // обратно; издалека не выйдет, а украсть из сундука во сне нельзя
+    const chest = async (send: () => void, what: string, ok: (m: ServerMessages['chest']) => boolean = () => true) => { cChest = null; send(); await until(what, () => !!cChest && ok(cChest)); return cChest!; };
+    const floats = cItems!.list.find(it => it.kind === 'floats')!, shovel = cItems!.list.find(it => it.kind === 'shovel-old')!;
+    check(cChest!.kind === 'box' && cChest!.list.length === 0, 'у нового игрока в доме пустой сундучок');
+    check((await chest(() => c.send('chestPut', { id: floats.id, at: null }), 'отказ издалека')).note === 'far', 'от кровати до сундука не дотянуться');
+    check((await chest(() => c.send('chestKind', { kind: 'chest' }), 'отказ сменить сундук издалека')).note === 'far', 'сундук меняют, только стоя у него');
+    await walkIn(Indoor.chest, c, cIn);
+    cItems = null;
+    let box = await chest(() => c.send('chestPut', { id: floats.id, at: null }), 'поплавки в сундуке', m => m.list.some(it => it.id === floats.id));
+    await until('рюкзак без поплавков', () => !!cItems && !cItems.list.some(it => it.id === floats.id));
+    check(box.list.find(it => it.id === floats.id)!.x === 0, 'поплавки из рюкзака легли в сундук на первое свободное место');
+    box = await chest(() => c.send('chestPut', { id: shovel.id, at: { x: 1, y: 2, rot: false } }), 'лопата в сундуке', m => m.list.some(it => it.id === shovel.id));
+    check(box.list.find(it => it.id === shovel.id)!.y === 2, 'лопата легла в сундук в ту клетку, куда её положили');
+    c.send('chestMove', { id: floats.id, x: 4, y: 3, rot: false });
+    box = await chest(() => c.send('chestKind', { kind: 'trunk' }), 'большой сундук', m => m.kind === 'trunk');
+    check(box.list.find(it => it.id === floats.id)!.x === 4, 'поплавки переложены в сундуке, а сам он теперь — большой сундук');
+    await sleep(300);
+    const kept = await loadChest(db, cook.id);
+    check(kept.kind === 'trunk' && kept.list.some(it => it.id === floats.id && it.x === 4 && it.y === 3) && !(await loadItems(db, cook.id)).list.some(it => it.id === floats.id), 'в базе сундук большой, поплавки в нём, а в рюкзаке их нет');
+    check((await robItems(db, cook.id, [floats.id])).length === 0, 'из сундука во сне не украсть — вещи в нём целы');
+    cItems = null;
+    box = await chest(() => c.send('chestTake', { id: floats.id, at: null }), 'поплавки из сундука', m => !m.list.some(it => it.id === floats.id));
+    await until('поплавки в рюкзаке', () => !!cItems && cItems.list.some(it => it.id === floats.id));
+    check(box.list.length === 1, 'поплавки вынуты из сундука в рюкзак, лопата осталась');
     await c.leave();
     await sleep(300);
     const cWorld = (await loadPlayer(db, cook.id))!.world!;
@@ -717,13 +759,14 @@ await sleep(500);
 // жуёт рыбу HUNGER.EAT секунд — это в состоянии комнаты, его видят все; вторую рыбу в это время не съесть
 {
   const eater = await createAccount(db, 'едок_' + Math.random().toString(36).slice(2, 8), 'не-для-входа');
-  for (let i = 0; i < 2; i++) await recordCatch(db, eater.id, { id: 'roach', grams: 100 + i });
-  const r: Room = await client.joinOrCreate(ROOM, { ticket: issueTicket(eater.id, eater.name) });
+  const eaterPail = (await loadItems(db, eater.id)).hands.find(it => ITEMS.isBucket(it.kind))!.id;
+  for (let i = 0; i < 2; i++) await recordCatch(db, eater.id, { id: 'roach', grams: 100 + i }, eaterPail);
+  const r: Room = await client.joinOrCreate(ROOM, { ticket: issueTicket(eater.id, eater.name), pier: eater.id });
   let plate: ServerMessages['items'] | null = null;
   const ate: ServerMessages['food'][] = [];
   r.onMessage('items', (m: ServerMessages['items']) => { plate = m; });
   r.onMessage('food', (m: ServerMessages['food']) => { ate.push(m); });
-  for (const type of ['self', 'bag', 'fish', 'clock', 'weather', 'hunger', 'fridge']) r.onMessage(type, () => {});
+  for (const type of ['self', 'bags', 'fish', 'clock', 'weather', 'hunger', 'fridge', 'chest']) r.onMessage(type, () => {});
   const seen = () => (r.state as { players: { get(sid: string): PlayerView | undefined } }).players.get(r.sessionId);
   const take = async () => { plate = null; r.send('fishTake', { species: 'roach' }); await until('рыбу у едока', () => !!plate && plate.hands.some(it => it.kind === 'fish' && it.id > 0)); };
   await until('едока в комнате', () => !!plate && !!seen());
@@ -747,13 +790,14 @@ await sleep(500);
 // шли, — она у того, кто поднял. Когда за рыбой придут, сервер решает сам (SCRAPS.fate), а в разработке зовут сразу (scrap).
 {
   const host = await createAccount(db, 'рыбак_' + Math.random().toString(36).slice(2, 8), 'не-для-входа');
-  for (let i = 0; i < 3; i++) await recordCatch(db, host.id, { id: 'roach', grams: 100 + i });
-  const r: Room = await client.joinOrCreate(ROOM, { ticket: issueTicket(host.id, host.name) });
+  const hostPail = (await loadItems(db, host.id)).hands.find(it => ITEMS.isBucket(it.kind))!.id;
+  for (let i = 0; i < 4; i++) await recordCatch(db, host.id, { id: 'roach', grams: 100 + i }, hostPail);
+  const r: Room = await client.joinOrCreate(ROOM, { ticket: issueTicket(host.id, host.name), pier: host.id });
   let plate: ServerMessages['items'] | null = null;
   r.onMessage('items', (m: ServerMessages['items']) => { plate = m; });
-  for (const type of ['self', 'bag', 'fish', 'clock', 'weather', 'hunger', 'food', 'fridge']) r.onMessage(type, () => {});
+  for (const type of ['self', 'bags', 'fish', 'clock', 'weather', 'hunger', 'food', 'fridge', 'chest']) r.onMessage(type, () => {});
   const lying = (id: number) => onGround(id, r);
-  const stored = async (id: number) => (await loadGround(db)).some(g => g.id === id) || (await loadItems(db, host.id)).hands.some(it => it.id === id);
+  const stored = async (id: number) => (await loadGround(db, pierPlace(host.id))).some(g => g.id === id) || (await loadItems(db, host.id)).hands.some(it => it.id === id);
   await until('рыбака в комнате', () => !!plate);
   r.send('stand');
   await sleep(300);
@@ -784,41 +828,125 @@ await sleep(500);
     await until('рыбу снова в руке', () => !!plate && plate.hands.some(it => it.id === b.id));
     await sleep((SCRAPS.TAKE.cat + 1) * 1000);
     check(!lying(b.id) && (await loadItems(db, host.id)).hands.some(it => it.id === b.id), 'кот шёл за рыбой, но её подняли — она в руке и в базе, кот ушёл ни с чем');
-    const pailId = plate!.hands.find(it => ITEMS.isBucket(it.kind))!.id;
-    r.send('itemDrop', { id: pailId });
-    await until('ведро на земле', () => !!lying(pailId));
-    r.send('scrap', { id: pailId, by: 'fade' });
+    r.send('itemDrop', { id: hostPail });
+    await until('ведро на земле', () => !!lying(hostPail));
+    r.send('scrap', { id: hostPail, by: 'fade' });
     await sleep(400);
-    check(lying(pailId)?.end === '', 'не рыбу звери не трогают: ведро на земле лежит как лежало');
+    check(lying(hostPail)?.end === '', 'не рыбу звери не трогают: ведро на земле лежит как лежало');
   } else {
     r.send('scrap', { id: a.id, by: 'gull' });
     await sleep(400);
     check(lying(a.id)?.end === '', 'звать зверя к рыбе с клиента нельзя — сервер не слушает');
+    r.send('itemDrop', { id: hostPail });
+    await until('ведро на земле', () => !!lying(hostPail));
   }
+  // ведро на земле — общее: сосед приходит в гости, достаёт из него рыбу, а потом уносит его — и улов уходит вместе с ведром
+  await sleep(300);
+  const left = haulOf(lying(hostPail)!.haul).roach ?? 0;
+  check(left >= 1, `в ведре рыбака на земле ${left} ${left === 1 ? 'рыба' : 'рыбы'} — это видят все`);
   await r.leave();
+  await sleep(300);
+  const nb = await createAccount(db, 'сосед_' + Math.random().toString(36).slice(2, 8), 'не-для-входа');
+  const n: Room = await client.joinOrCreate(ROOM, { ticket: issueTicket(nb.id, nb.name), pier: host.id });
+  let nItems: ServerMessages['items'] | null = null, nBags: ServerMessages['bags'] | null = null, nSelf: WorldState | null = null, nPiers: ServerMessages['piers'] | null = null;
+  n.onMessage('items', (m: ServerMessages['items']) => { nItems = m; });
+  n.onMessage('bags', (m: ServerMessages['bags']) => { nBags = m; });
+  n.onMessage('self', (m: WorldState) => { nSelf = m; });
+  n.onMessage('piers', (m: ServerMessages['piers']) => { nPiers = m; });
+  for (const type of ['fish', 'clock', 'weather', 'hunger', 'food', 'fridge', 'worms', 'chest']) n.onMessage(type, () => {});
+  const nSeen = () => (n.state as { players: { get(sid: string): PlayerView | undefined } }).players.get(n.sessionId);
+  const pierOf = (who: Room) => who.state as unknown as { owner: string; ownerName: string };
+  await until('соседа в комнате', () => !!nItems && !!nBags && !!onGround(hostPail, n) && !!nSeen());
+  check(pierOf(n).owner === host.id && pierOf(n).ownerName === host.name, 'сосед пришёл в гости на причал рыбака — это видно в комнате');
+  {   // хозяин вернулся, пока гость у него: они в одной комнате и видят друг друга
+    const h = await client.joinOrCreate(ROOM, { ticket: issueTicket(host.id, host.name), pier: host.id });
+    for (const type of ['self', 'items', 'bags', 'fish', 'clock', 'weather', 'hunger', 'food', 'fridge', 'worms', 'chest']) h.onMessage(type, () => {});
+    const count = (who: Room) => (who.state as { players?: { size: number } } | undefined)?.players?.size ?? 0;   // состояние приходит не сразу
+    await until('хозяина и гостя вместе', () => count(h) === 2 && count(n) === 2);
+    check(h.roomId === n.roomId, 'хозяин и гость на одном причале — в одной комнате и видят друг друга');
+    await h.leave();
+    await until('хозяин ушёл', () => count(n) === 1);
+  }
+  check(nSeen()!.x === standPoint().x && !nSeen()!.wearing && nSeen()!.px === -1000, 'гость стоит у места рыбака, а его рюкзак остался дома — здесь его нет');
+  const own = nItems!.hands.find(it => ITEMS.isBucket(it.kind))!;
+  const nAt = { ...standPoint() }, g = onGround(hostPail, n)!;
+  await walk(World.nearestWalkable(g.x, g.y + 4)!, n, nAt);
+  await sleep(300);
+  nItems = null;
+  n.send('fishTake', { species: 'roach', pail: hostPail });
+  await until('рыбу у соседа', () => !!nItems && nItems.hands.some(it => it.kind === 'fish' && it.id > 0));
+  await until('ведро рыбака стало легче', () => (haulOf(onGround(hostPail, n)?.haul ?? '').roach ?? 0) === left - 1);
+  check(!nItems!.hands.find(it => it.kind === 'fish')!.left, 'сосед достал рыбу из чужого ведра на земле в свободную руку — в ведре стало на одну меньше');
+  const fishId = nItems!.hands.find(it => it.kind === 'fish')!.id;
+  n.send('itemDrop', { id: own.id });             // своё ведро — на землю: левая рука для чужого
+  await until('своё ведро на земле', () => !!onGround(own.id, n) && nBags!.every(b => b.id !== own.id));
+  await sleep(300);
+  n.send('itemPick', { id: hostPail, left: true });
+  await until('ведро рыбака у соседа', () => !onGround(hostPail, n) && !!nBags?.some(b => b.id === hostPail && b.bag.total === left - 1));
+  check(true, `сосед унёс ведро рыбака — с ним и ${left - 1} ${left - 1 === 1 ? 'рыба' : 'рыбы'} в нём`);
+  await sleep(300);
+  const [nStored, hStored] = await Promise.all([loadItems(db, nb.id), loadItems(db, host.id)]);
+  check(nStored.hands.some(it => it.id === hostPail) && !hStored.hands.some(it => it.id === hostPail) && !hStored.list.some(it => it.id === hostPail), 'в базе ведро теперь соседа, у рыбака его нет');
+  check(nItems!.hands.some(it => it.id === fishId), 'рыба, которую он достал раньше, — по-прежнему у него в руке');
+  // в чужой дом гостю не войти
+  await walk(homePoint(), n, nAt);
+  nSelf = null;
+  n.send('enter');
+  await until('отказ войти в чужой дом', () => !!nSelf);
+  check(!nSelf!.inside && nSeen()?.inside === false, 'в чужой дом гостю не войти — дверь открывается только хозяину');
+  // на каком причале сейчас кто-то есть — свой виден, этот (где он сам) — нет
+  const lone = await createAccount(db, 'одиночка_' + Math.random().toString(36).slice(2, 8), 'не-для-входа');
+  const l: Room = await client.joinOrCreate(ROOM, { ticket: issueTicket(lone.id, lone.name), pier: lone.id });
+  for (const type of ['self', 'items', 'bags', 'fish', 'clock', 'weather', 'hunger', 'food', 'fridge', 'worms', 'chest']) l.onMessage(type, () => {});
+  await until('одиночку на его причале', () => pierOf(l).owner === lone.id);
+  n.send('piers');
+  await until('список причалов', () => !!nPiers);
+  check(nPiers!.list.some(p => p.owner === lone.id && p.name === lone.name && p.players === 1) && !nPiers!.list.some(p => p.owner === host.id), 'в списке причалов есть причал одиночки с одним игроком, а причала, где сосед сейчас, нет');
+  check(!onGround(own.id, l) && l.roomId !== n.roomId, 'ведро, оставленное соседом на причале рыбака, на чужом причале не видно');
+  await l.leave();
+  await n.leave();
+  await sleep(300);
+  const [hostGround, nbGround] = await Promise.all([loadGround(db, pierPlace(host.id)), loadGround(db, pierPlace(nb.id))]);
+  check(hostGround.some(it => it.id === own.id) && !nbGround.some(it => it.id === own.id), 'в базе ведро соседа лежит на причале рыбака, а не у него дома');
+  const nbWorld = (await loadPlayer(db, nb.id))!.world!;
+  check(nbWorld.x === seat.x && nbWorld.y === seat.y && nbWorld.sitting && !nbWorld.pack.worn, 'дома у соседа всё как было: из гостей он вернётся на своё место рыбака, рюкзак дома');
+  // у себя дома сосед видит свою землю — пустую
+  const nHome: Room = await client.joinOrCreate(ROOM, { ticket: issueTicket(nb.id, nb.name), pier: nb.id });
+  for (const type of ['self', 'items', 'bags', 'fish', 'clock', 'weather', 'hunger', 'food', 'fridge', 'worms', 'chest']) nHome.onMessage(type, () => {});
+  await until('соседа дома', () => pierOf(nHome).owner === nb.id);
+  await sleep(300);
+  check(!onGround(own.id, nHome) && !onGround(hostPail, nHome), 'дома у соседа на земле нет вещей с причала рыбака');
+  await nHome.leave();
   await sleep(300);
 }
 
-// голод: сытость на нуле почти три минуты — входим, и герой засыпает; спит — ходить нельзя, треть рыбы из ведра пропадает
-for (let i = 0; i < 10; i++) await recordCatch(db, me.id, { id: 'roach', grams: 100 + i });
+// голод: сытость на нуле почти три минуты — входим, и герой засыпает; спит — ходить нельзя, из рюкзака и рук крадут
+// часть вещей (HUNGER.lost), а что на земле и в холодильнике — не трогают; проснувшись, он узнаёт, что мог что-то потерять
+for (let i = 0; i < 10; i++) await recordCatch(db, me.id, { id: 'roach', grams: 100 + i }, pail.id);   // ведро — на земле у причала
+const kept = await loadItems(db, me.id), had = kept.list.length + kept.hands.length;
 const saved = (await loadPlayer(db, me.id))!.world!;
 await saveWorld(db, me.id, { ...saved, sitting: false, food: 0, starve: HUNGER.STARVE - 0.5 });
 async function enter() {
-  const r: Room = await client.joinOrCreate(ROOM, { ticket: issueTicket(me.id, me.name) });
-  self = null; hunger = null; bag = null;
+  const r: Room = await client.joinOrCreate(ROOM, { ticket: issueTicket(me.id, me.name), pier: me.id });
+  self = null; hunger = null; items = null; woke = false;
   r.onMessage('self', (m: WorldState) => { self = m; });
-  r.onMessage('bag', (m: Bag) => { bag = m; });
-  r.onMessage('hunger', (m: ServerMessages['hunger']) => { hunger = m; });
-  for (const type of ['fish', 'clock', 'weather', 'items', 'food', 'fridge']) r.onMessage(type, () => {});
-  await until('себя после входа', () => !!self && !!hunger && !!bag);
+  r.onMessage('hunger', (m: ServerMessages['hunger']) => { hunger = m; if (m.woke) woke = true; });
+  r.onMessage('items', (m: ServerMessages['items']) => { items = m; });
+  for (const type of ['fish', 'bags', 'clock', 'weather', 'food', 'fridge', 'worms', 'chest']) r.onMessage(type, () => {});
+  await until('себя после входа', () => !!self && !!hunger && !!items);
   return r;
 }
+let woke = false;
 let hungry = await enter();
-check(hunger!.food === 0 && hunger!.sleep === 0 && bag!.total === 10, 'вошёл голодным: сытость на нуле, в ведре десять рыб');
+check(hunger!.food === 0 && hunger!.sleep === 0 && items!.list.length + items!.hands.length === had, `вошёл голодным: сытость на нуле, вещей ${had}`);
 await until('уснул', () => !!hunger && hunger.sleep > 0, 3000);
-check(hunger!.sleep > (HUNGER.SLEEP - 5) * 1000, `голодный уснул на ${HUNGER.SLEEP / 60} минуты`);
-await until('рыба пропала', () => hunger?.lost !== undefined && bag!.total < 10);
-check(hunger!.lost === 3 && bag!.total === 7, 'пока спит, из ведра пропало три рыбы из десяти');
+check(hunger!.sleep > (HUNGER.SLEEP - 5) * 1000 && !woke, `голодный уснул на ${HUNGER.SLEEP / 60} минуты`);
+await until('вещи пропали', () => !!items && items.list.length + items.hands.length < had);
+check(items!.list.length + items!.hands.length === had - HUNGER.lost(had), `пока спит, из рюкзака и рук украли ${HUNGER.lost(had)} из ${had} вещей`);
+await sleep(500);
+const robbed = await loadItems(db, me.id);
+check(robbed.list.length + robbed.hands.length === had - HUNGER.lost(had), 'кража записана в базу');
+check((await loadBags(db, [pail.id])).get(pail.id)!.counts.roach === 10 && (await loadGround(db, pierPlace(me.id))).some(g => g.id === pail.id), 'ведро на земле не тронули — в нём все десять рыб');
 const asleep = { ...self! };
 self = null;
 hungry.send('move', { x: asleep.x + 3, y: asleep.y, dir: 'down' });
@@ -833,13 +961,13 @@ await saveWorld(db, me.id, { ...tired, sleep: Date.now() + 1500 });
 hungry = await enter();
 check(hunger!.sleep > 0, 'после перезахода герой всё ещё спит');
 await until('проснулся', () => !!hunger && hunger.sleep === 0 && !!self && self.x === home.x, 5000);
-check(self!.y === home.y && hunger!.food === HUNGER.MAX, 'выспался — проснулся у крыльца дома сытым');
+check(self!.y === home.y && hunger!.food === HUNGER.MAX && woke, 'выспался — проснулся у крыльца дома сытым, и ему сказали, что пока он спал, могли украсть вещи');
 await hungry.leave();
 await sleep(500);
 const late = (await loadPlayer(db, me.id))!.world!;
 await saveWorld(db, me.id, { ...late, x: seat.x, y: seat.y - 30, sleep: Date.now() - 1000 });
 hungry = await enter();
-check(self!.x === home.x && self!.y === home.y && hunger!.food === HUNGER.MAX && hunger!.sleep === 0, 'сон кончился, пока игрока не было, — входит у дома, сытый');
+check(self!.x === home.x && self!.y === home.y && hunger!.food === HUNGER.MAX && hunger!.sleep === 0 && woke, 'сон кончился, пока игрока не было, — входит у дома, сытый, и узнаёт о возможной краже');
 await hungry.leave();
 await db.close();
 console.log('всё работает');

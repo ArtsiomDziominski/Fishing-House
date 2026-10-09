@@ -1,4 +1,5 @@
-<!-- Справа вверху: часы и погода причала, кто сейчас здесь (имя — ссылка на профиль) и выход в меню.
+<!-- Справа вверху: часы и погода причала, чей это причал (и куда сходить в гости), кто сейчас здесь
+     (имя — ссылка на профиль) и выход в меню.
      В разработке часы и погоду можно выставить: это делает сервер, сразу у всех игроков. -->
 <script setup lang="ts">
 import { WEATHERS, WEATHER_NAMES, type WeatherKind } from '@fh/shared';
@@ -6,10 +7,12 @@ import { WEATHERS, WEATHER_NAMES, type WeatherKind } from '@fh/shared';
 const emit = defineEmits<{
   clock: [hour: number | null];                            // перевести часы причала на этот час; null — настоящее время
   weather: [kind: WeatherKind | null, wind: boolean | null];   // выставить погоду и ветер; null — по расписанию
+  piers: [];                                               // спросить у сервера, где сейчас есть игроки
+  visit: [owner: string];                                  // перейти на причал этого игрока (свой id — домой)
 }>();
 const game = useGameStore();
 const { user } = useUserSession();
-const open = ref<'clock' | 'list' | null>(null);
+const open = ref<'clock' | 'list' | 'piers' | null>(null);
 
 const PRESETS = [{ name: 'Утро', hour: 6 }, { name: 'День', hour: 12 }, { name: 'Вечер', hour: 19 }, { name: 'Ночь', hour: 23 }];
 const DAY_MINUTES = 24 * 60;
@@ -34,7 +37,12 @@ onBeforeUnmount(() => clearTimeout(settle));
 
 // после клика снимаем фокус с кнопки, иначе пробел и Enter будут нажимать её, а не подсекать
 function blur(ev: Event) { (ev.currentTarget as HTMLElement).blur(); }
-function toggle(ev: Event, what: 'clock' | 'list') { blur(ev); open.value = open.value === what ? null : what; }
+function toggle(ev: Event, what: 'clock' | 'list' | 'piers') {
+  blur(ev); open.value = open.value === what ? null : what;
+  if (open.value === 'piers') { game.piers = null; emit('piers'); }   // список каждый раз свежий
+}
+function go(ev: Event, owner: string) { blur(ev); open.value = null; emit('visit', owner); }
+const playersWord = (n: number) => (n % 10 === 1 && n % 100 !== 11 ? 'игрок' : [2, 3, 4].includes(n % 10) && ![12, 13, 14].includes(n % 100) ? 'игрока' : 'игроков');
 function setClock(ev: Event, hour: number | null) { blur(ev); draft.value = null; emit('clock', hour); }
 function setKind(ev: Event, kind: WeatherKind | null) { blur(ev); emit('weather', kind, game.sky.fixWind); }
 function setWind(ev: Event, wind: boolean | null) { blur(ev); emit('weather', game.sky.fixKind, wind); }
@@ -52,6 +60,12 @@ function setWind(ev: Event, wind: boolean | null) { blur(ev); emit('weather', ga
         </button>
         <span v-else class="chip clock still" title="Время и погода на причале: игровой час идёт минуту">{{ game.sky.label }}<span class="wx"> · {{ game.sky.weather }}</span></span>
       </template>
+      <button
+        v-if="game.whose.owner" type="button" class="chip pier" :class="{ guest: game.whose.guest }"
+        title="Чей это причал. Нажми, чтобы сходить в гости" :aria-expanded="open === 'piers'" @click="toggle($event, 'piers')"
+      >
+        {{ game.whose.guest ? `В гостях: ${game.whose.name}` : 'Твой причал' }}
+      </button>
       <button type="button" class="chip" :aria-expanded="open === 'list'" @click="toggle($event, 'list')">
         <span class="dot" :class="'is-' + game.status" />
         На причале: {{ game.online.length }}
@@ -86,6 +100,17 @@ function setWind(ev: Event, wind: boolean | null) { blur(ev); emit('weather', ga
         </div>
       </div>
       <p class="muted">Время и погода меняются на сервере — сразу у всех игроков. Работает только в разработке.</p>
+    </div>
+
+    <div v-if="open === 'piers'" class="list piers">
+      <button v-if="game.whose.guest" type="button" class="home" @click="go($event, user?.id ?? '')">Домой, на свой причал</button>
+      <span class="muted">Сейчас играют на причалах:</span>
+      <p v-if="game.piers === null" class="muted">Смотрим…</p>
+      <p v-else-if="!game.piers.length" class="muted">Больше никого нет. Сходить в гости можно и из профиля игрока.</p>
+      <button v-for="p in game.piers" :key="p.owner" type="button" @click="go($event, p.owner)">
+        <span>{{ p.owner === user?.id ? 'Твой причал' : p.name }}</span>
+        <span class="muted">{{ p.players }} {{ playersWord(p.players) }}</span>
+      </button>
     </div>
 
     <ul v-if="open === 'list'" class="list">
@@ -127,6 +152,19 @@ function setWind(ev: Event, wind: boolean | null) { blur(ev); emit('weather', ga
   user-select: text;
 }
 .list li { padding: 2px 0; }
+.chip.pier.guest { border-color: var(--coat); }   /* ты в гостях */
+.piers { display: grid; gap: 6px; width: 244px; user-select: none; }
+.piers button {
+  display: flex; justify-content: space-between; gap: 8px;
+  padding: 6px 10px;
+  border: 1px solid rgba(244, 227, 193, 0.3); border-radius: 8px;
+  background: none; color: var(--paper);
+  font: 600 13px/1.2 var(--text); text-align: left;
+  cursor: pointer;
+}
+.piers button:hover { background: var(--wood-hover); }
+.piers button.home { justify-content: center; border-color: var(--coat); color: var(--coat); }
+.piers p { margin: 0; font-size: 12px; line-height: 1.35; }
 .skybox { display: grid; gap: 8px; width: 244px; max-height: 80vh; padding: 10px 12px; user-select: none; }
 .group { display: grid; gap: 6px; font-weight: 600; }
 .group input { width: 100%; margin: 0; accent-color: var(--coat); cursor: pointer; }

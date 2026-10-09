@@ -4,7 +4,9 @@
 // Вещи берут из рюкзака в руки и убирают обратно; в руках вещь клеток не занимает, но помнит, где лежала. Рук две —
 // правая (клавиша E) и левая (Q), и какая вещь в какой руке, помнится. Вещи двух весов: лёгкую держат одной рукой,
 // тяжёлую (сеть-накидку и невод) — только двумя, и взять её можно, лишь когда обе руки свободны. Ведро — такая же лёгкая
-// вещь: его носят в любой руке, а рыбачить можно, когда оно в руке или стоит на земле у места рыбака.
+// вещь: его носят в любой руке, а рыбачить можно, когда оно в руке или стоит на земле у места рыбака. Вёдра трёх видов
+// (BUCKETS): жестяное, красное и зелёное — каждое своего цвета и вмещает своё число рыб. Улов лежит в самом ведре
+// (catches.bucket_id): кто унёс ведро, тот унёс и рыбу, а из ведра на земле её может достать любой.
 // Любую вещь можно выложить на землю — из руки или из рюкзака; с земли её поднимает кто угодно, и она становится его.
 // Лампа горит только в руке или на земле. Банка червей помнит, сколько в ней червей (Item.worms; черви и лопаты — worms.ts). Рыба из ведра — тоже вещь (fish — сырая, fish-fried — жареная, вид рыбы в Item.fish):
 // сырую держат только в руке (в рюкзак её не убрать — её место в ведре), её жарят у костра и едят (голод — hunger.ts);
@@ -19,7 +21,7 @@ import type { Point } from './world.ts';
 export const ITEM_KINDS = [
   'rod-willow', 'rod-bamboo', 'rod-tele', 'rod-carbon', 'rod-gold',
   'net-scoop', 'net-cast', 'net-seine',
-  'axe', 'lamp', 'bucket',
+  'axe', 'lamp', 'bucket', 'bucket-red', 'bucket-green',
   'shovel-old', 'shovel-spade', 'shovel-scoop',
   'worms', 'floats',
   'fish', 'fish-fried',
@@ -41,6 +43,15 @@ export interface GroundItem { id: number; kind: ItemKind; x: number; y: number; 
 
 // Заглянуть в рюкзак можно, когда он на спине или лежит рядом с героем. slack — запас сервера на рывки сети.
 // Снятый рюкзак лежит снаружи: из дома (inside) до него не дотянуться, как бы ни совпали числа.
+// Вёдра: size — сколько рыб вмещает, tint — цвет, в который перекрашена жесть (null — как на картинке, серое). Вид у всех
+// один — 4×4 клетки, лёгкие; различаются цветом и вместимостью.
+export type BucketKind = Extract<ItemKind, `bucket${string}`>;
+export const BUCKETS: Record<BucketKind, { size: number; tint: [number, number, number] | null }> = {
+  'bucket': { size: 15, tint: null },
+  'bucket-red': { size: 30, tint: [196, 58, 44] },
+  'bucket-green': { size: 50, tint: [74, 148, 70] },
+};
+
 export const packInReach = (hero: Point & { inside?: boolean }, pack: PackState, slack = 0) => pack.worn || (!hero.inside && dist(hero, pack) <= REACH + slack);
 
 export const ITEMS = (() => {
@@ -55,7 +66,9 @@ export const ITEMS = (() => {
     'net-cast': { name: 'Сеть-накидка', group: 'net', w: 2, h: 2, heavy: true, text: 'Бросают кругом, по краю грузила.' },
     'net-seine': { name: 'Невод', group: 'net', w: 4, h: 1, heavy: true, text: 'Длинная сеть с поплавками и грузилами.' },
     'axe': { name: 'Топор', group: 'tool', w: 2, h: 1, text: 'Нарубить сучьев и наколоть дров.' },
-    'bucket': { name: 'Ведро', group: 'tool', w: 4, h: 4, text: 'Жестяное, с дужкой. Рыбачить можно, только когда оно в руке или стоит рядом.' },
+    'bucket': { name: 'Жестяное ведро', group: 'tool', w: 4, h: 4, text: `С дужкой. Вмещает ${BUCKETS.bucket.size} рыб. Рыбачить можно, только когда ведро в руке или стоит рядом.` },
+    'bucket-red': { name: 'Красное ведро', group: 'tool', w: 4, h: 4, text: `Эмалированное, вмещает ${BUCKETS['bucket-red'].size} рыб. Рыбачить можно, только когда ведро в руке или стоит рядом.` },
+    'bucket-green': { name: 'Зелёное ведро', group: 'tool', w: 4, h: 4, text: `Большое, вмещает ${BUCKETS['bucket-green'].size} рыб. Рыбачить можно, только когда ведро в руке или стоит рядом.` },
     'shovel-old': { name: 'Старая лопата', group: 'tool', w: 3, h: 1, text: 'Черенок потёрт, штык тупой. Копает по одному червю — на траве, не у воды и не на тропинках.' },
     'shovel-spade': { name: 'Штыковая лопата', group: 'tool', w: 3, h: 1, text: 'Острая, входит в землю легко. Копает по два червя за раз.' },
     'shovel-scoop': { name: 'Совковая лопата', group: 'tool', w: 3, h: 1, text: 'Широкий совок — поддевает сразу пять червей.' },
@@ -138,8 +151,9 @@ export const ITEMS = (() => {
   const isRod = (kind: string) => isKind(kind) && BY_KIND[kind].group === 'rod';
   // Наживка — черви: рыбачат, держа их в другой руке.
   const isBait = (kind: string) => kind === 'worms';
-  // Ведро: в него идёт улов, без него не забросить.
-  const isBucket = (kind: string) => kind === 'bucket';
+  // Ведро: в него идёт улов, без него не забросить. Сколько рыб в него влезает — capacity (у не-ведра 0).
+  const isBucket = (kind: string) => Object.hasOwn(BUCKETS, kind);
+  const capacity = (kind: string) => BUCKETS[kind as BucketKind]?.size ?? 0;
   // Рыба, вынутая из ведра: сырая или жареная. raw — сырая: её держат только в руке.
   const isFish = (kind: string) => kind === 'fish' || kind === 'fish-fried';
   const isRaw = (kind: string) => kind === 'fish';
@@ -244,5 +258,5 @@ export const ITEMS = (() => {
   // Сколько клеток занято.
   const used = (items: readonly Item[]) => items.reduce((n, it) => n + cells(it.kind), 0);
 
-  return { STARTER, isKind, info, size, cells, grid, turns, fits, spot, repack, settle, used, isRod, isBait, isBucket, isFish, isRaw, packable, title, meal, GROUND_MAX, dropSpot, nearest, HANDS, weight, load, sideOf, free, handFor, canHold, inHand, inOrder, unheld, lampOut, lampNear, take, stow };
+  return { STARTER, isKind, info, size, cells, grid, turns, fits, spot, repack, settle, used, isRod, isBait, isBucket, capacity, isFish, isRaw, packable, title, meal, GROUND_MAX, dropSpot, nearest, HANDS, weight, load, sideOf, free, handFor, canHold, inHand, inOrder, unheld, lampOut, lampNear, take, stow };
 })();

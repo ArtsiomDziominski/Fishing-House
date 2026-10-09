@@ -50,10 +50,10 @@ export async function findAccount(db: Db, name: string): Promise<(PlayerRef & { 
   return row || null;
 }
 
-// Ведро игрока: сколько каких рыб, самые крупные, общий вес и три последние. В ведре — то, что ещё не вынуто (catches.gone);
-// all — весь улов за всё время (для профиля).
-export async function loadBag(db: Db, pid: string, all = false): Promise<Bag> {
-  const bag = emptyBag(), mine = all ? eq(catches.playerId, pid) : and(eq(catches.playerId, pid), eq(catches.gone, false));
+// Весь улов игрока за всё время — для профиля: сколько каких рыб, самые крупные, общий вес и три последние. Рекорды
+// остаются, даже когда рыбу съели или унесли вместе с ведром.
+export async function loadBag(db: Db, pid: string): Promise<Bag> {
+  const bag = emptyBag(), mine = eq(catches.playerId, pid);
   const rows = await db.select({
     species: catches.species,
     n: sql<number>`count(*)::int`, best: sql<number>`max(${catches.grams})::int`, grams: sql<number>`sum(${catches.grams})::int`,
@@ -66,6 +66,28 @@ export async function loadBag(db: Db, pid: string, all = false): Promise<Bag> {
     .where(mine).orderBy(desc(catches.caughtAt), desc(catches.id)).limit(3);
   bag.recent = last.map(r => r.species).filter(id => FISH.byId[id]).reverse();
   return bag;
+}
+
+// Что лежит в этих вёдрах (id вещей-вёдер): рыба, которую в них поймали и ещё не вынули (catches.gone), кто бы её ни поймал.
+// В ответе есть каждое ведро из ids, пустое — с пустым уловом. Двумя запросами на все вёдра разом: по видам и три последние.
+export async function loadBags(db: Db, ids: readonly number[]): Promise<Map<number, Bag>> {
+  const out = new Map<number, Bag>(), want = [...new Set(ids)].filter(id => id > 0);
+  for (const id of want) out.set(id, emptyBag());
+  if (!want.length) return out;
+  const inside = and(inArray(catches.bucketId, want), eq(catches.gone, false));
+  const rows = await db.select({
+    bucket: catches.bucketId, species: catches.species,
+    n: sql<number>`count(*)::int`, best: sql<number>`max(${catches.grams})::int`, grams: sql<number>`sum(${catches.grams})::int`,
+  }).from(catches).where(inside).groupBy(catches.bucketId, catches.species);
+  for (const r of rows) {
+    const bag = out.get(r.bucket!); if (!bag || !FISH.byId[r.species]) continue;
+    bag.counts[r.species] = r.n; bag.best[r.species] = r.best; bag.total += r.n; bag.grams += r.grams;
+  }
+  const nth = sql<number>`row_number() over (partition by ${catches.bucketId} order by ${catches.caughtAt} desc, ${catches.id} desc)`.as('nth');
+  const ranked = db.select({ bucket: catches.bucketId, species: catches.species, nth }).from(catches).where(inside).as('ranked');
+  const last = await db.select().from(ranked).where(sql`${ranked.nth} <= 3`).orderBy(ranked.bucket, desc(ranked.nth));
+  for (const r of last) { const bag = out.get(r.bucket!); if (bag && FISH.byId[r.species]) bag.recent.push(r.species); }
+  return out;
 }
 
 // Сохранённое место героя и рюкзака; что не так — исправляем, чтобы игрок не застрял в стене.
@@ -93,30 +115,34 @@ export function cleanWorld(w: WorldState | null): WorldState | null {
   };
 }
 
-// Игрок входит в игру: берём его прогресс и отмечаем, что он был в игре сейчас.
-export async function loadPlayer(db: Db, pid: string): Promise<(PlayerRef & { world: WorldState | null; bag: Bag }) | null> {
+// Имя игрока по id; null — такого нет (сессия сайта живёт в cookie и переживает сброс базы; к кому идут в гости — тоже проверяем).
+export async function playerName(db: Db, pid: string): Promise<string | null> {
+  const [row] = await db.select({ name: players.name }).from(players).where(eq(players.id, pid)).limit(1);
+  return row?.name ?? null;
+}
+export const hasPlayer = async (db: Db, pid: string) => (await playerName(db, pid)) !== null;
+
+// Игрок входит в игру: берём его прогресс и отмечаем, что он был в игре сейчас. Улов — в вёдрах (loadBags).
+export async function loadPlayer(db: Db, pid: string): Promise<(PlayerRef & { world: WorldState | null }) | null> {
   const [row] = await db.update(players).set({ lastSeenAt: new Date() }).where(eq(players.id, pid))
     .returning({ id: players.id, name: players.name, world: players.world });
   if (!row) return null;
-  return { id: row.id, name: row.name, world: cleanWorld(row.world), bag: await loadBag(db, pid) };
+  return { id: row.id, name: row.name, world: cleanWorld(row.world) };
 }
 
 export async function saveWorld(db: Db, pid: string, world: WorldState): Promise<void> {
   await db.update(players).set({ world, lastSeenAt: new Date() }).where(eq(players.id, pid));
 }
-
-export async function recordCatch(db: Db, pid: string, fish: Catch): Promise<void> {
-  await db.insert(catches).values({ playerId: pid, species: fish.id, grams: fish.grams });
+// Игрок в гостях: дома меняется только то, что он носит с собой (patch — поля мира, packKind — вид рюкзака), а место героя
+// и рюкзака остаются, какими их записал дом, — даже если дом сохранил их позже, чем гость вошёл. Мира в базе ещё нет — home целиком.
+export async function saveAway(db: Db, pid: string, patch: Partial<WorldState>, packKind: string, home: WorldState): Promise<void> {
+  const merged = sql`jsonb_set(${players.world} || ${JSON.stringify(patch)}::jsonb, '{pack,kind}', to_jsonb(${packKind}::text))`;
+  await db.update(players).set({ world: sql`case when ${players.world} is null then ${JSON.stringify(home)}::jsonb else ${merged} end`, lastSeenAt: new Date() }).where(eq(players.id, pid));
 }
 
-// Герой уснул от голода: из ведра пропадает доля рыбы (HUNGER.lost), какая попадётся. Возвращает, сколько пропало.
-export async function loseCatches(db: Db, pid: string): Promise<number> {
-  return db.transaction(async tx => {
-    const left = await tx.select({ id: catches.id }).from(catches).where(and(eq(catches.playerId, pid), eq(catches.gone, false))).for('update');
-    const ids = left.map(r => r.id).sort(() => Math.random() - 0.5).slice(0, HUNGER.lost(left.length));
-    if (ids.length) await tx.update(catches).set({ gone: true }).where(inArray(catches.id, ids));
-    return ids.length;
-  });
+// Игрок pid поймал рыбу, и она легла в ведро bucket (null — ведро ещё пишется в базу или его нет: рыба только в рекордах).
+export async function recordCatch(db: Db, pid: string, fish: Catch, bucket: number | null = null): Promise<void> {
+  await db.insert(catches).values({ playerId: pid, species: fish.id, grams: fish.grams, bucketId: bucket });
 }
 
 export interface Profile {
@@ -134,7 +160,7 @@ export async function getProfile(db: Db, pid: string): Promise<Profile | null> {
   return {
     id: row.id, name: row.name, money: row.money,
     createdAt: row.createdAt.toISOString(), lastSeenAt: row.lastSeenAt ? row.lastSeenAt.toISOString() : null,
-    bag: await loadBag(db, pid, true),
+    bag: await loadBag(db, pid),
     latest: latest.map(c => ({ species: c.species, grams: c.grams, caughtAt: c.caughtAt.toISOString() })),
   };
 }

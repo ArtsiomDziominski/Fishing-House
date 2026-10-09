@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { ITEMS, ITEM_KINDS, packInReach, type GroundItem, type Item } from '../src/items.ts';
+import { BUCKETS, ITEMS, ITEM_KINDS, packInReach, type GroundItem, type Item } from '../src/items.ts';
 import { PACKS, PACK_KINDS } from '../src/packs.ts';
 import { REACH, startPack } from '../src/rules.ts';
 
@@ -9,11 +9,11 @@ const starter = (): Item[] => ITEMS.STARTER.filter(it => !it.held).map(({ held: 
 // он же без лопаты: в кожаном рюкзаке остаётся свободной нижняя строка — на ней и проверяем, куда встают вещи
 const basics = (): Item[] => starter().filter(it => !it.kind.startsWith('shovel'));
 
-test('у каждой вещи имя, подпись и размер в одну, две, три или четыре клетки, у ведра — 16', () => {
+test('у каждой вещи имя, подпись и размер в одну, две, три или четыре клетки, у вёдер — 16', () => {
   for (const kind of ITEM_KINDS) {
     const it = ITEMS.info(kind);
     assert.ok(it.name && it.text, kind);
-    assert.ok((kind === 'bucket' ? [16] : [1, 2, 3, 4]).includes(ITEMS.cells(kind)), `${kind}: ${ITEMS.cells(kind)} клеток`);
+    assert.ok((ITEMS.isBucket(kind) ? [16] : [1, 2, 3, 4]).includes(ITEMS.cells(kind)), `${kind}: ${ITEMS.cells(kind)} клеток`);
   }
   const groups = (g: string) => ITEM_KINDS.filter(k => ITEMS.info(k).group === g).length;
   assert.equal(groups('rod'), 5);
@@ -95,6 +95,18 @@ test('ведро — вещь 4×4: лёгкое, у нового игрока �
   const pail: Item = { id: 3, kind: 'bucket', x: 0, y: 0, rot: false, left: false };
   assert.equal(ITEMS.handFor([pail], 'worms'), 'left');                 // ведро в правой — вторая вещь в левую
   assert.equal(ITEMS.handFor([], 'bucket', 'right'), 'right');
+});
+
+test('вёдер три: каждое своего цвета и вмещает своё число рыб, и это написано в подписи', () => {
+  const kinds = ITEM_KINDS.filter(ITEMS.isBucket);
+  assert.ok(kinds.length >= 3);
+  assert.equal(new Set(kinds.map(ITEMS.capacity)).size, kinds.length, 'вместимость у всех разная');
+  assert.equal(new Set(kinds.map(k => String(BUCKETS[k as keyof typeof BUCKETS].tint))).size, kinds.length, 'цвет у всех разный');
+  for (const k of kinds) {
+    assert.ok(ITEMS.capacity(k) > 0 && ITEMS.info(k).text.includes(String(ITEMS.capacity(k))), k);
+    assert.equal(ITEMS.weight(k), 1, `${k} — лёгкое, в одной руке`);
+  }
+  assert.equal(ITEMS.capacity('lamp'), 0);
 });
 
 test('вещи двух весов: лёгкую держат одной рукой, тяжёлую — двумя', () => {

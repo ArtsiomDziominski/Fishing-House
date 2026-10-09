@@ -61,6 +61,7 @@ async function copyLink() {
 
       <footer>
         <NuxtLink v-if="mine" to="/play" class="btn primary">Играть</NuxtLink>
+        <NuxtLink v-else-if="user" :to="{ path: '/play', query: { pier: id } }" class="btn primary">Сходить в гости</NuxtLink>
         <button type="button" class="btn" @click="copyLink">{{ copied ? 'Ссылка скопирована' : 'Ссылка на профиль' }}</button>
         <NuxtLink to="/" class="btn ghost">В меню</NuxtLink>
       </footer>

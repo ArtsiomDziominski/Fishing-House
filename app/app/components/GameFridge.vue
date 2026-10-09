@@ -18,6 +18,7 @@ const rows = computed(() => {
 });
 const fishInHand = computed(() => game.hands.some(it => ITEMS.isFish(it.kind)));
 const pailInHand = computed(() => game.hands.some(it => ITEMS.isBucket(it.kind)));
+const inPail = computed(() => game.bags.reduce((n, b) => n + b.bag.total, 0));   // сколько рыбы в вёдрах в руках
 const full = computed(() => game.fridge.length >= FRIDGE.MAX);
 </script>
 
@@ -40,7 +41,7 @@ const full = computed(() => game.fridge.length >= FRIDGE.MAX);
     <p v-else class="muted empty">Пусто. Положи сюда рыбу — здесь она не пропадёт, даже если уснёшь от голода.</p>
     <div class="buttons">
       <button type="button" :disabled="!fishInHand || full" @click="emit('put')">Положить рыбу из рук</button>
-      <button v-if="pailInHand" type="button" :disabled="!game.bag.total || full" @click="emit('stock')">Переложить улов из ведра ({{ game.bag.total }})</button>
+      <button v-if="pailInHand" type="button" :disabled="!inPail || full" @click="emit('stock')">Переложить улов из ведра ({{ inPail }})</button>
     </div>
     <p class="muted tip">Нажми на рыбу — возьмёшь её в свободную руку</p>
   </aside>

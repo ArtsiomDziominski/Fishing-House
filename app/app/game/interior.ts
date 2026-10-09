@@ -312,6 +312,7 @@ export function createInteriorView() {
     // Кресло под указателем (вместе со спинкой): его номер в INDOOR.chairs; -1 — не кресло.
     onChair: (x: number, y: number) => CHAIRS.findIndex((ch, i) => { const [bx, , bw, bh] = (i ? BL.chairR : BL.chairL)!, by = BL.chairL![1]; return x >= bx - 1 && x <= bx + bw + 1 && y >= ch.y - 32 && y <= by + bh; }),
     onBed: (x: number, y: number) => x >= BL.bed![0] && x <= BL.bed![0] + BL.bed![2] && y >= BL.bed![1] - 24 && y <= BL.bed![1] + BL.bed![3],
+    onChest: (x: number, y: number) => x >= BL.chest![0] && x <= BL.chest![0] + BL.chest![2] && y >= BL.chest![1] - 10 && y <= BL.chest![1] + BL.chest![3],
     onFridge: (x: number, y: number) => x >= FR[0] && x <= FR[0] + FR[2] && y >= FR[1] - FTOP && y <= FR[1] + FR[3],
     // Как уложить спящего в кровать: голова на подушке (её ставит движок), а одеяло подтягивается до подбородка.
     pillow: { x: BL.bed![0] + (BL.bed![2] >> 1), y: BL.bed![1] + 1 },

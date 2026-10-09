@@ -6,6 +6,7 @@ export * from './indoor.ts';
 export * from './fish.ts';
 export * from './fishing.ts';
 export * from './packs.ts';
+export * from './chests.ts';
 export * from './items.ts';
 export * from './daytime.ts';
 export * from './hunger.ts';

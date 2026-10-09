@@ -4,7 +4,7 @@
 // (у того, что висит на руке, он выше карты: вещь начинается под кистью). Сбоку кисть посреди тела, и стоячий шест
 // лёг бы поперёк лица — поэтому длинные вещи там несут наклонив вперёд: lean — на сколько пикселей в строку.
 
-import type { ItemKind } from '@fh/shared';
+import type { BucketKind, ItemKind } from '@fh/shared';
 
 interface HeldArt { pal?: Record<string, string>; map: string[]; grip: [number, number]; lean?: number }
 
@@ -113,7 +113,7 @@ const SPADE_DOWN = down(SPADE), SCOOP_DOWN = down(SCOOP);
 const BUNDLE: [number, number] = [3, -1];
 
 // Ведра здесь нет: его в руке рисует движок картинкой bucket-carry.png на руке героя (HERO.carryRig).
-const HELD: Record<Exclude<ItemKind, 'bucket'>, HeldArt> = {
+const HELD: Record<Exclude<ItemKind, BucketKind>, HeldArt> = {
   'rod-willow': rod('8a9a3c', 'c98a4b', 'ecd585'),
   'rod-bamboo': rod('d9c36a', '8e3220', 'a8862e'),
   'rod-tele': rod('3f6f9a', '3a3a44', 'e4e8e4'),

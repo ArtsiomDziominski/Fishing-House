@@ -31,10 +31,20 @@ const onMap = (x: number, y: number): Point => ({ x: x + DATA.pic.x, y: y + DATA
     }
     return c;
   };
+  // Герой — не точка: ступни в середине, а плечи на HOUSE.clear.side пикселей в каждую сторону. Поэтому вокруг контура
+  // ещё полоса: по бокам — на полширины героя (иначе плечо уходит за угол, столб или поленницу, которые стоят ближе его ступней),
+  // спереди — на HOUSE.clear.front строк, чтобы ступни не вставали на нижний край стены.
+  const { side, front } = HOUSE.clear;
   const xs = poly.map(p => p.x), ys = poly.map(p => p.y);
-  for (let y = Math.max(0, Math.floor(Math.min(...ys))); y <= Math.min(H - 1, Math.ceil(Math.max(...ys))); y++)
-    for (let x = Math.max(0, Math.floor(Math.min(...xs))); x <= Math.min(W - 1, Math.ceil(Math.max(...xs))); x++)
-      if (inside(x + 0.5, y + 0.5)) walk[y * W + x] = 0;
+  const x0 = Math.max(0, Math.floor(Math.min(...xs))), x1 = Math.min(W - 1, Math.ceil(Math.max(...xs)));
+  const y0 = Math.max(0, Math.floor(Math.min(...ys))), y1 = Math.min(H - 1, Math.ceil(Math.max(...ys)));
+  for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) {
+    if (!inside(x + 0.5, y + 0.5)) continue;
+    for (let dy = 0; dy <= front; dy++) for (let dx = -side; dx <= side; dx++) {
+      const bx = x + dx, by = y + dy;
+      if (bx >= 0 && by >= 0 && bx < W && by < H) walk[by * W + bx] = 0;
+    }
+  }
 }
 // Костёр у дома (shared/src/campfire.ts): очаг тоже вычеркнут из проходимости.
 const fire = { ...onMap(...FIRE.at), rx: FIRE.rx, ry: FIRE.ry, sit: FIRE.sit };

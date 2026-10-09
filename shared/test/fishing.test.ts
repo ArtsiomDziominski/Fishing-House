@@ -130,3 +130,26 @@ test('банка опустела — рыбак больше не забрас�
   f.press();
   assert.equal(events.at(-1)!.e, 'noWorms', 'и забросить вручную тоже нельзя');
 });
+
+test('полное ведро: не забросить, а если наполнили, пока клевало, — рыбу некуда деть', () => {
+  const events: FishingEvent[] = [], room = { n: 0 };
+  const f = createFishing({ rnd: () => 0.1, hasRod: () => true, hasBait: () => true, hasBucket: () => true, hasRoom: () => room.n > 0, emit: e => events.push(e), grace: HOOK_GRACE });
+  const step = (sec: number) => { for (let t = 0; t < sec; t += 0.05) f.update(0.05); };
+  f.sit(); f.press();
+  assert.deepEqual(events, [{ e: 'bucketFull' }], 'в полное ведро не забрасывают');
+  assert.equal(f.st.phase, 'rest');
+  room.n = 1; f.press();
+  assert.equal(events.at(-1)!.e, 'cast');
+  step(TIME.cast + f.st.wait + 0.1);
+  assert.equal(f.st.phase, 'bite');
+  room.n = 0; f.press();                               // пока клевало, ведро наполнил кто-то другой
+  assert.equal(events.at(-1)!.e, 'bucketFull');
+  assert.ok(!events.some(e => e.e === 'hook'));
+  room.n = 1; step(TIME.scare + 0.1);
+  assert.equal(events.at(-1)!.e, 'cast', 'место появилось — забрасывает снова');
+  step(f.st.wait + TIME.cast + 0.1); f.press();
+  assert.equal(events.at(-1)!.e, 'hook');
+  room.n = 0; step(TIME.pull + TIME.fly + TIME.pause + 0.1);
+  assert.equal(f.st.phase, 'rest');
+  assert.equal(events.at(-1)!.e, 'bucketFull', 'последняя рыба заполнила ведро — дальше не забрасывает');
+});

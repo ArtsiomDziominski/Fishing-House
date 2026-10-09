@@ -3,12 +3,26 @@
 // накидка 2×2 — до 48×48, лопаты 3×1 — до 72×24, сачок и топор 2×1 — до 48×24, мелочь — до 24×24, ведро 4×4 — до 96×96 (его карту собрал скрипт
 // по кругам и эллипсам — жестяное ведро с водой, как bucket.png, только крупнее). В клетках рисуются по центру; повёрнутая
 // вещь — та же картинка, повёрнутая на четверть оборота по часовой. Рыба из ведра (fish, fish-fried) — 1×1, спрайтом своего вида.
+// Цветные вёдра — то же жестяное, перекрашенное (pailTint).
 
-import { FISH, ITEMS, type ItemKind } from '@fh/shared';
+import { BUCKETS, FISH, ITEMS, type BucketKind, type ItemKind } from '@fh/shared';
 
 export interface ItemArt { pal: Record<string, string>; map: string[] }
+type RGB = [number, number, number];
 
-export const ITEM_ART: Record<ItemKind, ItemArt> = {
+// Цвет ведра (BUCKETS.tint) вместо серой жести: тёмный металл — темнее этого цвета, светлый — светлее, до белого блика.
+// null — пиксель не жестяной (обводка, вода, деревянная ручка, трава под ведром): его не трогаем. Им же красят ведро
+// на карте и в руке (движок) и в гнезде руки рюкзака.
+export function pailTint(tint: readonly number[], r: number, g: number, b: number): RGB | null {
+  const hi = Math.max(r, g, b), lo = Math.min(r, g, b);
+  if (hi < 40 || hi - lo >= 40 || b - r > 25 || (g - r > 10 && g - b > 5)) return null;
+  const L = 0.3 * r + 0.59 * g + 0.11 * b;
+  return tint.map(c => Math.round(L < 140 ? c * L / 140 : c + (255 - c) * Math.min(1, (L - 140) / 115))) as RGB;
+}
+const hex = (c: readonly number[]) => c.map(v => v.toString(16).padStart(2, '0')).join('');
+const rgb = (h: string): RGB => [parseInt(h.slice(0, 2), 16), parseInt(h.slice(2, 4), 16), parseInt(h.slice(4, 6), 16)];
+
+const ART: Record<Exclude<ItemKind, Exclude<BucketKind, 'bucket'>>, ItemArt> = {
   'rod-willow': {
     pal: { C: 'ecd585', E: '8a9a3c', U: '8a7a3c', e: '4c6b2a', g: '5b7381', h: 'b5b9b8', k: '432115', l: 'e4e8e4', n: 'aab65a', o: '240702', r: 'c9532d', t: 'f4e3c1', u: '5a4a20', w: 'c98a4b' },
     map: [
@@ -494,6 +508,16 @@ export const ITEM_ART: Record<ItemKind, ItemArt> = {
   },
 };
 
+// Цветные вёдра: рисунок жестяного, палитра перекрашена.
+const tinted = (tint: readonly number[]): ItemArt => ({
+  pal: Object.fromEntries(Object.entries(ART.bucket.pal).map(([ch, h]) => [ch, ((c: RGB) => (pailTint(tint, ...c) ? hex(pailTint(tint, ...c)!) : h))(rgb(h))])),
+  map: ART.bucket.map,
+});
+export const ITEM_ART = {
+  ...ART,
+  ...Object.fromEntries(Object.entries(BUCKETS).filter(([, b]) => b.tint).map(([kind, b]) => [kind, tinted(b.tint!)])),
+} as Record<ItemKind, ItemArt>;
+
 const sprites = new Map<string, HTMLCanvasElement>();
 // Рыба из ведра рисуется спрайтом своего вида (fish — его id), как в панели ведра; жареная — подрумяненная, с тёмными
 // полосками от углей. Без вида — общая картинка из ITEM_ART.
@@ -521,8 +545,7 @@ export function itemSprite(kind: ItemKind, rot = false, fish?: string): HTMLCanv
   const at = (i: number, y: number): [number, number, number] | null => {
     if (px) { const o = (y * w + i) * 4; return px.data[o + 3] ? [px.data[o]!, px.data[o + 1]!, px.data[o + 2]!] : null; }
     const ch = map[y]![i]!; if (ch === '.') return null;
-    const hex = pal[ch] || 'ff00ff';
-    return [parseInt(hex.slice(0, 2), 16), parseInt(hex.slice(2, 4), 16), parseInt(hex.slice(4, 6), 16)];
+    return rgb(pal[ch] || 'ff00ff');
   };
   c = document.createElement('canvas');
   c.width = rot ? h : w; c.height = rot ? w : h;

@@ -1,11 +1,14 @@
 // Вещи игрока — в базе: загрузить (новому игроку — со стартовым набором), положить новую, записать места и что в руке.
 // Рыба из ведра — тоже вещь (fish, fish-fried): её вид лежит в items.fish, а в улове (catches) она отмечена gone.
-// Земля общая: вещи на ней (items.ground) принадлежат тому, кто их выложил, пока их не поднимет кто-нибудь — тогда у вещи
-// меняется хозяин. Рыбу можно положить в холодильник в доме (items.fridge): там у каждого своя полка. Можно ли так сделать, проверяет игровой сервер по правилам ITEMS (shared/src/items.ts); здесь только запись.
+// Улов лежит в ведре (catches.bucket_id) и переходит вместе с ним: подняли ведро — подняли и рыбу.
+// Земля у каждого места своя (items.place): вещи на ней (items.ground) принадлежат тому, кто их выложил, пока их не поднимет
+// кто-нибудь — тогда у вещи меняется хозяин. Рыбу можно положить в холодильник в доме (items.fridge): там у каждого своя полка;
+// остальные вещи — в свой сундук в доме (items.chest, его вид — players.chest). Можно ли так сделать, проверяет игровой сервер по правилам ITEMS (shared/src/items.ts); здесь только запись.
 
-import { and, asc, count, eq, inArray, sql } from 'drizzle-orm';
-import { ITEMS, type GroundItem, type Item, type ItemKind, type Place } from '../items.ts';
+import { and, asc, count, eq, inArray, or, sql } from 'drizzle-orm';
+import { ITEMS, ITEM_KINDS, type GroundItem, type Item, type ItemKind, type Place } from '../items.ts';
 import { FRIDGE } from '../indoor.ts';
+import { CHESTS, type ChestKind } from '../chests.ts';
 import type { Db } from './db.ts';
 import { catches, items, players } from './schema.ts';
 
@@ -23,7 +26,7 @@ export async function loadItems(db: Db, pid: string): Promise<{ list: Item[]; ha
   const rows = await db.transaction(async tx => {
     const [fresh] = await tx.update(players).set({ kit: true }).where(and(eq(players.id, pid), eq(players.kit, false))).returning({ id: players.id });
     if (fresh) await tx.insert(items).values(ITEMS.STARTER.map(({ left, ...it }) => ({ playerId: pid, ...it, leftHand: !!left })));
-    return tx.select({ ...columns, held: items.held, left: items.leftHand, fish: items.fish, worms: items.worms }).from(items).where(and(eq(items.playerId, pid), eq(items.ground, false), eq(items.fridge, false))).orderBy(asc(items.id));
+    return tx.select({ ...columns, held: items.held, left: items.leftHand, fish: items.fish, worms: items.worms }).from(items).where(and(eq(items.playerId, pid), eq(items.ground, false), eq(items.fridge, false), eq(items.chest, false))).orderBy(asc(items.id));
   });
   const list: Item[] = [], hands: Item[] = [];
   for (const { held, left, fish, worms, ...row } of rows) {
@@ -34,9 +37,9 @@ export async function loadItems(db: Db, pid: string): Promise<{ list: Item[]; ha
   return { list, hands };
 }
 
-// Всё, что лежит на земле, — у всех игроков разом: его видят во всех копиях причала, даже когда хозяина нет в игре.
-export async function loadGround(db: Db): Promise<Dropped[]> {
-  const rows = await db.select({ id: items.id, kind: items.kind, x: items.x, y: items.y, lit: items.lit, fish: items.fish, owner: items.playerId, worms: items.worms }).from(items).where(eq(items.ground, true)).orderBy(asc(items.id));
+// Всё, что лежит на земле этого места (place), — у всех игроков разом: его видят во всех копиях причала, даже когда хозяина нет в игре.
+export async function loadGround(db: Db, place: string): Promise<Dropped[]> {
+  const rows = await db.select({ id: items.id, kind: items.kind, x: items.x, y: items.y, lit: items.lit, fish: items.fish, owner: items.playerId, worms: items.worms }).from(items).where(and(eq(items.ground, true), eq(items.place, place))).orderBy(asc(items.id));
   const out: Dropped[] = [];
   for (const { worms, ...r } of rows) if (ITEMS.isKind(r.kind)) out.push({ ...r, kind: r.kind, ...(ITEMS.isBait(r.kind) && { worms }) });
   return out;
@@ -58,21 +61,21 @@ export async function setWorms(db: Db, pid: string, id: number, n: number): Prom
 export async function placeItems(db: Db, pid: string, list: readonly Stored[]): Promise<void> {
   if (!list.length) return;
   await db.transaction(async tx => {
-    for (const it of list) await tx.update(items).set({ x: it.x, y: it.y, rot: it.rot, held: !!it.held, leftHand: !!it.held && !!it.left, ground: false }).where(and(eq(items.id, it.id), eq(items.playerId, pid)));
+    for (const it of list) await tx.update(items).set({ x: it.x, y: it.y, rot: it.rot, held: !!it.held, leftHand: !!it.held && !!it.left, ground: false, chest: false }).where(and(eq(items.id, it.id), eq(items.playerId, pid)));
   });
 }
 
-// Выложить свою вещь на землю: x, y — место на карте, lit — горит ли (лампа), fish — хвосты рыб (ведро).
-export async function dropItem(db: Db, pid: string, it: GroundItem): Promise<void> {
-  await db.update(items).set({ x: it.x, y: it.y, rot: false, held: false, leftHand: false, ground: true, lit: it.lit, fish: it.fish }).where(and(eq(items.id, it.id), eq(items.playerId, pid)));
+// Выложить свою вещь на землю места place: x, y — место на карте, lit — горит ли (лампа), fish — вид рыбы (у ведра пусто:
+// что в нём — в улове).
+export async function dropItem(db: Db, pid: string, it: GroundItem, place: string): Promise<void> {
+  await db.update(items).set({ x: it.x, y: it.y, rot: false, held: false, leftHand: false, ground: true, chest: false, place, lit: it.lit, fish: ITEMS.isBucket(it.kind) ? '' : it.fish }).where(and(eq(items.id, it.id), eq(items.playerId, pid)));
 }
 
 // Поднять вещь с земли: она становится вещью игрока to и сразу ложится к нему в руку или в рюкзак (at). Чья она была, не важно,
 // важно лишь, что она ещё на земле: поднять одну вещь в двух копиях причала разом выйдет только у одного — false у второго.
-// Хвосты над ведром остаются на земле, а вид рыбы (fish, fish-fried) уходит вместе с ней.
+// Вид рыбы (fish, fish-fried) уходит вместе с ней, а улов в ведре — вместе с ведром (он привязан к нему, а не к игроку).
 export async function claimItem(db: Db, to: string, at: Stored): Promise<boolean> {
-  const fish = sql`CASE WHEN ${items.kind} IN ('fish', 'fish-fried') THEN ${items.fish} ELSE '' END`;
-  const rows = await db.update(items).set({ playerId: to, x: at.x, y: at.y, rot: at.rot, held: !!at.held, leftHand: !!at.held && !!at.left, ground: false, lit: false, fish })
+  const rows = await db.update(items).set({ playerId: to, x: at.x, y: at.y, rot: at.rot, held: !!at.held, leftHand: !!at.held && !!at.left, ground: false, chest: false, lit: false })
     .where(and(eq(items.id, at.id), eq(items.ground, true))).returning({ id: items.id });
   return rows.length > 0;
 }
@@ -82,18 +85,23 @@ export async function lightItem(db: Db, id: number, lit: boolean): Promise<void>
   await db.update(items).set({ lit }).where(and(eq(items.id, id), eq(items.ground, true)));
 }
 
-// В ведро на земле легла рыба: его хвосты (fish) — последние рыбы того, кто рыбачит рядом.
-export async function fishItem(db: Db, id: number, fish: string): Promise<void> {
-  await db.update(items).set({ fish }).where(and(eq(items.id, id), eq(items.ground, true)));
+// Ведро bucket под рукой у игрока pid: лежит на земле (чьё угодно) или его собственное. Внутри транзакции — ведро заодно
+// держится, пока она не кончится: поднять его в другой копии причала, пока из него достают рыбу, не выйдет.
+async function pailFor(tx: Parameters<Parameters<Db['transaction']>[0]>[0], pid: string, bucket: number): Promise<boolean> {
+  const [b] = await tx.select({ id: items.id }).from(items)
+    .where(and(eq(items.id, bucket), inArray(items.kind, BUCKET_KINDS), or(eq(items.ground, true), eq(items.playerId, pid)))).for('share');
+  return !!b;
 }
+const BUCKET_KINDS = ITEM_KINDS.filter(kind => ITEMS.isBucket(kind));
 
-// Достать рыбу вида species из ведра в руку (left — в левую): самую мелкую из тех, что ещё в ведре, — крупные пусть остаются
-// рекордами. В улове она отмечается gone, а в руке появляется вещь fish. Одной транзакцией: две вкладки одну рыбу не вынут.
-// null — такой рыбы в ведре нет.
-export async function takeFish(db: Db, pid: string, species: string, left: boolean): Promise<Item | null> {
+// Достать рыбу вида species из ведра bucket (на земле — чьего угодно, или своего) в руку игрока pid (left — в левую): самую
+// мелкую из тех, что в нём, — крупные пусть остаются. В улове она отмечается gone, а в руке появляется вещь fish. Одной
+// транзакцией: две вкладки одну рыбу не вынут. null — такой рыбы в ведре нет или ведра уже нет под рукой.
+export async function takeFish(db: Db, pid: string, bucket: number, species: string, left: boolean): Promise<Item | null> {
   return db.transaction(async tx => {
+    if (!await pailFor(tx, pid, bucket)) return null;
     const [c] = await tx.select({ id: catches.id }).from(catches)
-      .where(and(eq(catches.playerId, pid), eq(catches.species, species), eq(catches.gone, false)))
+      .where(and(eq(catches.bucketId, bucket), eq(catches.species, species), eq(catches.gone, false)))
       .orderBy(asc(catches.grams), asc(catches.id)).limit(1).for('update', { skipLocked: true });
     if (!c) return null;
     await tx.update(catches).set({ gone: true }).where(eq(catches.id, c.id));
@@ -116,6 +124,15 @@ export async function eatItem(db: Db, pid: string, id: number): Promise<void> {
 // подняли — она уже чья-то в руке или в рюкзаке, и её не трогаем.
 export async function scrapItem(db: Db, id: number): Promise<void> {
   await db.delete(items).where(and(eq(items.id, id), eq(items.ground, true), inArray(items.kind, ['fish', 'fish-fried'])));
+}
+
+// Пока герой спал от голода, у него украли эти вещи (из рюкзака и рук; что на земле, в холодильнике и в сундуке — не его
+// забота, их не трогаем). Вещи больше нет; украли ведро — рыба в нём ни в каком ведре (catches.bucket_id обнуляется сам). Возвращает,
+// какие вещи и правда пропали.
+export async function robItems(db: Db, pid: string, ids: readonly number[]): Promise<number[]> {
+  if (!ids.length) return [];
+  const rows = await db.delete(items).where(and(inArray(items.id, [...ids]), eq(items.playerId, pid), eq(items.ground, false), eq(items.fridge, false), eq(items.chest, false))).returning({ id: items.id });
+  return rows.map(r => r.id);
 }
 
 // ---------- холодильник (FRIDGE) ----------
@@ -142,19 +159,52 @@ export async function fridgeTake(db: Db, pid: string, id: number, left: boolean)
   return rows.length > 0;
 }
 
-// Переложить улов из ведра в холодильник: сколько влезет до FRIDGE.MAX, начиная с крупных — мелочь пусть лежит в ведре
-// под рукой. В улове рыба отмечается gone, на полке появляются вещи fish. Одной транзакцией. Возвращает, сколько переложено.
-export async function fridgeStock(db: Db, pid: string): Promise<number> {
+// Переложить улов из своего ведра bucket в холодильник: сколько влезет до FRIDGE.MAX, начиная с крупных — мелочь пусть
+// лежит в ведре под рукой. В улове рыба отмечается gone, на полке появляются вещи fish. Одной транзакцией. Возвращает, сколько переложено.
+export async function fridgeStock(db: Db, pid: string, bucket: number): Promise<number> {
   return db.transaction(async tx => {
+    if (!await pailFor(tx, pid, bucket)) return 0;
     const [{ n } = { n: 0 }] = await tx.select({ n: count() }).from(items).where(and(eq(items.playerId, pid), eq(items.fridge, true)));
     const room = FRIDGE.MAX - n;
     if (room <= 0) return 0;
     const got = await tx.select({ id: catches.id, species: catches.species }).from(catches)
-      .where(and(eq(catches.playerId, pid), eq(catches.gone, false)))
+      .where(and(eq(catches.bucketId, bucket), eq(catches.gone, false)))
       .orderBy(sql`${catches.grams} desc`, asc(catches.id)).limit(room).for('update', { skipLocked: true });
     if (!got.length) return 0;
     await tx.update(catches).set({ gone: true }).where(inArray(catches.id, got.map(c => c.id)));
     await tx.insert(items).values(got.map(c => ({ playerId: pid, kind: 'fish', fish: c.species, x: 0, y: 0, fridge: true })));
     return got.length;
   });
+}
+
+// ---------- сундук (CHESTS) ----------
+
+// Свой сундук: его вид и вещи в его сетке — по порядку, как получал.
+export async function loadChest(db: Db, pid: string): Promise<{ kind: ChestKind; list: Item[] }> {
+  const [row] = await db.select({ kind: players.chest }).from(players).where(eq(players.id, pid));
+  const rows = await db.select({ ...columns, worms: items.worms }).from(items).where(and(eq(items.playerId, pid), eq(items.chest, true))).orderBy(asc(items.id));
+  const list: Item[] = [];
+  for (const { worms, ...r } of rows) if (ITEMS.isKind(r.kind)) list.push((ITEMS.isBait(r.kind) ? { ...r, worms } : r) as Item);
+  return { kind: CHESTS.isKind(row?.kind) ? row.kind : CHESTS.DEFAULT, list };
+}
+
+// Свою вещь — в сундук или из сундука (chest), в эту клетку его сетки или рюкзака. Только свою и только не с земли и не
+// из холодильника: так её не переложить дважды из двух вкладок. false — вещи там, откуда её брали, уже нет.
+export async function chestPlace(db: Db, pid: string, it: Item, chest: boolean): Promise<boolean> {
+  const rows = await db.update(items).set({ chest, x: it.x, y: it.y, rot: it.rot, held: false, leftHand: false })
+    .where(and(eq(items.id, it.id), eq(items.playerId, pid), eq(items.ground, false), eq(items.fridge, false), eq(items.chest, !chest))).returning({ id: items.id });
+  return rows.length > 0;
+}
+
+// Записать, где теперь эти вещи в сундуке (переложили одну или разложили весь заново под новый сундук).
+export async function chestMove(db: Db, pid: string, list: readonly Item[]): Promise<void> {
+  if (!list.length) return;
+  await db.transaction(async tx => {
+    for (const it of list) await tx.update(items).set({ x: it.x, y: it.y, rot: it.rot }).where(and(eq(items.id, it.id), eq(items.playerId, pid), eq(items.chest, true)));
+  });
+}
+
+// Другой сундук.
+export async function setChestKind(db: Db, pid: string, kind: ChestKind): Promise<void> {
+  await db.update(players).set({ chest: kind }).where(eq(players.id, pid));
 }

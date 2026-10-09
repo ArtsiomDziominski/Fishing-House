@@ -25,7 +25,7 @@ export const PlayerState = schema({
   eat: t.string(),            // что он сейчас ест: вид рыбы-вещи ('fish', 'fish-fried'); пусто — не ест
   eatLeft: t.boolean(),       // ест левой рукой
   dig: t.boolean(),           // копает червей: лопата втыкается перед ним (WORMS.spot)
-  recent: t.array('string'),  // хвосты последних рыб — над ведром, когда оно у него в руке
+  recent: t.array('string'),  // хвосты последних рыб в ведре у него в руке — над ведром
 }, 'PlayerState');
 export type PlayerState = SchemaType<typeof PlayerState>;
 
@@ -37,6 +37,7 @@ export const GroundState = schema({
   lit: t.boolean(),           // горит (лампа)
   fish: t.string(),           // ведро — хвосты рыб над ним (id через запятую), рыба — её вид
   end: t.string(),            // рыба: за ней пришла чайка или кот ('gull', 'cat') или она тает ('fade'); пусто — лежит
+  haul: t.string(),           // ведро: сколько каких рыб в нём ('roach:2,perch:1', haulText) — достать может любой
 }, 'GroundState');
 export type GroundState = SchemaType<typeof GroundState>;
 
@@ -49,9 +50,11 @@ export const HoleState = schema({
 export type HoleState = SchemaType<typeof HoleState>;
 
 export const PierState = schema({
+  owner: t.string(),             // чей это причал: id хозяина (остальные здесь в гостях)
+  ownerName: t.string(),         // и его имя
   players: t.map(PlayerState),   // ключ — sessionId соединения
-  ground: t.map(GroundState),    // ключ — id вещи строкой; земля одна на все копии причала
-  fire: t.boolean(),             // костёр горит (гаснет под дождём, разжигает игрок); один на все копии причала
-  holes: t.map(HoleState),       // ямки от лопат (ключ — номер ямки); одни на все копии причала
+  ground: t.map(GroundState),    // ключ — id вещи строкой; земля одна на все копии причала (у каждого причала своя, items.place)
+  fire: t.boolean(),             // костёр горит (гаснет под дождём, разжигает игрок); один на все копии этого причала
+  holes: t.map(HoleState),       // ямки от лопат (ключ — номер ямки); одни на все копии этого причала
 }, 'PierState');
 export type PierState = SchemaType<typeof PierState>;

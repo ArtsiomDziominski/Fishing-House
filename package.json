@@ -22,6 +22,7 @@
     "db:up": "docker compose -f docker-compose.dev.yml up -d",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "npm run migrate -w shared",
+    "db:reset": "npm run reset -w shared",
     "build:world": "tsx tools/build-world.mjs",
     "build:dig": "node tools/build-dig.mjs"
   },

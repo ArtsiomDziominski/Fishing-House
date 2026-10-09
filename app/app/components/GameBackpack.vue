@@ -2,11 +2,14 @@
      Вещь тянут мышью или пальцем на свободные клетки, R или правая кнопка мыши поворачивают её. Двойной клик или
      удержание берут вещь из рюкзака в руки, а вещь из рук убирают обратно; то же — перетащить её на рыбака или с него
      в клетку. Лёгкая вещь (и ведро) занимает одну руку, тяжёлая — обе: она в гнезде правой, а гнездо левой закрыто с подписью;
-     взять её можно только в пустые руки. На банке червей написано, сколько в ней: «хватает», число или «пусто» (WORMS.label). Что куда встанет, решает сервер: окно сразу показывает перекладку и шлёт её, а если сервер не согласен,
-     он присылает, как всё лежит на самом деле. -->
+     взять её можно только в пустые руки. На банке червей написано, сколько в ней: «хватает», число или «пусто» (WORMS.label).
+     У открытого сундука в доме окно показывает и его — слева от рюкзака: вещи перетаскивают между ними, двойной клик или
+     удержание перекладывают из рюкзака в сундук и обратно; вверху — какой сундук выбрать (CHESTS). Рюкзак остался на улице —
+     его сетка притушена, в сундук можно положить только то, что в руках. Что куда встанет, решает сервер: окно сразу
+     показывает перекладку и шлёт её, а если сервер не согласен, он присылает, как всё лежит на самом деле. -->
 <script setup lang="ts">
-import { ITEMS, ITEM_KINDS, PACKS, WORMS, type Hand, type Item, type ItemKind, type Place } from '@fh/shared';
-import { CELL, EDGE, backpackLayout, bothHands, drawBackpack, handSlots, slotAt, slotOf, type Drag } from '~/game/backpack-view';
+import { CHESTS, CHEST_KINDS, ITEMS, ITEM_KINDS, PACKS, WORMS, type ChestKind, type Grid, type Hand, type Item, type ItemKind, type Place } from '@fh/shared';
+import { CELL, EDGE, backpackLayout, bothHands, cellAt, drawBackpack, handSlots, slotAt, slotOf, type Drag, type From, type Rect } from '~/game/backpack-view';
 
 const emit = defineEmits<{
   move: [id: number, x: number, y: number, rot: boolean];
@@ -14,6 +17,10 @@ const emit = defineEmits<{
   take: [id: number, left?: boolean];    // взять вещь из рюкзака в руки (left — в какую; нет — в свободную)
   stow: [id: number, at: Place];         // убрать вещь из рук в рюкзак, в эту клетку
   give: [kind: ItemKind];
+  chestPut: [id: number, at: Place];     // вещь из рюкзака или из рук — в сундук, в эту клетку
+  chestTake: [id: number, at: Place];    // вещь из сундука — в рюкзак, в эту клетку
+  chestMove: [id: number, x: number, y: number, rot: boolean];
+  chestKind: [kind: ChestKind];
 }>();
 const game = useGameStore();
 const el = ref<HTMLCanvasElement>();
@@ -27,11 +34,16 @@ const k = ref(2);                        // во сколько раз холс�
 const stacked = ref(false);              // на узком экране рыбак стоит над рюкзаком, а не сбоку
 
 const grid = computed(() => ITEMS.grid(game.pack));
-const lay = computed(() => backpackLayout(grid.value, stacked.value));
+const chestGrid = computed<Grid | null>(() => (game.chestOpen ? CHESTS.grid(game.chest.kind) : null));
+const lay = computed(() => backpackLayout(grid.value, stacked.value, chestGrid.value));
 const used = computed(() => ITEMS.used(game.items));
-// вещь по номеру — в рюкзаке она или в руке
-const thing = (id: number | null) => (id === null ? null : game.items.find(it => it.id === id) || game.hands.find(it => it.id === id) || null);
+const chestUsed = computed(() => ITEMS.used(game.chest.list));
+const open = computed(() => game.packOpen || game.chestOpen);
+const far = computed(() => !game.actions.open);   // рюкзак не под рукой: открыт только сундук, а рюкзак остался на улице
+// вещь по номеру — в рюкзаке она, в руке или в сундуке
+const thing = (id: number | null) => (id === null ? null : game.items.find(it => it.id === id) || game.hands.find(it => it.id === id) || game.chest.list.find(it => it.id === id) || null);
 const inHand = (id: number | null) => id !== null && game.hands.some(it => it.id === id);
+const inChest = (id: number | null) => id !== null && game.chest.list.some(it => it.id === id);
 const heavy = (kind: ItemKind) => ITEMS.weight(kind) > 1;
 // про какую вещь рассказать внизу: которую тянут, выбранную или ту, что под указателем
 const shown = computed(() => thing(drag.value?.id ?? selected.value ?? hover.value));
@@ -45,10 +57,12 @@ const handsText = (kind: ItemKind, held: boolean) => (heavy(kind) ? (held ? 'в 
 
 // Сколько червей в банке — словами (у банки без счёта он полный: так её завела база).
 const wormsText = (it: Item) => WORMS.label(it.worms ?? 0);
-// Банки червей и где они на холсте — в рюкзаке или в гнезде руки; ту, что тянут, не подписываем.
+// Банки червей и где они на холсте — в рюкзаке, в сундуке или в гнезде руки; ту, что тянут, не подписываем.
 const jars = computed(() => {
-  const o = lay.value.grid, out: { id: number; text: string; empty: boolean; r: { x: number; y: number; w: number; h: number } }[] = [];
-  for (const it of game.items) if (ITEMS.isBait(it.kind)) out.push({ id: it.id, text: wormsText(it), empty: (it.worms ?? 1) <= 0, r: { x: o.x + EDGE + it.x * CELL, y: o.y + EDGE + it.y * CELL, w: CELL, h: CELL } });
+  const out: { id: number; text: string; empty: boolean; r: { x: number; y: number; w: number; h: number } }[] = [];
+  const cells = (list: readonly Item[], o: Rect) => { for (const it of list) if (ITEMS.isBait(it.kind)) out.push({ id: it.id, text: wormsText(it), empty: (it.worms ?? 1) <= 0, r: { x: o.x + EDGE + it.x * CELL, y: o.y + EDGE + it.y * CELL, w: CELL, h: CELL } }); };
+  cells(game.items, lay.value.grid);
+  if (lay.value.chest) cells(game.chest.list, lay.value.chest);
   for (const { it, at } of handSlots(lay.value, game.hands)) if (ITEMS.isBait(it.kind)) out.push({ id: it.id, text: wormsText(it), empty: (it.worms ?? 1) <= 0, r: { x: at.x, y: at.y + ((at.h + CELL) >> 1) - 2, w: at.w, h: 8 } });
   return out.filter(j => drag.value?.id !== j.id);
 });
@@ -57,20 +71,21 @@ const slotStyle = (side: Hand) => { const q = slotOf(lay.value, side); return { 
 
 function draw() {
   const c = el.value; if (!c) return;
-  drawBackpack(c.getContext('2d')!, { pack: game.pack, grid: grid.value, layout: lay.value, items: game.items, hands: game.hands, selected: selected.value, hover: hover.value, drag: drag.value, hold: hold.value });
+  const chest = chestGrid.value ? { kind: game.chest.kind, grid: chestGrid.value, items: game.chest.list } : null;
+  drawBackpack(c.getContext('2d')!, { pack: game.pack, grid: grid.value, layout: lay.value, items: game.items, hands: game.hands, selected: selected.value, hover: hover.value, drag: drag.value, hold: hold.value, chest, far: far.value });
 }
-watch([() => game.items, () => game.hands, () => game.pack, selected, hover, drag, hold, () => game.packOpen, k, stacked], () => nextTick(draw));
+watch([() => game.items, () => game.hands, () => game.pack, () => game.chest, selected, hover, drag, hold, open, far, lay, k, stacked], () => nextTick(draw));
 
 // ×3 на больших экранах, как и мир на 1920×1080, ×2 на остальных. Не влезает с рыбаком сбоку — он встаёт над рюкзаком;
 // на совсем узких — сколько влезет.
 function fit() {
-  const side = backpackLayout(grid.value, false).w, pile = backpackLayout(grid.value, true).w, room = innerWidth - 32;
+  const side = backpackLayout(grid.value, false, chestGrid.value).w, pile = backpackLayout(grid.value, true, chestGrid.value).w, room = innerWidth - 32;
   const big = innerWidth >= 1200 && innerHeight >= 860 ? 3 : 2;
   if (side * big <= room) { stacked.value = false; k.value = big; }
   else if (side * 2 <= room) { stacked.value = false; k.value = 2; }
   else { stacked.value = true; k.value = Math.max(1, Math.min(2, Math.floor(room / pile))); }
 }
-watch(grid, fit);
+watch([grid, chestGrid], fit);
 
 // ---------- в руки и обратно ----------
 
@@ -89,8 +104,51 @@ function stow(id: number, at: Place | null = null) {
   game.items = r.list; game.hands = r.hands; selected.value = id;
   emit('stow', id, { x: r.item.x, y: r.item.y, rot: r.item.rot });
 }
-// Двойной клик или удержание: из рюкзака — в руки, из рук — в рюкзак.
-const swap = (id: number) => (inHand(id) ? stow(id) : take(id));
+// ---------- сундук ----------
+
+// Куда встанет вещь в сетке g: в клетку at (если влезет) или на первое свободное место — так же решает и сервер.
+const cellFor = (g: Grid, list: readonly Item[], it: Item, at: Place | null): Place | null => {
+  if (!at) return ITEMS.spot(g, list, it.kind);
+  const rot = at.rot && ITEMS.turns(it.kind);
+  return ITEMS.fits(g, list, it.kind, at.x, at.y, rot, it.id) ? { x: at.x, y: at.y, rot } : null;
+};
+// Из рюкзака или из рук — в сундук.
+function toChest(id: number, at: Place | null = null) {
+  const it = thing(id), g = chestGrid.value; if (!it || !g || inChest(id)) return;
+  if (ITEMS.isFish(it.kind)) { game.showToast('Рыбе место в холодильнике, а не в сундуке', 'bad'); return; }
+  if (game.bags.find(b => b.id === id)?.bag.total) { game.showToast('Ведро с уловом в сундук не убрать — сначала переложи рыбу в холодильник', 'bad'); return; }   // что в ведре в рюкзаке, знает только сервер
+  if (!inHand(id) && far.value) { game.showToast('Рюкзак остался на улице — до него не дотянуться', 'bad'); return; }
+  const cell = cellFor(g, game.chest.list, it, at);
+  if (!cell) { game.showToast(at ? 'Сюда вещь не встаёт' : 'В сундуке нет места', 'bad'); return; }
+  game.items = game.items.filter(o => o.id !== id); game.hands = game.hands.filter(o => o.id !== id);
+  game.chest = { ...game.chest, list: [...game.chest.list, { ...ITEMS.unheld(it), ...cell }] };
+  selected.value = id;
+  emit('chestPut', id, cell);
+}
+// Из сундука — в рюкзак.
+function fromChest(id: number, at: Place | null = null) {
+  const it = game.chest.list.find(o => o.id === id); if (!it) return;
+  if (far.value) { game.showToast('Рюкзак остался на улице — до него не дотянуться', 'bad'); return; }
+  const cell = cellFor(grid.value, game.items, it, at);
+  if (!cell) { game.showToast(at ? 'Сюда вещь не встаёт' : 'В рюкзаке нет места', 'bad'); return; }
+  game.chest = { ...game.chest, list: game.chest.list.filter(o => o.id !== id) };
+  game.items = [...game.items, { ...it, ...cell }];
+  selected.value = id;
+  emit('chestTake', id, cell);
+}
+function chestPlace(id: number, x: number, y: number, rot: boolean) {
+  game.chest = { ...game.chest, list: game.chest.list.map(it => (it.id === id ? { ...it, x, y, rot } : it)) };
+  emit('chestMove', id, x, y, rot);
+}
+function pickChest(kind: ChestKind, ev: Event) {
+  blur(ev);
+  if (kind === game.chest.kind) return;
+  if (!ITEMS.repack(CHESTS.grid(kind), game.chest.list)) { game.showToast('Вещи в этот сундук не влезут — сначала вынь лишнее', 'bad'); return; }
+  emit('chestKind', kind);
+}
+
+// Двойной клик или удержание: из рюкзака — в руки (а у открытого сундука — в сундук), из рук — в рюкзак, из сундука — в рюкзак.
+const swap = (id: number) => (inChest(id) ? fromChest(id) : inHand(id) ? stow(id) : game.chestOpen ? toChest(id) : take(id));
 
 // ---------- перетаскивание ----------
 
@@ -107,30 +165,45 @@ function toArt(ev: PointerEvent) {
   return { x: Math.floor((ev.clientX - r.left) / r.width * lay.value.w), y: Math.floor((ev.clientY - r.top) / r.height * lay.value.h) };
 }
 const within = (r: { x: number; y: number; w: number; h: number }, x: number, y: number) => x >= r.x && x < r.x + r.w && y >= r.y && y < r.y + r.h;
-function itemAt(x: number, y: number): Item | null {
-  const o = lay.value.grid, cx = Math.floor((x - o.x - EDGE) / CELL), cy = Math.floor((y - o.y - EDGE) / CELL);
-  return game.items.find(it => { const z = ITEMS.size(it.kind, it.rot); return cx >= it.x && cx < it.x + z.w && cy >= it.y && cy < it.y + z.h; }) || null;
+// Вещь в сетке rect под точкой.
+function itemIn(list: readonly Item[], rect: Rect, x: number, y: number): Item | null {
+  if (!within(rect, x, y)) return null;
+  const c = cellAt(rect, x, y);
+  return list.find(it => { const z = ITEMS.size(it.kind, it.rot); return c.x >= it.x && c.x < it.x + z.w && c.y >= it.y && c.y < it.y + z.h; }) || null;
 }
-// Что под указателем: вещь в рюкзаке или та, что в руках (тяжёлая — в обоих гнёздах сразу).
-function hit(x: number, y: number): { it: Item; from: Drag['from'] } | null {
+// Вещь в рюкзаке или в сундуке под точкой.
+function itemAt(x: number, y: number): { it: Item; from: From } | null {
+  const c = lay.value.chest ? itemIn(game.chest.list, lay.value.chest, x, y) : null;
+  if (c) return { it: c, from: 'chest' };
+  const p = itemIn(game.items, lay.value.grid, x, y);
+  return p ? { it: p, from: 'pack' } : null;
+}
+// Что под указателем: вещь в рюкзаке, в сундуке или та, что в руках (тяжёлая — в обоих гнёздах сразу).
+function hit(x: number, y: number): { it: Item; from: From } | null {
   const it = itemAt(x, y);
-  if (it) return { it, from: 'pack' };
+  if (it) return it;
   const held = handSlots(lay.value, game.hands).find(h => within(h.at, x, y));
   return held ? { it: held.it, from: 'hand' } : null;
 }
+// Как далеко точка от прямоугольника (0 — внутри): к какой сетке ближе, туда вещь и встанет.
+const off = (r: Rect, x: number, y: number) => Math.hypot(Math.max(r.x - x, 0, x - r.x - r.w), Math.max(r.y - y, 0, y - r.y - r.h));
 // Куда встанет вещь, которую тянут: в ближайшую клетку к её левому верхнему углу (подсветка не вылезает за сетку).
 // Над панелью рыбака клетки не ищем: вещь из рюкзака там просится в руки.
-function aim(from: Drag['from'], id: number, kind: ItemKind, rot: boolean, x: number, y: number): Drag {
-  const z = ITEMS.size(kind, rot), g = grid.value, o = lay.value.grid, d: Drag = { id, kind, rot, x, y, from, at: null, hand: false, ok: false };
-  if (press && within(lay.value.pane, press.x, press.y)) {
+// Над сундуком (или ближе к нему, чем к рюкзаку) — в сундук. В руки — только из рюкзака.
+function aim(from: From, id: number, kind: ItemKind, rot: boolean, x: number, y: number): Drag {
+  const L = lay.value, d: Drag = { id, kind, rot, x, y, from, at: null, into: 'pack', hand: false, ok: false };
+  if (press && within(L.pane, press.x, press.y)) {
     if (from !== 'pack') return d;
-    const side = slotAt(lay.value, press.x, press.y);   // указатель над гнездом руки — в неё, иначе в свободную
-    return { ...d, hand: true, side, ok: typeof ITEMS.take(g, game.items, game.hands, id, side) !== 'string' };
+    const side = slotAt(L, press.x, press.y);           // указатель над гнездом руки — в неё, иначе в свободную
+    return { ...d, hand: true, side, ok: !far.value && typeof ITEMS.take(grid.value, game.items, game.hands, id, side) !== 'string' };
   }
-  const cx = Math.round((x - o.x - EDGE) / CELL), cy = Math.round((y - o.y - EDGE) / CELL);
-  if (z.w > g.w || z.h > g.h) return d;
+  const chest = !!L.chest && !!press && off(L.chest, press.x, press.y) < off(L.grid, press.x, press.y);
+  const into = chest ? 'chest' : 'pack', o = chest ? L.chest! : L.grid, g = chest ? chestGrid.value! : grid.value, list = chest ? game.chest.list : game.items;
+  const z = ITEMS.size(kind, rot), cx = Math.round((x - o.x - EDGE) / CELL), cy = Math.round((y - o.y - EDGE) / CELL);
+  if (z.w > g.w || z.h > g.h) return { ...d, into };
   const at = { x: Math.min(Math.max(cx, 0), g.w - z.w), y: Math.min(Math.max(cy, 0), g.h - z.h) };
-  return { ...d, at, ok: at.x === cx && at.y === cy && ITEMS.fits(g, game.items, kind, cx, cy, rot, id) };
+  const allowed = chest ? !ITEMS.isFish(kind) && (from !== 'pack' || !far.value) : !far.value;   // рыбе в сундуке не место; рюкзак на улице — в него не положить
+  return { ...d, into, at, ok: allowed && at.x === cx && at.y === cy && ITEMS.fits(g, list, kind, cx, cy, rot, id) };
 }
 function place(id: number, x: number, y: number, rot: boolean) {
   game.items = game.items.map(it => (it.id === id ? { ...it, x, y, rot } : it));
@@ -151,9 +224,9 @@ function startHold(id: number) {
 }
 
 function down(ev: PointerEvent) {
-  if (ev.button === 2) {                                // правая кнопка поворачивает вещь в рюкзаке
+  if (ev.button === 2) {                                // правая кнопка поворачивает вещь в рюкзаке или в сундуке
     ev.preventDefault();
-    if (drag.value) turnDrag(); else { const p = toArt(ev), it = itemAt(p.x, p.y); if (it) { selected.value = it.id; rotate(); } }
+    if (drag.value) turnDrag(); else { const p = toArt(ev), h = itemAt(p.x, p.y); if (h) { selected.value = h.it.id; rotate(); } }
     return;
   }
   if (ev.button !== 0) return;
@@ -162,9 +235,9 @@ function down(ev: PointerEvent) {
   if (!h) { tap = null; return; }
   if (tap && tap.id === h.it.id && now - tap.t < DOUBLE) { tap = null; swap(h.it.id); return; }
   tap = { id: h.it.id, t: now };
-  const it = h.it, z = ITEMS.size(it.kind, it.rot), o = lay.value.grid;
-  // вещь из рюкзака держат за то место, где нажали; вещь из руки — за середину
-  const grab = h.from === 'pack' ? { gx: p.x - (o.x + EDGE + it.x * CELL), gy: p.y - (o.y + EDGE + it.y * CELL) } : { gx: (z.w * CELL) >> 1, gy: (z.h * CELL) >> 1 };
+  const it = h.it, z = ITEMS.size(it.kind, it.rot), o = h.from === 'chest' ? lay.value.chest! : lay.value.grid;
+  // вещь из рюкзака и сундука держат за то место, где нажали; вещь из руки — за середину
+  const grab = h.from !== 'hand' ? { gx: p.x - (o.x + EDGE + it.x * CELL), gy: p.y - (o.y + EDGE + it.y * CELL) } : { gx: (z.w * CELL) >> 1, gy: (z.h * CELL) >> 1 };
   press = { id: it.id, from: h.from, x0: p.x, y0: p.y, ...grab, x: p.x, y: p.y };
   el.value!.setPointerCapture(ev.pointerId);
   startHold(it.id);
@@ -184,9 +257,13 @@ function up() {
   const d = drag.value;
   stopHold(); press = null; drag.value = null;
   if (!d) return;
-  if (d.from === 'hand') { if (d.ok && d.at) stow(d.id, { x: d.at.x, y: d.at.y, rot: d.rot }); }
-  else if (d.hand) take(d.id, d.side);
-  else if (d.ok && d.at) place(d.id, d.at.x, d.at.y, d.rot);
+  if (d.hand) { take(d.id, d.side); return; }
+  if (!d.ok || !d.at) return;
+  const at = { x: d.at.x, y: d.at.y, rot: d.rot };
+  if (d.into === 'chest') { if (d.from === 'chest') chestPlace(d.id, at.x, at.y, at.rot); else toChest(d.id, at); }
+  else if (d.from === 'hand') stow(d.id, at);
+  else if (d.from === 'chest') fromChest(d.id, at);
+  else place(d.id, at.x, at.y, at.rot);
 }
 function cancel() { stopHold(); press = null; drag.value = null; }
 
@@ -201,11 +278,12 @@ function turnDrag() {
 // Вещь в руках не поворачивают: она клеток не занимает.
 function rotate() {
   if (drag.value) { turnDrag(); return; }
-  const it = game.items.find(i => i.id === selected.value);
+  const boxed = inChest(selected.value), list = boxed ? game.chest.list : game.items, g = boxed ? CHESTS.grid(game.chest.kind) : grid.value;
+  const it = list.find(i => i.id === selected.value), put = boxed ? chestPlace : place;
   if (!it || !ITEMS.turns(it.kind)) return;
-  const g = grid.value, others = game.items.filter(o => o.id !== it.id);
-  if (ITEMS.fits(g, others, it.kind, it.x, it.y, !it.rot)) { place(it.id, it.x, it.y, !it.rot); return; }
-  for (let y = 0; y < g.h; y++) for (let x = 0; x < g.w; x++) if (ITEMS.fits(g, others, it.kind, x, y, !it.rot)) { place(it.id, x, y, !it.rot); return; }
+  const others = list.filter(o => o.id !== it.id);
+  if (ITEMS.fits(g, others, it.kind, it.x, it.y, !it.rot)) { put(it.id, it.x, it.y, !it.rot); return; }
+  for (let y = 0; y < g.h; y++) for (let x = 0; x < g.w; x++) if (ITEMS.fits(g, others, it.kind, x, y, !it.rot)) { put(it.id, x, y, !it.rot); return; }
   game.showToast('Повернуть не выйдет — тесно', 'bad');
 }
 
@@ -218,29 +296,29 @@ function drop(ev: MouseEvent) {
   emit('drop', id);
 }
 
-function close() { game.packOpen = false; }
+function close() { game.packOpen = false; game.chestOpen = false; }
 // после клика снимаем фокус с кнопки, иначе пробел и Enter будут нажимать её, а не подсекать
 function blur(ev: Event) { (ev.currentTarget as HTMLElement).blur(); }
 
-watch(() => game.packOpen, open => {
+watch([() => game.packOpen, () => game.chestOpen], () => {
   cancel(); tap = null; selected.value = null; hover.value = null;
-  if (open) fit();
+  if (open.value) fit();
 });
 // уснул от голода — окно закрывается (и клавиши рюкзака не слушаются, пока спит)
-watch(() => game.hunger.until, asleep => { if (asleep && game.packOpen) game.packOpen = false; });
-// отошёл от рюкзака, оставив его на земле, — окно закрывается
+watch(() => game.hunger.until, asleep => { if (asleep && open.value) close(); });
+// отошёл от рюкзака, оставив его на земле, — окно закрывается (у открытого сундука рюкзак просто притушен)
 watch(() => game.actions.open, near => {
-  if (!near && game.packOpen) { game.packOpen = false; game.showToast('Рюкзак остался позади'); }
+  if (!near && game.packOpen && !game.chestOpen) { game.packOpen = false; game.showToast('Рюкзак остался позади'); }
 });
 // вещь, на которой стояло выделение, исчезла (выбросили, сервер прислал другое)
-watch([() => game.items, () => game.hands], () => { if (selected.value !== null && !thing(selected.value)) selected.value = null; });
+watch([() => game.items, () => game.hands, () => game.chest], () => { if (selected.value !== null && !thing(selected.value)) selected.value = null; });
 
 // Клавиши ловим раньше движка: Esc при открытом рюкзаке закрывает его, а не поднимает рыбака с места.
 function key(ev: KeyboardEvent) {
   if (ev.ctrlKey || ev.metaKey || ev.altKey || game.hunger.until) return;
   if ((ev.target as HTMLElement | null)?.closest?.('input, textarea, select')) return;
-  if (ev.code === 'KeyI') { if (!ev.repeat) game.togglePack(); ev.preventDefault(); return; }
-  if (!game.packOpen) return;
+  if (ev.code === 'KeyI') { if (!ev.repeat) { if (game.chestOpen) close(); else game.togglePack(); } ev.preventDefault(); return; }
+  if (!open.value) return;
   if (ev.code === 'Escape') { close(); ev.preventDefault(); ev.stopImmediatePropagation(); }
   else if (ev.code === 'KeyR' && !ev.repeat) { rotate(); ev.preventDefault(); }
 }
@@ -249,12 +327,24 @@ onBeforeUnmount(() => { removeEventListener('keydown', key, { capture: true }); 
 </script>
 
 <template>
-  <section v-if="game.packOpen" class="backpack" :style="{ '--k': k, '--w': lay.w, '--h': lay.h }" role="dialog" aria-label="Рюкзак">
+  <section v-if="open" class="backpack" :style="{ '--k': k, '--w': lay.w, '--h': lay.h }" role="dialog" :aria-label="game.chestOpen ? 'Сундук и рюкзак' : 'Рюкзак'">
     <header>
-      <h2>{{ PACKS.name(game.pack) }} рюкзак</h2>
-      <span class="room" title="Сколько клеток занято">{{ used }} / {{ grid.w * grid.h }}</span>
+      <template v-if="game.chestOpen">
+        <h2>{{ CHESTS.name(game.chest.kind) }}</h2>
+        <span class="room" title="Сколько клеток сундука занято">{{ chestUsed }} / {{ chestGrid!.w * chestGrid!.h }}</span>
+        <span class="and">и</span>
+        <h2>{{ PACKS.name(game.pack).toLowerCase() }} рюкзак</h2>
+      </template>
+      <h2 v-else>{{ PACKS.name(game.pack) }} рюкзак</h2>
+      <span class="room" title="Сколько клеток рюкзака занято">{{ used }} / {{ grid.w * grid.h }}</span>
       <button type="button" class="close" title="Закрыть — I или Esc" @click="close">×</button>
     </header>
+    <!-- какой сундук стоит в доме: вещи должны влезть в новый -->
+    <div v-if="game.chestOpen" class="kinds" role="group" aria-label="Какой сундук">
+      <button v-for="kind in CHEST_KINDS" :key="kind" type="button" :class="{ on: game.chest.kind === kind }" :aria-pressed="game.chest.kind === kind" @click="pickChest(kind, $event)">
+        {{ CHESTS.name(kind) }} <small>{{ CHESTS.grid(kind).w }}×{{ CHESTS.grid(kind).h }}</small>
+      </button>
+    </div>
     <div class="board">
       <canvas
         ref="el" :width="lay.w" :height="lay.h" :class="{ dragging: drag, over: hover !== null }"
@@ -267,21 +357,34 @@ onBeforeUnmount(() => { removeEventListener('keydown', key, { capture: true }); 
       <span v-if="bothHands(game.hands)" class="busy" :style="slotStyle('left')">держит двумя руками</span>
       <!-- сколько червей в банке — прямо на ней -->
       <span v-for="j in jars" :key="'jar' + j.id" class="jar" :class="{ empty: j.empty }" :style="{ '--x': j.r.x, '--y': j.r.y, '--lw': j.r.w, '--lh': j.r.h }">{{ j.text }}</span>
+      <!-- рюкзак остался на улице: его сетка притушена, и на ней сказано почему -->
+      <span v-if="far" class="far" :style="{ '--x': lay.grid.x, '--y': lay.grid.y, '--lw': lay.grid.w, '--lh': lay.grid.h }"><span>Рюкзак на улице</span></span>
     </div>
     <footer>
       <template v-if="shown">
-        <div class="what"><b>{{ ITEMS.title(shown) }}</b><span class="cells">{{ inHand(shown.id) ? handsText(shown.kind, true) : cellsText(shown.kind) + ' · ' + handsText(shown.kind, false) }}</span></div>
+        <div class="what"><b>{{ ITEMS.title(shown) }}</b><span class="cells">{{ inHand(shown.id) ? handsText(shown.kind, true) : cellsText(shown.kind) + ' · ' + (inChest(shown.id) ? 'в сундуке' : handsText(shown.kind, false)) }}</span></div>
         <p v-if="ITEMS.isBait(shown.kind)" class="text">В банке: <b class="count" :class="{ empty: (shown.worms ?? 1) <= 0 }">{{ wormsText(shown) }}</b><template v-if="(shown.worms ?? 1) <= 0"> — накопай лопатой</template></p>
         <p class="text">{{ ITEMS.info(shown.kind).text }}</p>
         <div v-if="selected === shown.id && !drag" class="buttons">
-          <button v-if="inHand(shown.id) && ITEMS.packable(shown.kind)" type="button" @click="blur($event); stow(shown.id)">В рюкзак</button>
-          <template v-else-if="!inHand(shown.id)">
-            <button type="button" @click="blur($event); take(shown.id)">{{ heavy(shown.kind) ? 'В руки' : 'В руку' }}</button>
+          <template v-if="inChest(shown.id)">
+            <button type="button" :disabled="far" @click="blur($event); fromChest(shown.id)">В рюкзак</button>
             <button v-if="ITEMS.turns(shown.kind)" type="button" @click="blur($event); rotate()"><kbd>R</kbd>Повернуть</button>
           </template>
-          <button type="button" @click="drop">На землю</button>
+          <template v-else>
+            <button v-if="inHand(shown.id) && ITEMS.packable(shown.kind)" type="button" :disabled="far" @click="blur($event); stow(shown.id)">В рюкзак</button>
+            <template v-else-if="!inHand(shown.id)">
+              <button type="button" @click="blur($event); take(shown.id)">{{ heavy(shown.kind) ? 'В руки' : 'В руку' }}</button>
+              <button v-if="ITEMS.turns(shown.kind)" type="button" @click="blur($event); rotate()"><kbd>R</kbd>Повернуть</button>
+            </template>
+            <button v-if="game.chestOpen && !ITEMS.isFish(shown.kind)" type="button" :disabled="far && !inHand(shown.id)" @click="blur($event); toChest(shown.id)">В сундук</button>
+            <button v-if="!game.chestOpen" type="button" @click="drop">На землю</button>
+          </template>
         </div>
       </template>
+      <p v-else-if="game.chestOpen" class="text muted">
+        Перетаскивай вещи между сундуком и рюкзаком. Двойной клик или удержание — переложить в сундук или обратно.
+        Вещи в сундуке никто не унесёт, а рыбу храни в холодильнике.
+      </p>
       <p v-else class="text muted">
         Перетащи вещь на свободные клетки. Двойной клик или удержание — взять в руки или убрать обратно.
         Лёгкая вещь занимает одну руку, тяжёлая — обе.
@@ -303,15 +406,16 @@ onBeforeUnmount(() => { removeEventListener('keydown', key, { capture: true }); 
   position: fixed; left: 50%; top: 50%; transform: translate(-50%, -54%);
   display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; padding: 10px 12px 12px;
   width: calc(var(--w) * var(--k) * 1px + 24px);
-  max-height: calc(100vh - 16px); overflow: auto;
+  max-height: calc(92vh - 16px); overflow: auto;   /* с подъёмом на 4% окно не уходит за верх экрана */
   border: 1px solid var(--line); border-radius: 9px;
   background: rgba(40, 22, 12, 0.94);
   box-shadow: 0 18px 60px rgba(0, 0, 0, 0.6);
   font-size: 13px;
 }
-header { display: flex; align-items: center; gap: 10px; }
-header h2 { font-size: 18px; color: var(--coat); }
-.room { margin-left: auto; font: 600 12px/1 var(--mono); color: var(--paper-dim); }
+header { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; }
+header h2 { font-size: 18px; color: var(--coat); white-space: nowrap; }
+.room { font: 600 12px/1 var(--mono); color: var(--paper-dim); }
+header .close { margin-left: auto; }
 .close {
   width: 26px; height: 26px; padding: 0;
   border: 1px solid rgba(244, 227, 193, 0.3); border-radius: 6px;
@@ -337,6 +441,26 @@ canvas.dragging { cursor: grabbing; }
   pointer-events: none;
 }
 .hand.empty { color: var(--paper-dim); }
+.far {
+  position: absolute; left: calc(var(--x) * var(--k) * 1px); top: calc(var(--y) * var(--k) * 1px);
+  width: calc(var(--lw) * var(--k) * 1px); height: calc(var(--lh) * var(--k) * 1px);
+  display: grid; place-items: center;
+  font: 400 calc(5px * var(--k) + 2px)/1.1 var(--pixel); color: var(--paper); text-align: center;
+  pointer-events: none;
+}
+.far span { padding: 3px 8px; border-radius: 6px; background: rgba(20, 8, 4, 0.85); }
+.and { color: var(--paper-dim); }
+.kinds { display: flex; flex-wrap: wrap; gap: 4px; }
+.kinds button {
+  padding: 4px 9px;
+  border: 1px solid rgba(244, 227, 193, 0.3); border-radius: 7px;
+  background: none; color: var(--paper);
+  font: 600 12px/1.2 var(--text); cursor: pointer;
+}
+.kinds button small { color: var(--paper-dim); font-weight: 400; }
+.kinds button.on { border-color: var(--coat); color: var(--coat); }
+.kinds button:hover { background: var(--wood-hover); }
+.buttons button:disabled { opacity: 0.45; cursor: default; }
 .key, .busy {
   position: absolute; left: calc(var(--x) * var(--k) * 1px); top: calc(var(--y) * var(--k) * 1px);
   width: calc(var(--lw) * var(--k) * 1px); height: calc(var(--lh) * var(--k) * 1px);
@@ -372,4 +496,5 @@ footer { display: grid; grid-template-columns: minmax(0, 1fr); gap: 4px; min-hei
 .dev { padding-top: 6px; border-top: 1px dashed var(--line); }
 .dev select { flex: 1 1 0; min-width: 0; }
 @media (hover: none) and (pointer: coarse) { .for-keys, .buttons kbd { display: none; } }
+@media (max-width: 560px) { header h2 { font-size: 15px; } }
 </style>
