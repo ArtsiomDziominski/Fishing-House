@@ -26,6 +26,7 @@
 - **Карта** 640×360 арт-пикселей — ровно 16:9, она же кадр игры: экран стоит на месте, камеры и масштаба нет. В её середине — картинка-образец (`World.pic` — где она стоит). Разметка в `tools/world-shapes.mjs` — в координатах картинки, всё в игре и в `world-data.ts` — в координатах карты; числа, снятые с картинки прямо в коде (как `bankY` в движке), сдвигать на `World.pic`.
 - **Пока только картинка**: время суток, погода, река, лодки, птицы и звери на рыбалку не влияют. Только рыбу, выложенную на землю, уносит чайка или съедает кот (или она тает за минуту) — это решает сервер (`SCRAPS` в `shared/src/scraps.ts`).
 - **Голод**: сытость 100 → 0 за световой день, пополняет рыба из ведра (жареная на костре — сильно). Пустая — герой медленнее, а через 3 минуты засыпает на 3 минуты (часть рыбы из ведра пропадает) и просыпается у дома сытым. Ведёт сервер, правила — `shared/src/hunger.ts`.
+- **Дом**: в него входят у двери (H или клик), внутри — одна общая комната со своим кадром и проходимостью (`Indoor` в `shared/src/indoor.ts`, `WorldState.inside`); видно там только тех, кто тоже в доме. В креслах у камина жарят рыбу, как у костра, — его дождь не гасит; в кровати спят (сытость тает медленнее); в холодильнике у каждого своя полка для рыбы (`items.fridge`). Земля, рыбалка и копка — снаружи.
 - **Масштаб**: в комнате до `ROOM_SIZE` = 50 игроков, дальше матчмейкер открывает новую копию причала; процессы игрового сервера связаны через Redis.
 
 ## Где что лежит
@@ -35,7 +36,8 @@
 | Карта, проходимость | `world.ts`, `world-data.ts` (собирает `tools/`) | `PierRoom.move` | `game/engine.ts` |
 | Рыбалка, рыбы | `fishing.ts`, `fish.ts` | `PierRoom.onFishing` | `game/fishing-view.ts` |
 | Ведро (вещь), улов, расстояния | `rules.ts` (`bucketNearSeat`), `ITEMS.isBucket`, `Bag` в `protocol.ts` | `bucketFor`, `sit`, `onFishing` | `drawBucket` в движке, `components/GameCatch.vue` |
-| Дом | `house.ts` | — | `game/house.ts` |
+| Дом снаружи | `house.ts` | — | `game/house.ts` |
+| Дом внутри: вход, кресла, кровать, холодильник | `indoor.ts` (`INDOOR`, `Indoor`, `FRIDGE`), `nearDoor`, `WorldState.inside`/`bed`, `server/items.ts` (`loadFridge`, `fridge*`) | `enter`, `exit`, `rest`/`cook` в кресле, `toBed`, `fridgePut`/`fridgeTake`/`fridgeStock` | `game/interior.ts`, `doorAction`, `drawRoom`, `drawDoorScreen`, `restDown`, `bedDown` в движке, `components/GameFridge.vue` |
 | Костёр (гаснет в дождь) | `campfire.ts` (`FIRE.douse`) | `rest`, `kindle`, `watchRain` | `game/campfire.ts`, `fireLit`/`kindle` в движке |
 | Черви, лопаты, копка | `worms.ts` (`WORMS`), `dig-data.ts` (собирает `tools/build-dig.mjs`) | `dig`, `dug`, `useWorm`, `holes` | `digAction`, `drawHoles` в движке, `shovelColors` в `held-art.ts`, подписи банок в `GameBackpack.vue` |
 | Голод, еда, сон | `hunger.ts`, `ITEMS.isFish`/`meal`, `homePoint` | `hunger`, `fishTake`, `eat`, `cook`, `faint`, `wake` | `components/GameHunger.vue`, `GameSleep.vue`, `eatAction` в движке |

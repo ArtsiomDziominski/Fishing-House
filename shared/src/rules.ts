@@ -2,6 +2,7 @@
 // Клиент по ним ведёт героя сразу, сервер по ним же проверяет, что прислал клиент.
 
 import { HUNGER } from './hunger.ts';
+import { ENTER_REACH } from './indoor.ts';
 import { PACKS, type PackKind } from './packs.ts';
 import { World, type Point } from './world.ts';
 
@@ -22,9 +23,11 @@ export interface PackState { x: number; y: number; worn: boolean; kind: PackKind
 // lamp — лампа зажжена (светит, только если она лежит в рюкзаке). rest — сидит у костра (в базе не хранится: войдя, герой стоит).
 // Голод (hunger.ts): food — сытость 0..100, starve — сколько секунд она уже на нуле, sleep — до какого мгновения (мс, часы сервера)
 // герой спит от усталости (0 — не спит).
+// inside — герой в доме (indoor.ts): x, y тогда — в кадре комнаты, а не карты; rest там — сидит в кресле у камина,
+// bed — лежит в кровати (в базе не хранится, как и rest: войдя, герой стоит).
 export interface WorldState {
   x: number; y: number; dir: Dir; sitting: boolean; pack: PackState; lamp: boolean; rest: boolean; picX: number; picY: number;
-  food: number; starve: number; sleep: number;
+  food: number; starve: number; sleep: number; inside: boolean; bed: boolean;
 }
 
 export const dist = (a: Point, b: Point) => Math.hypot(a.x - b.x, a.y - b.y);
@@ -39,7 +42,9 @@ export const faceFire = (p: Point): Dir => {
   const dx = World.fire.x - p.x, dy = World.fire.y - p.y;
   return Math.abs(dx) >= Math.abs(dy) ? (dx < 0 ? 'left' : 'right') : (dy < 0 ? 'up' : 'down');
 };
-// Где просыпается герой, уснувший от голода: у крыльца дома.
+// Можно ли войти в дом: стоит у двери снаружи.
+export const nearDoor = (p: Point) => dist(p, World.door) <= ENTER_REACH;
+// Где просыпается герой, уснувший от голода, и куда выходят из дома: у крыльца.
 export const homePoint = (): Point => World.nearestWalkable(World.door.x, World.door.y) || World.door;
 // Куда встаёт герой, поднявшись с места рыбака.
 export const standPoint = (): Point => World.nearestWalkable(seat.x, seat.y) || { x: seat.x, y: seat.y };
@@ -49,5 +54,5 @@ export const startPack = (): PackState => ({ x: World.pack.baseX, y: World.pack.
 
 // Так игра начинается у нового игрока: рыбак сидит на причале с ведром (оно в стартовом наборе, ITEMS.STARTER), рюкзак — на своём месте с картинки.
 export function startState(): WorldState {
-  return { x: seat.x, y: seat.y, dir: 'down', sitting: true, pack: startPack(), lamp: true, rest: false, picX: World.pic.x, picY: World.pic.y, food: HUNGER.MAX, starve: 0, sleep: 0 };
+  return { x: seat.x, y: seat.y, dir: 'down', sitting: true, pack: startPack(), lamp: true, rest: false, picX: World.pic.x, picY: World.pic.y, food: HUNGER.MAX, starve: 0, sleep: 0, inside: false, bed: false };
 }

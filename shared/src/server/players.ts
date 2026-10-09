@@ -9,6 +9,7 @@ import { emptyBag, type Bag } from '../protocol.ts';
 import { PACKS } from '../packs.ts';
 import { DIRS, startPack, type WorldState } from '../rules.ts';
 import { World } from '../world.ts';
+import { Indoor } from '../indoor.ts';
 import { loginKey } from '../account.ts';
 import type { Db } from './db.ts';
 import { catches, players, users } from './schema.ts';
@@ -78,12 +79,14 @@ export function cleanWorld(w: WorldState | null): WorldState | null {
   const dx = World.pic.x - (typeof w.picX === 'number' ? w.picX : 0);
   const dy = World.pic.y - (typeof w.picY === 'number' ? w.picY : 0);
   const moved = (v: number | undefined, d: number, home: number) => (Math.round(v!) ? Math.round(v!) + d : home);
-  const p = World.nearestWalkable(w.x + dx, w.y + dy) || { x: World.seat.x, y: World.seat.y };
+  // в доме — свой кадр (Indoor), картинка-образец его не двигает; там, где стоял, теперь мебель — встанет рядом или у порога
+  const inside = (w as { inside?: boolean }).inside === true;
+  const p = inside ? Indoor.nearestWalkable(w.x, w.y) || Indoor.door : World.nearestWalkable(w.x + dx, w.y + dy) || { x: World.seat.x, y: World.seat.y };
   const k = w.pack as Partial<WorldState['pack']> | undefined;
   return {
-    x: p.x, y: p.y, dir: DIRS.includes(w.dir) ? w.dir : 'down', sitting: !!w.sitting,
+    x: p.x, y: p.y, dir: DIRS.includes(w.dir) ? w.dir : 'down', sitting: !!w.sitting && !inside, inside,
     pack: k ? { x: moved(k.x, dx, World.pack.baseX), y: moved(k.y, dy, World.pack.baseY), worn: !!k.worn, kind: PACKS.isKind(k.kind) ? k.kind : PACKS.DEFAULT } : startPack(),
-    rest: false,
+    rest: false, bed: false,
     lamp: (w as { lamp?: boolean }).lamp !== false,   // в старых записях лампы нет — она зажжена
     picX: World.pic.x, picY: World.pic.y,
     food: num(w.food, HUNGER.MAX, 0, HUNGER.MAX), starve: num(w.starve, 0, 0, HUNGER.STARVE), sleep: num(w.sleep, 0, 0, Infinity),

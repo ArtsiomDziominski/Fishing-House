@@ -2,6 +2,7 @@
 // Код с доступом к базе и секретам — в ./server (импорт '@fh/shared/server').
 
 export * from './world.ts';
+export * from './indoor.ts';
 export * from './fish.ts';
 export * from './fishing.ts';
 export * from './packs.ts';
