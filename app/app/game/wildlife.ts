@@ -9,7 +9,7 @@ type Ctx = CanvasRenderingContext2D;
 interface Pt { x: number; y: number }
 
 // Где живность не появляется: причал и обе лодки у него (BERTHS в boats.ts) — по x от и до. Рыбак тоже там закидывает.
-const PIER = [175, 400];
+const PIER = [175, 400] as const;
 
 const PAL: Record<string, string> = {
   o: '1b1f1a', G: '3f8a3c', g: '7fb069', k: '10200f', y: 'e8a06a', Y: 'b8703e',   // утка: контур, голова, глаз, клюв
@@ -209,12 +209,13 @@ function put(ctx: Ctx, art: Art, x: number, y: number, left: boolean, rows = Inf
   ctx.drawImage(img, 0, 0, img.width, h, Math.round(x) - ax, Math.round(y) - art.a[1]! + dy, img.width, h);
 }
 
-// W, H — размер карты; water — маска воды (1 — вода), в ней уже вычеркнуты лодки.
-export function createWildlifeView(W: number, H: number, water: Uint8Array) {
+// W, H — размер карты; water — маска воды (1 — вода), в ней уже вычеркнуты лодки; avoid — где по x живности не бывать
+// (причал или мостки острова: там рыбачат).
+export function createWildlifeView(W: number, H: number, water: Uint8Array, avoid: readonly [number, number] = PIER) {
   const duckArt = sheet(DUCK), fishArt = sheet(FISH), splashArt = sheet(SPLASH);
   const wet = (x: number, y: number) => x >= 0 && y >= 0 && x < W && y < H && water[y * W + x] === 1;
   const clear = (x: number, y: number, dx: number, up: number, down: number) => {   // вокруг точки — только вода, и не у причала
-    if (x + dx >= PIER[0]! && x - dx <= PIER[1]!) return false;
+    if (x + dx >= avoid[0] && x - dx <= avoid[1]) return false;
     for (let j = y - up; j <= y + down; j++) for (let i = x - dx; i <= x + dx; i++) if (!wet(i, j)) return false;
     return true;
   };

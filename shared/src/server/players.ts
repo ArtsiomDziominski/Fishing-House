@@ -10,6 +10,7 @@ import { PACKS } from '../packs.ts';
 import { DIRS, startPack, type WorldState } from '../rules.ts';
 import { World } from '../world.ts';
 import { Indoor } from '../indoor.ts';
+import { Isle } from '../island.ts';
 import { loginKey } from '../account.ts';
 import type { Db } from './db.ts';
 import { catches, players, users } from './schema.ts';
@@ -101,12 +102,14 @@ export function cleanWorld(w: WorldState | null): WorldState | null {
   const dx = World.pic.x - (typeof w.picX === 'number' ? w.picX : 0);
   const dy = World.pic.y - (typeof w.picY === 'number' ? w.picY : 0);
   const moved = (v: number | undefined, d: number, home: number) => (Math.round(v!) ? Math.round(v!) + d : home);
-  // в доме — свой кадр (Indoor), картинка-образец его не двигает; там, где стоял, теперь мебель — встанет рядом или у порога
-  const inside = (w as { inside?: boolean }).inside === true;
-  const p = inside ? Indoor.nearestWalkable(w.x, w.y) || Indoor.door : World.nearestWalkable(w.x + dx, w.y + dy) || { x: World.seat.x, y: World.seat.y };
+  // в доме и на острове — свой кадр (Indoor, Isle), картинка-образец его не двигает; там, где стоял, теперь мебель или
+  // дерево — встанет рядом (или у порога, у лодки)
+  const inside = (w as { inside?: boolean }).inside === true, isle = !inside && (w as { isle?: boolean }).isle === true;
+  const p = inside ? Indoor.nearestWalkable(w.x, w.y) || Indoor.door : isle ? Isle.nearestWalkable(w.x, w.y) || Isle.landing
+    : World.nearestWalkable(w.x + dx, w.y + dy) || { x: World.seat.x, y: World.seat.y };
   const k = w.pack as Partial<WorldState['pack']> | undefined;
   return {
-    x: p.x, y: p.y, dir: DIRS.includes(w.dir) ? w.dir : 'down', sitting: !!w.sitting && !inside, inside,
+    x: p.x, y: p.y, dir: DIRS.includes(w.dir) ? w.dir : 'down', sitting: !!w.sitting && !inside, inside, isle,
     pack: k ? { x: moved(k.x, dx, World.pack.baseX), y: moved(k.y, dy, World.pack.baseY), worn: !!k.worn, kind: PACKS.isKind(k.kind) ? k.kind : PACKS.DEFAULT } : startPack(),
     rest: false, bed: false,
     lamp: (w as { lamp?: boolean }).lamp !== false,   // в старых записях лампы нет — она зажжена

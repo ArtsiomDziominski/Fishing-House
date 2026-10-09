@@ -11,7 +11,7 @@
 //   npm run smoke:own -w game-server        (то же, но сервер бот поднимает сам — smoke-own.ts)
 
 import { Client, type Room } from '@colyseus/sdk';
-import { World, Indoor, ITEMS, HUNGER, SCRAPS, FIRE, ROOM, pierPlace, DAY_LENGTH, WEATHERS, REACH, dayHour, weatherText, dist, WORMS, seat, standPoint, homePoint, haulOf, type GroundView, type Item, type PlayerView, type ServerMessages, type WorldState } from '@fh/shared';
+import { World, Indoor, Isle, BOAT_AT, boatPoint, islePlace, shoreToward, ITEMS, HUNGER, SCRAPS, FIRE, ROOM, pierPlace, DAY_LENGTH, WEATHERS, REACH, dayHour, weatherText, dist, WORMS, seat, standPoint, homePoint, haulOf, type GroundView, type Item, type PlayerView, type ServerMessages, type WorldState } from '@fh/shared';
 import { createDb, createAccount, issueTicket, getProfile, loadItems, loadGround, loadBags, loadPlayer, saveWorld, recordCatch, loadFridge, loadChest, robItems } from '@fh/shared/server';
 
 const url = process.env.GAME_URL || 'http://localhost:2567';
@@ -716,6 +716,73 @@ check(!(await loadItems(db, me.id)).hands.some(it => ITEMS.isFish(it.kind)) && (
   again.send('exit');
   await until('вышел из дома', () => !!self && hand()?.inside === false);
   check(!self!.inside && dist(self!, homePoint()) < 1, 'от порога вышел из дома — стоит у крыльца');
+  at.x = self!.x; at.y = self!.y;
+}
+
+// остров: плывут на лодке от мостков и обратно от пляжа; там свой кадр (Isle) и своя земля, а копать и снимать рюкзак нельзя
+{
+  self = null;
+  again.send('sail');
+  await until('отказ отплыть от крыльца', () => !!self);
+  check(!self!.isle && hand()?.isle === false, 'от крыльца на остров не уплыть — только от лодки');
+  await walk(BOAT_AT, again, at);
+  self = null;
+  again.send('sail');
+  await until('приплыл на остров', () => !!self && hand()?.isle === true);
+  check(self!.isle && self!.x === Isle.landing.x && self!.y === Isle.landing.y, 'у лодки сел и приплыл на остров — стоит на пляже, и это видно всем');
+  const isAt = { x: self!.x, y: self!.y };
+  const walkIsle = async (to: { x: number; y: number }) => {
+    for (const q of Isle.findPath(isAt, to)!) for (;;) {
+      const dx = q.x - isAt.x, dy = q.y - isAt.y, d = Math.hypot(dx, dy); if (d < 0.5) break;
+      const k = Math.min(1, 4 / d); isAt.x += dx * k; isAt.y += dy * k;
+      again.send('move', { x: isAt.x, y: isAt.y, dir: 'up' }); await sleep(100);
+    }
+  };
+  worm.length = 0;
+  again.send('dig');
+  await until('отказ копать на острове', () => worm.length > 0);
+  check(worm[0]!.e === 'ground', 'на острове червей не копают');
+  const wearing = hand()!.wearing;
+  self = null;
+  again.send('packOff', { x: isAt.x + 12, y: isAt.y });
+  await until('отказ снять рюкзак', () => !!self);
+  check(self!.isle && self!.pack.worn === wearing, 'на острове рюкзак не снимают');
+  // земля острова своя: удочка, положенная тут, лежит в его месте (islePlace), а не у причала
+  const rodLeft = !!(await loadItems(db, me.id)).hands.find(it => it.id === rod.id)?.left;
+  again.send('itemDrop', { id: rod.id });
+  await until('удочка на земле острова', () => onGround(rod.id, again)?.isle === true);
+  await sleep(400);
+  check((await loadGround(db, islePlace(me.id))).some(g => g.id === rod.id) && !(await loadGround(db, pierPlace(me.id))).some(g => g.id === rod.id), 'удочка лежит на земле острова — в базе у острова, не у причала');
+  again.send('itemPick', { id: rod.id, left: rodLeft });
+  await until('удочка снова в руке', () => !onGround(rod.id, again) && [hand()?.hand, hand()?.off].includes(rod.kind));
+  check(true, 'с земли острова удочку подняли обратно');
+  await walkIsle(standPoint(true));
+  again.send('sit');
+  await until('сел на мостках острова', () => hand()?.sitting === true);
+  check(hand()!.x === Isle.seat.x && hand()!.y === Isle.seat.y, 'на мостках острова садятся рыбачить на их место рыбака');
+  again.send('stand');
+  await until('встал с мостков', () => hand()?.sitting === false);
+  Object.assign(isAt, standPoint(true));
+  // с берега острова тоже рыбачат: там, где удилище достаёт до воды, садятся, где стоят, лицом к ней; посреди острова — нет
+  await walkIsle(Isle.nearestWalkable(330, 222)!);
+  self = null;
+  again.send('sit');
+  await until('отказ сесть посреди острова', () => !!self);
+  check(!self!.sitting && hand()?.sitting === false, 'посреди острова с удочкой не сесть');
+  const bank = shoreToward(140, 200, isAt)!;
+  await walkIsle(bank);
+  again.send('move', { x: bank.x, y: bank.y, dir: 'down' });
+  again.send('sit');
+  await until('сел на берегу острова', () => hand()?.sitting === true);
+  check(hand()!.x === bank.x && hand()!.y === bank.y && hand()!.dir === 'left', 'на западном берегу острова сел, где стоял, лицом к воде');
+  again.send('stand');
+  await until('встал с берега', () => hand()?.sitting === false);
+  check(hand()!.x === bank.x && hand()!.y === bank.y, 'с берега встал там же, где сидел');
+  await walkIsle(Isle.landing);
+  self = null;
+  again.send('sail');
+  await until('приплыл обратно', () => !!self && hand()?.isle === false);
+  check(!self!.isle && dist(self!, boatPoint()) < 1, 'от пляжа острова приплыл обратно — стоит на мостках у лодки');
   at.x = self!.x; at.y = self!.y;
 }
 

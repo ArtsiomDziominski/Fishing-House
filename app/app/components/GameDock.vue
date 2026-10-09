@@ -34,10 +34,11 @@ function press(ev: MouseEvent, what: 'left' | 'right' | 'pack' | 'open' | 'lamp'
       <span v-if="game.actions.light" class="for-keys"><kbd>L</kbd> — зажечь или погасить лампу</span>
       <span class="for-keys"><kbd>F</kbd> или пробел — рыбачить</span>
       <span class="for-keys"><kbd>H</kbd> у двери — войти в дом или выйти; в доме <kbd>F</kbd> — сесть в кресло у камина, лечь в кровать, открыть холодильник</span>
+      <span class="for-keys"><kbd>H</kbd> у лодки справа от мостков — плыть на остров и обратно; там рыбачат и с берега — кликни по воде</span>
       <span class="for-keys"><kbd>X</kbd> — достать рыбу из ведра или съесть; у костра она жарится</span>
       <span v-if="game.actions.dig" class="for-keys"><kbd>G</kbd> — копать червей на траве: лопата в одной руке, банка в другой</span>
-      <span class="for-touch">Коснись места — рыбак пойдёт туда</span>
-      <span class="for-touch">Руки, ведро, рюкзак, еда, лопата, дверь и рыбалка — кнопками внизу</span>
+      <span class="for-touch">Коснись места — рыбак пойдёт туда; на острове коснись воды — сядет рыбачить на берегу</span>
+      <span class="for-touch">Руки, ведро, рюкзак, еда, лопата, дверь, лодка и рыбалка — кнопками внизу</span>
     </div>
   </div>
 </template>

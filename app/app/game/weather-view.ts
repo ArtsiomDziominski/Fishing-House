@@ -74,7 +74,7 @@ function fogDensity(water: Uint8Array): Float32Array {
   return out;
 }
 
-// water — где на карте вода (её находит river-view.ts): капля там оставляет круги, а не брызги.
+// water — где на карте вода (её находит river-view.ts): капля там оставляет круги, а не брызги. На острове вода своя — useWater.
 export function createWeatherView(water: Uint8Array) {
   const st = { clouds: 0, rain: 0, wind: 0, fog: 0 };   // сила явлений сейчас, 0..1
   const drops: Drop[] = Array.from({ length: RAIN.drops }, () => ({ x: 0, y: 0, h: 1, len: 1, t: 0, wait: 0, live: false }));
@@ -215,5 +215,12 @@ export function createWeatherView(water: Uint8Array) {
   // Серая дымка поверх кадра, 0..1: под тучами свет ровный, краски бледнее.
   const haze = () => 0.1 * st.clouds + 0.05 * st.rain;
 
-  return { st, update, draw, tint, haze };
+  // Другой кадр — другая вода (остров): круги от капель и гуще туман — над ней.
+  function useWater(w: Uint8Array) {
+    if (w === water) return;
+    water = w; splashes.length = 0;
+    if (fog) fog.dens = fogDensity(w);
+  }
+
+  return { st, update, draw, tint, haze, useWater };
 }

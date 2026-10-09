@@ -9,7 +9,7 @@
 // wait — ждём поклёвку; bite — клюёт, надо подсечь; pull — рыба идёт вверх по леске;
 // fly — летит в ведро; pause — короткая передышка; scare — рыба ушла (рано дёрнул или прозевал).
 
-import { FISH, type Catch } from './fish.ts';
+import { FISH, type Catch, type FishSpot } from './fish.ts';
 
 export const TIME = { cast: 0.55, waitMin: 2.2, waitMax: 6.5, pull: 0.5, fly: 0.7, pause: 0.6, scare: 0.9 };
 
@@ -35,9 +35,10 @@ export interface FishingOptions {
   hasRoom?: () => boolean;            // есть ли в ведре (в каком-нибудь из тех, что рядом) место ещё для одной рыбы
   emit: (ev: FishingEvent) => void;
   grace?: number;                     // сколько секунд прибавить к окну подсечки
+  spot?: () => FishSpot;              // где рыбачат: у причала или с мостков острова — там клюют разные рыбы (FISH.roll)
 }
 
-export function createFishing({ rnd = Math.random, hasRod, hasBait, hasWorms = () => true, useWorm = () => {}, hasBucket, hasRoom = () => true, emit, grace = 0 }: FishingOptions) {
+export function createFishing({ rnd = Math.random, hasRod, hasBait, hasWorms = () => true, useWorm = () => {}, hasBucket, hasRoom = () => true, emit, grace = 0, spot = () => 'pier' }: FishingOptions) {
   const st: FishingState = { phase: 'off', t: 0, wait: 0, nibble: -1, fish: null };
   const set = (phase: Phase) => { st.phase = phase; st.t = 0; };
   function cast() {
@@ -74,7 +75,7 @@ export function createFishing({ rnd = Math.random, hasRod, hasBait, hasWorms = (
     if (st.phase === 'cast' && st.t >= TIME.cast) set('wait');
     else if (st.phase === 'wait') {
       if (st.nibble > 0 && t0 < st.nibble && st.t >= st.nibble) emit({ e: 'nibble' });
-      if (st.t >= st.wait) { st.fish = FISH.roll(rnd); useWorm(); set('bite'); emit({ e: 'bite' }); }   // клюнула — червя объела, поймай её или нет
+      if (st.t >= st.wait) { st.fish = FISH.roll(rnd, spot()); useWorm(); set('bite'); emit({ e: 'bite' }); }   // клюнула — червя объела, поймай её или нет
     }
     else if (st.phase === 'bite' && st.fish && st.t >= FISH.byId[st.fish.id]!.window + grace) { st.fish = null; set('scare'); emit({ e: 'miss' }); }
     else if (st.phase === 'scare' && st.t >= TIME.scare) recast();

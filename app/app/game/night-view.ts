@@ -1,8 +1,9 @@
 // Вечер и ночь: над поляной летают светлячки, на реке дрожит свет из окон дома и лунная дорожка, в воде мерцают звёзды.
+// Тот же вид — и у острова (свои вода и суша, окон там нет).
 // Только картинка. Рисуется поверх ночного затемнения — иначе огоньки потемнели бы вместе с кадром.
 // Всё случайное здесь у каждого игрока своё, как в погоде и в реке: огоньки никто не сверяет.
 
-import { World } from '@fh/shared';
+import { World, type Box } from '@fh/shared';
 
 type Ctx = CanvasRenderingContext2D;
 const W = World.W, H = World.H;
@@ -19,8 +20,9 @@ const clamp = (v: number, a: number, b: number) => (v < a ? a : v > b ? b : v);
 interface Fly { x: number; y: number; lift: number; a: number; b: number; p: number; q: number; blink: number }
 interface Dash { x: number; y: number; len: number; ph: number; k: number }   // k — яркость по месту, 0..1
 
-// water — маска воды (1 — вода), та же, что у реки.
-export function createNightView(water: Uint8Array) {
+// water — маска воды (1 — вода), та же, что у реки; walk — где светлячкам летать (над тем, где ходит герой); lights — окна дома
+// (их отсвет на воде; null — окон нет).
+export function createNightView(water: Uint8Array, walk: (x: number, y: number) => boolean = World.canWalk, L: Box | null = World.lights) {
   const wet = (x: number, y: number) => x >= 0 && y >= 0 && x < W && y < H && water[y * W + x] === 1;
   const bank = (x: number) => { for (let y = 0; y < H; y++) if (wet(x, y)) return y; return -1; };   // где в столбце начинается вода
 
@@ -28,12 +30,12 @@ export function createNightView(water: Uint8Array) {
   const flies: Fly[] = [];
   for (let i = 0; i < 4000 && flies.length < FLIES.n; i++) {
     const x = Math.floor(rnd(8, W - 8)), y = Math.floor(rnd(8, H - 8));
-    if (!World.canWalk(x, y) || wet(x, y)) continue;
+    if (!walk(x, y) || wet(x, y)) continue;
     flies.push({ x, y, lift: rnd(FLIES.lift[0]!, FLIES.lift[1]!), a: rnd(0.25, 0.6), b: rnd(0.4, 0.9), p: rnd(0, 6.283), q: rnd(0, 6.283), blink: rnd(0.9, 1.7) });
   }
 
   // Отсвет окон: штрихи на воде под домом, чем дальше от берега — тем слабее.
-  const windows: Dash[] = [], L = World.lights;
+  const windows: Dash[] = [];
   if (L) for (let i = 0; i < 2000 && windows.length < WINDOWS.n; i++) {
     const x = Math.floor(rnd(L.x - WINDOWS.pad, L.x + L.w + WINDOWS.pad)), top = bank(x); if (top < 0) continue;
     const d = Math.floor(rnd(1, WINDOWS.reach) * Math.random());              // ближе к берегу — гуще

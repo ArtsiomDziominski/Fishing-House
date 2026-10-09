@@ -42,7 +42,7 @@ export type Place = Pick<Item, 'x' | 'y' | 'rot'>;
 export interface GroundItem { id: number; kind: ItemKind; x: number; y: number; lit: boolean; fish: string }
 
 // Заглянуть в рюкзак можно, когда он на спине или лежит рядом с героем. slack — запас сервера на рывки сети.
-// Снятый рюкзак лежит снаружи: из дома (inside) до него не дотянуться, как бы ни совпали числа.
+// Снятый рюкзак лежит снаружи у причала: из дома (inside) и с острова (isle) до него не дотянуться, как бы ни совпали числа.
 // Вёдра: size — сколько рыб вмещает, tint — цвет, в который перекрашена жесть (null — как на картинке, серое). Вид у всех
 // один — 4×4 клетки, лёгкие; различаются цветом и вместимостью.
 export type BucketKind = Extract<ItemKind, `bucket${string}`>;
@@ -52,7 +52,7 @@ export const BUCKETS: Record<BucketKind, { size: number; tint: [number, number, 
   'bucket-green': { size: 50, tint: [74, 148, 70] },
 };
 
-export const packInReach = (hero: Point & { inside?: boolean }, pack: PackState, slack = 0) => pack.worn || (!hero.inside && dist(hero, pack) <= REACH + slack);
+export const packInReach = (hero: Point & { inside?: boolean; isle?: boolean }, pack: PackState, slack = 0) => pack.worn || (!hero.inside && !hero.isle && dist(hero, pack) <= REACH + slack);
 
 export const ITEMS = (() => {
   // w и h — клеток в ширину и в высоту, когда вещь не повёрнута; heavy — тяжёлая: её держат двумя руками; text — подпись в рюкзаке

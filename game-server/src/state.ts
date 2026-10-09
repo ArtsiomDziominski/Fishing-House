@@ -14,6 +14,7 @@ export const PlayerState = schema({
   rest: t.boolean(),          // сидит у костра, а в доме — у камина
   bed: t.boolean(),           // спит в кровати в доме
   inside: t.boolean(),        // в доме: x, y — в кадре комнаты (Indoor)
+  isle: t.boolean(),          // на острове: x, y — в кадре острова (Isle)
   wearing: t.boolean(),       // рюкзак на спине
   px: t.int16(),              // где лежит рюкзак, если не на спине
   py: t.int16(),
@@ -38,6 +39,7 @@ export const GroundState = schema({
   fish: t.string(),           // ведро — хвосты рыб над ним (id через запятую), рыба — её вид
   end: t.string(),            // рыба: за ней пришла чайка или кот ('gull', 'cat') или она тает ('fade'); пусто — лежит
   haul: t.string(),           // ведро: сколько каких рыб в нём ('roach:2,perch:1', haulText) — достать может любой
+  isle: t.boolean(),          // лежит на острове (x, y — в кадре острова), а не у причала
 }, 'GroundState');
 export type GroundState = SchemaType<typeof GroundState>;
 
@@ -55,6 +57,7 @@ export const PierState = schema({
   players: t.map(PlayerState),   // ключ — sessionId соединения
   ground: t.map(GroundState),    // ключ — id вещи строкой; земля одна на все копии причала (у каждого причала своя, items.place)
   fire: t.boolean(),             // костёр горит (гаснет под дождём, разжигает игрок); один на все копии этого причала
+  isleFire: t.boolean(),         // костёр на острове этого причала — так же
   holes: t.map(HoleState),       // ямки от лопат (ключ — номер ямки); одни на все копии этого причала
 }, 'PierState');
 export type PierState = SchemaType<typeof PierState>;

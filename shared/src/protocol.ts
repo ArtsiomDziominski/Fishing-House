@@ -17,6 +17,8 @@ export const MOVE_EVERY = 0.1;          // как часто клиент шлё
 export interface JoinOptions { ticket: string; pier: string }
 // Где лежит вещь на земле (items.place): у каждого причала своя земля, и вещь, оставленную на одном, на другом не видно.
 export const pierPlace = (owner: string) => `pier:${owner}`;
+// Земля острова этого причала (island.ts): у каждого причала свой остров, и вещи на нём лежат отдельно от причала.
+export const islePlace = (owner: string) => `isle:${owner}`;
 // Причал, где сейчас кто-то есть: чей (owner — id, name — имя хозяина) и сколько там игроков. Список — сообщение piers.
 export interface PierInfo { owner: string; name: string; players: number }
 // Чей причал — в состоянии комнаты: id и имя хозяина.
@@ -61,6 +63,7 @@ export interface ClientMessages {
   bed: void;                                  // лечь спать в кровать: в доме, стоя у неё, если она свободна (Indoor.nearBed)
   enter: void;                                // войти в дом: стоя у двери снаружи (nearDoor); в ответ — «self» уже в доме
   exit: void;                                 // выйти из дома: стоя у порога внутри (Indoor.nearExit); в ответ — «self» у крыльца
+  sail: void;                                 // плыть на остров или обратно: стоя у лодки (nearBoat); в ответ — «self» уже на том берегу
   press: void;                                // забросить, подсечь — как F или пробел
   packOn: void;                               // надеть рюкзак (он должен лежать рядом)
   packOff: { x: number; y: number };          // снять рюкзак и положить сюда
@@ -145,6 +148,7 @@ export interface PlayerView {
   rest: boolean;                                            // сидит у костра, а в доме — в кресле у камина
   bed: boolean;                                             // спит в кровати в доме
   inside: boolean;                                          // в доме: x, y — в кадре комнаты (indoor.ts); видят его только те, кто тоже внутри
+  isle: boolean;                                            // на острове: x, y — в кадре острова (island.ts); видят его те, кто тоже там
   wearing: boolean; px: number; py: number; pack: string;   // рюкзак: на спине или лежит в px, py; pack — его вид
   hand: string; off: string;                                // что в правой и в левой руке: вид вещи (ITEM_KINDS, ведро тоже) или пусто.
                                                             // Тяжёлая вещь — только в hand (держат её двумя руками)
@@ -159,7 +163,8 @@ export interface PlayerView {
 // в game-server/src/state.ts. Земля одна на все копии причала и не пустеет, когда игрок уходит. fish — у ведра хвосты рыб над ним, у рыбы — её вид.
 // end — у рыбы: за ней пришла чайка или кот, или она тает (ScrapEnd в scraps.ts); пусто — лежит.
 // haul — у ведра: сколько каких рыб в нём (haulText); достать оттуда рыбу может любой, кто рядом.
-export interface GroundView { kind: string; x: number; y: number; lit: boolean; fish: string; end: string; haul: string }
+// isle — лежит на острове (x, y — в кадре острова), а не у причала.
+export interface GroundView { kind: string; x: number; y: number; lit: boolean; fish: string; end: string; haul: string; isle: boolean }
 
 // Ямка от лопаты, как её видят все в состоянии комнаты (ключ — её номер строкой): где она и когда вскопана (мс, часы сервера).
 // Поля совпадают с HoleState в game-server/src/state.ts. Ямки общие для всех копий причала и зарастают через WORMS.REST.

@@ -66,10 +66,11 @@ export function rodAngle(st: ViewState): number {
   if (st.phase === 'fly') { const k = Math.min(1, st.t / (TIME.fly * 0.7)); return LIFT * (1 - k * k * (3 - 2 * k)); }
   return 0;
 }
-// Кончик удочки на карте; geo.x, geo.tipY — кончик в покое.
-function rodTip(x: number, tipY: number, a: number) {
-  const px = x + ROD.pivotX - ROD.tipX, py = tipY + ROD.pivotY - ROD.tipY, vx = ROD.tipX - ROD.pivotX, vy = ROD.tipY - ROD.pivotY;
-  return { x: Math.round(px + vx * Math.cos(a) - vy * Math.sin(a)), y: Math.round(py + vx * Math.sin(a) + vy * Math.cos(a)) };
+// Кончик поднятой на a удочки на карте; geo.x, geo.tipY — кончик в покое. У рыбака лицом вправо (geo.flip) — отражённый.
+function rodTip(geo: Geo, a: number) {
+  const px = geo.x + ROD.pivotX - ROD.tipX, py = geo.tipY + ROD.pivotY - ROD.tipY, vx = ROD.tipX - ROD.pivotX, vy = ROD.tipY - ROD.pivotY;
+  const x = Math.round(px + vx * Math.cos(a) - vy * Math.sin(a)), y = Math.round(py + vx * Math.sin(a) + vy * Math.cos(a));
+  return { x: geo.flip ? 2 * geo.x - x : x, y };
 }
 // Сидящий рыбак: тело отдельно, удилище отдельно; повёрнутые кадры удилища кешируются. Удилище в руках — та самая удочка,
 // что у рыбака в руке: оно рисуется её цветами (rodColors), как удочка в руке на ходу, — вершинка, бланк, у рук рукоять,
@@ -141,7 +142,7 @@ function seg(ctx: Ctx, x0: number, y0: number, x1: number, y1: number) {
 }
 
 export interface FishArt { side: HTMLCanvasElement; sideFlip: HTMLCanvasElement; up: HTMLCanvasElement }
-export interface Geo { x: number; tipY: number; waterY: number; head: { x: number; y: number }; bucket: { x: number; y: number } | null }
+export interface Geo { x: number; tipY: number; waterY: number; flip?: boolean; head: { x: number; y: number }; bucket: { x: number; y: number } | null }
 export interface Art { line: { img: HTMLImageElement; x: number; y: number }; fish: Record<string, FishArt> }
 
 // Знак «клюёт!» над героем. Рисуется отдельно от остального и после ночного затемнения: его должно быть видно в любой час.
@@ -151,7 +152,7 @@ export function drawBite(ctx: Ctx, st: ViewState, head: { x: number; y: number }
   stampMap(ctx, BANG, BANG_COL, head.x - 3, head.y - 13 - bob);
 }
 
-// geo: леска (столбец, кончик удилища, вода), макушка сидящего героя, край ведра (или null).
+// geo: леска (столбец, кончик удилища, вода; flip — рыбак смотрит вправо), макушка сидящего героя, край ведра (или null).
 export function drawFishing(ctx: Ctx, st: ViewState, time: number, geo: Geo, art: Art) {
   const { x, tipY, waterY } = geo, phase = st.phase;
   if (phase === 'off') return;
@@ -179,7 +180,7 @@ export function drawFishing(ctx: Ctx, st: ViewState, time: number, geo: Geo, art
     line(tipY + 1, waterY - 1 + jerk); float(2 + jerk);
     if (jerk) splash(); else ripple(ctx, x, waterY + 1, 3, 1);
   } else if (phase === 'pull' && st.fish) {
-    const k = Math.min(1, st.t / TIME.pull), e = 1 - (1 - k) * (1 - k), tip = rodTip(x, tipY, rodAngle(st));   // удочка подсекла и тянет рыбу
+    const k = Math.min(1, st.t / TIME.pull), e = 1 - (1 - k) * (1 - k), tip = rodTip(geo, rodAngle(st));   // удочка подсекла и тянет рыбу
     const s = art.fish[st.fish.id]!.up, fy = Math.round(waterY - 2 - (waterY - tip.y - 10) * e), fx = Math.round(x + (tip.x - x) * e);
     seg(ctx, tip.x, tip.y + 1, fx, fy);
     ctx.drawImage(s, fx - (s.width >> 1), fy);
@@ -187,7 +188,7 @@ export function drawFishing(ctx: Ctx, st: ViewState, time: number, geo: Geo, art
     ripple(ctx, x, waterY + 1, Math.floor(k * 5), 1 - k);
   } else if (phase === 'fly' && st.fish && geo.bucket) {
     const k = Math.min(1, st.t / TIME.fly);
-    const top = rodTip(x, tipY, LIFT), ax = top.x, ay = top.y + 8, bx = geo.bucket.x, by = geo.bucket.y, mx = (ax + bx) / 2, my = Math.min(ay, by) - 30;
+    const top = rodTip(geo, LIFT), ax = top.x, ay = top.y + 8, bx = geo.bucket.x, by = geo.bucket.y, mx = (ax + bx) / 2, my = Math.min(ay, by) - 30;
     const px = (1 - k) * (1 - k) * ax + 2 * (1 - k) * k * mx + k * k * bx, py = (1 - k) * (1 - k) * ay + 2 * (1 - k) * k * my + k * k * by;
     const f = art.fish[st.fish.id]!, s = bx >= ax ? f.sideFlip : f.side;   // головой по ходу
     ctx.drawImage(s, Math.round(px - s.width / 2), Math.round(py - s.height / 2));

@@ -1,4 +1,4 @@
-// Костёр на лужайке у дома (где он — World.fire): камни кругом, поленья, живое пламя и искры.
+// Костёр на лужайке у дома (где он — World.fire) или на поляне острова (Isle.fire): камни кругом, поленья, живое пламя и искры.
 // Только картинка: сесть у огня разрешает сервер, а свет от него кладёт движок вместе с лампами.
 // Пламя считается от времени, без состояния: у каждого столбца своя высота, она дрожит.
 // Дождь его гасит (решает сервер, FIRE.douse): тогда в очаге обугленные поленья в золе, а сразу после — тлеют угли и идёт пар.
@@ -16,8 +16,9 @@ const ASH = { char: '2a1a12', ash: '8a857c', steam: 'd8dad6', embers: 4, puffs: 
 
 const noise = (n: number, s: number) => { const v = Math.sin(n * 127.1 + s * 311.7) * 43758.5453; return v - Math.floor(v); };
 
-export function createFireView() {
-  const fx = World.fire.x, fy = World.fire.y;
+// at — середина очага: у дома или на острове.
+export function createFireView(at: { x: number; y: number } = World.fire) {
+  const fx = at.x, fy = at.y;
   const stone = (ctx: Ctx, [dx, dy, w]: [number, number, number]) => {
     ctx.fillStyle = '#' + PAL.stoneDark; ctx.fillRect(fx + dx, fy + dy, w, 2);
     ctx.fillStyle = '#' + PAL.stone; ctx.fillRect(fx + dx, fy + dy - 1, w, 2);
@@ -42,7 +43,7 @@ export function createFireView() {
     ctx.globalAlpha = 1;
   }
 
-  // t — секунды; out — костёр погас столько секунд назад (null — горит). Рисовать в общей очереди по y = World.fire.y:
+  // t — секунды; out — костёр погас столько секунд назад (null — горит). Рисовать в общей очереди по y = at.y:
   // кто стоит за костром, того пламя закрывает.
   function draw(ctx: Ctx, t: number, out: number | null = null) {
     ctx.fillStyle = PAL.shadow; ctx.fillRect(fx - 12, fy + 5, 25, 2); ctx.fillRect(fx - 9, fy + 7, 19, 1);
