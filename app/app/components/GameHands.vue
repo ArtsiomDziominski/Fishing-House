@@ -1,7 +1,7 @@
 <!-- Что в руках — панель слева вверху (где она стоит, решает страница игры, .hud-left): левая рука (Q) и правая (E),
      тяжёлая вещь — одной строкой на обе. У ведра — сколько в нём рыб из скольких (ITEMS.capacity) и какая рыба: нажать на
      рыбу — достать её в свободную руку (take). Ниже — ведро на земле под рукой (game.near): из него достать рыбу может
-     любой. У банки — сколько червей, как в рюкзаке (WORMS.label). Остальное — просто название. -->
+     любой; в океане там — ведро в своей лодке («В лодке»). У банки — сколько червей, как в рюкзаке (WORMS.label). Остальное — просто название. -->
 <script setup lang="ts">
 import { FISH, ITEMS, WORMS, type Hand, type Item } from '@fh/shared';
 import { itemSprite } from '~/game/items-art';
@@ -36,7 +36,7 @@ const rows = computed(() => {
 const near = computed(() => {
   const n = game.near; if (!n) return null;
   const total = Object.values(n.haul).reduce((a, b) => a + b, 0);
-  return { it: { kind: n.kind as Item['kind'] }, pail: { id: n.id, counts: n.haul, best: {}, total, grams: null, size: ITEMS.capacity(n.kind) } as Pail };
+  return { boat: !!n.boat, it: { kind: n.kind as Item['kind'] }, pail: { id: n.id, counts: n.haul, best: {}, total, grams: null, size: ITEMS.capacity(n.kind) } as Pail };
 });
 
 const caught = (p: Pail) => FISH.SPECIES.filter(sp => p.counts[sp.id]);
@@ -65,7 +65,7 @@ const hint = (p: Pail, sp: { id: string; name: string }) =>
     </div>
     <div v-if="near" class="row near">
       <div class="head">
-        <span class="side">Рядом</span>
+        <span class="side">{{ near.boat ? 'В лодке' : 'Рядом' }}</span>
         <span class="pic"><img :src="icon(near.it)" alt=""></span>
         <span class="name">{{ ITEMS.title(near.it) }}</span>
         <b class="n" :class="{ none: near.pail.total >= near.pail.size }" :title="near.pail.total >= near.pail.size ? 'Ведро полное' : ''">{{ fill(near.pail) }}</b>

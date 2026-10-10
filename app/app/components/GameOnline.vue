@@ -1,8 +1,8 @@
-<!-- Справа вверху: часы и погода причала, клёв (нажать — кто сейчас клюёт охотнее), чей это причал (и куда сходить в гости),
-     кто сейчас здесь (имя — ссылка на профиль) и выход в меню.
+<!-- Справа вверху: часы и погода причала, клёв (нажать — кто сейчас клюёт охотнее), чей это причал (и куда сходить в гости;
+     в общих водах — общий остров или открытый океан), кто сейчас здесь (имя — ссылка на профиль) и выход в меню.
      В разработке часы и погоду можно выставить: это делает сервер, сразу у всех игроков. -->
 <script setup lang="ts">
-import { WEATHERS, WEATHER_NAMES, type WeatherKind } from '@fh/shared';
+import { SEA_ROOM, WEATHERS, WEATHER_NAMES, type WeatherKind } from '@fh/shared';
 import type { BiteInfo } from '~/game/engine';
 
 const emit = defineEmits<{
@@ -14,6 +14,9 @@ const emit = defineEmits<{
 const game = useGameStore();
 const { user } = useUserSession();
 const open = ref<'clock' | 'bite' | 'list' | 'piers' | null>(null);
+// В общих водах (остров и океан — одни на всех, хозяина нет): вместо «чей причал» — где ты; в гости отсюда не ходят — сначала
+// доплыть до причала на лодке.
+const waters = computed(() => game.whose.owner === SEA_ROOM);
 
 const PRESETS = [{ name: 'Утро', hour: 6 }, { name: 'День', hour: 12 }, { name: 'Вечер', hour: 19 }, { name: 'Ночь', hour: 23 }];
 const DAY_MINUTES = 24 * 60;
@@ -43,13 +46,16 @@ function toggle(ev: Event, what: 'clock' | 'bite' | 'list' | 'piers') {
   if (open.value === 'piers') { game.piers = null; emit('piers'); }   // список каждый раз свежий
 }
 function go(ev: Event, owner: string) { blur(ev); open.value = null; emit('visit', owner); }
+// Перешёл в другую комнату (переплыл, ушёл в гости) — список причалов был про прежнюю: закрываем, откроют — спросим заново.
+watch(() => game.roomId, () => { if (open.value === 'piers') open.value = null; });
 // Клёв: какой он и почему, и как клюёт каждый вид по сравнению с обычным для него — в среднем за сутки и всякую погоду (FISH.forecast).
 const LEVELS = ['слабый', 'обычный', 'хороший'];
 const PARTS: Record<BiteInfo['part'], string> = { night: 'Ночь', morning: 'Утро', day: 'День', evening: 'Вечер' };
 const bite = computed(() => game.bite);
 const biteWhy = computed(() => {
   const b = bite.value; if (!b) return '';
-  const tip = b.weather === 'rain' ? 'в дождь рыба клюёт чаще'
+  const tip = b.spot === 'sea' ? seaTip(b)
+    : b.weather === 'rain' ? 'в дождь рыба клюёт чаще'
     : b.part === 'night' && !b.isle ? 'у причала клюёт вяло, а на острове берут сом и лещ'
     : b.part === 'night' ? 'сом и лещ вышли кормиться'
     : b.part === 'morning' ? 'на зорьке охотится щука'
@@ -59,6 +65,17 @@ const biteWhy = computed(() => {
     : 'к ночи на острове проснётся сом';
   return `${PARTS[b.part]}, ${WEATHER_NAMES[b.weather].toLowerCase()}: ${tip}`;
 });
+// В океане: у косяка (якорь брошен рядом с ним) клюёт чаще и крупнее — это главное; иначе — кто сейчас выходит кормиться.
+function seaTip(b: BiteInfo) {
+  const fish = b.part === 'night' ? 'ночью к свету поднимается кальмар'
+    : b.part === 'morning' ? 'на рассвете бывает тунец'
+    : b.weather === 'rain' || b.weather === 'cloudy' ? 'в непогоду берёт треска'
+    : b.weather === 'fog' ? 'в тумане со дна идёт камбала'
+    : b.part === 'evening' ? 'к вечеру клюёт морской окунь'
+    : 'в ясный день гуляет скумбрия';
+  return b.shoal ? `ты у косяка — клюёт чаще и крупнее, а ${fish}` : `${fish}; ищи косяк — где кружат чайки, там клюёт лучше`;
+}
+const WHERE: Record<BiteInfo['spot'], string> = { pier: 'у причала', isle: 'на острове', sea: 'в океане' };
 const moodOf = (r: number) => (r >= 1.6 ? { text: 'клюёт охотно', tone: 'up' } : r >= 1.2 ? { text: 'чаще обычного', tone: 'up' } : r >= 0.85 ? { text: 'как обычно', tone: '' } : r >= 0.45 ? { text: 'реже обычного', tone: 'down' } : { text: 'почти не клюёт', tone: 'down' });
 const playersWord = (n: number) => (n % 10 === 1 && n % 100 !== 11 ? 'игрок' : [2, 3, 4].includes(n % 10) && ![12, 13, 14].includes(n % 100) ? 'игрока' : 'игроков');
 function setClock(ev: Event, hour: number | null) { blur(ev); draft.value = null; emit('clock', hour); }
@@ -84,15 +101,18 @@ function setWind(ev: Event, wind: boolean | null) { blur(ev); emit('weather', ga
       >
         Клёв<span class="dots" :aria-label="LEVELS[bite.level]"><i v-for="n in 3" :key="n" :class="{ on: n <= bite.level + 1 }" /></span>
       </button>
+      <span v-if="waters" class="chip pier still" title="Общие воды: сюда приплывают на лодках со всех причалов">
+        {{ game.where === 'sea' ? 'Открытый океан' : 'Общий остров' }}
+      </span>
       <button
-        v-if="game.whose.owner" type="button" class="chip pier" :class="{ guest: game.whose.guest }"
+        v-else-if="game.whose.owner" type="button" class="chip pier" :class="{ guest: game.whose.guest }"
         title="Чей это причал. Нажми, чтобы сходить в гости" :aria-expanded="open === 'piers'" @click="toggle($event, 'piers')"
       >
         {{ game.whose.guest ? `В гостях: ${game.whose.name}` : 'Твой причал' }}
       </button>
       <button type="button" class="chip" :aria-expanded="open === 'list'" @click="toggle($event, 'list')">
         <span class="dot" :class="'is-' + game.status" />
-        На причале: {{ game.online.length }}
+        {{ waters ? 'В общих водах' : 'На причале' }}: {{ game.online.length }}
       </button>
       <NuxtLink to="/" class="chip" title="В меню">Меню</NuxtLink>
     </div>
@@ -127,7 +147,7 @@ function setWind(ev: Event, wind: boolean | null) { blur(ev); emit('weather', ga
     </div>
 
     <div v-if="open === 'bite' && bite" class="list bitebox">
-      <b>Клёв {{ bite.isle ? 'на острове' : 'у причала' }} — {{ LEVELS[bite.level] }}</b>
+      <b>Клёв {{ WHERE[bite.spot] }}<template v-if="bite.shoal">, у косяка</template> — {{ LEVELS[bite.level] }}</b>
       <p class="muted">{{ biteWhy }}</p>
       <ul>
         <li v-for="f in bite.fish" :key="f.id">
@@ -135,10 +155,10 @@ function setWind(ev: Event, wind: boolean | null) { blur(ev); emit('weather', ga
           <span class="mood" :class="moodOf(f.ratio).tone">{{ moodOf(f.ratio).text }}</span>
         </li>
       </ul>
-      <p class="muted">Клёв меняется с часом и погодой.<template v-if="!bite.isle"> С острова клюют ещё лещ и сом.</template></p>
+      <p class="muted">Клёв меняется с часом и погодой.<template v-if="bite.spot === 'pier'"> С острова клюют ещё лещ и сом, а в открытом океане — морская рыба.</template><template v-else-if="bite.spot === 'sea'"> Здесь клюёт только морская рыба.</template></p>
     </div>
 
-    <div v-if="open === 'piers'" class="list piers">
+    <div v-if="open === 'piers' && !waters" class="list piers">
       <button v-if="game.whose.guest" type="button" class="home" @click="go($event, user?.id ?? '')">Домой, на свой причал</button>
       <span class="muted">Сейчас играют на причалах:</span>
       <p v-if="game.piers === null" class="muted">Смотрим…</p>
@@ -178,7 +198,7 @@ function setWind(ev: Event, wind: boolean | null) { blur(ev); emit('weather', ga
 .chip.clock.still:hover { background: var(--wood); }
 .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--paper-dim); }
 .dot.is-online { background: var(--good); }
-.dot.is-reconnecting, .dot.is-connecting { background: var(--coat); }
+.dot.is-reconnecting, .dot.is-connecting, .dot.is-sailing { background: var(--coat); }
 .dot.is-offline, .dot.is-error, .dot.is-replaced { background: var(--bad); }
 .list {
   margin: 0; padding: 8px 12px; list-style: none;
@@ -189,6 +209,8 @@ function setWind(ev: Event, wind: boolean | null) { blur(ev); emit('weather', ga
 }
 .list li { padding: 2px 0; }
 .chip.pier.guest { border-color: var(--coat); }   /* ты в гостях */
+.chip.pier.still { cursor: default; border-color: var(--coat); }
+.chip.pier.still:hover { background: var(--wood); }
 /* клёв: три точки — слабый, обычный, хороший */
 .dots { display: flex; gap: 3px; }
 .dots i { width: 6px; height: 6px; border-radius: 50%; background: rgba(244, 227, 193, 0.25); }

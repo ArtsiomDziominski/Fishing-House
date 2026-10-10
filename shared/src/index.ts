@@ -4,6 +4,7 @@
 export * from './world.ts';
 export * from './indoor.ts';
 export * from './island.ts';
+export * from './sea.ts';
 export * from './fish.ts';
 export * from './fishing.ts';
 export * from './packs.ts';

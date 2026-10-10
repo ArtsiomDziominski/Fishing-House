@@ -10,13 +10,17 @@
 // Голод ведёт сервер: присылает сытость и сон; голодный ходит медленнее, спящий не ходит вовсе (экран чёрный — GameSleep).
 // В дом входят у двери (H или клик по ней): кадр гаснет, экран загрузки, и вот комната (interior.ts) — свой кадр со своей
 // проходимостью (Indoor). Внутри видно только тех, кто тоже в доме, а снаружи — только тех, кто на улице.
-// На остров плывут на лодке у мостков (H или клик по лодке): переправа на тёмном экране, и вот остров (island-view.ts) — тоже
-// свой кадр со своей проходимостью (Isle), своим местом рыбака, костром и землёй. Видно там тех, кто тоже на острове.
+// В лодку садятся у мостков (H или клик по лодке) и выбирают, куда плыть: на общий остров или в открытый океан — это общие
+// воды, одни на всех игроков (своя комната на сервере: сервер отвечает «voyage», и страница игры переходит туда сама, а
+// тёмный экран переправы держится, пока не откроется новый кадр). Остров (island-view.ts) — свой кадр со своей
+// проходимостью (Isle), местом рыбака, костром и землёй. В океане (sea-view.ts) каждый в своей лодке: гребёт (стрелки, клик
+// по воде), бросает якорь и рыбачит (F), ведро ставит в лодку (Q, E); по океану ходит косяк, над ним кружат чайки — у него
+// клюёт чаще и крупнее. Видно там тех, кто тоже там.
 
 import type { Room } from '@colyseus/sdk';
 import {
-  World, Indoor, INDOOR, Isle, ISLE, FISH, ITEMS, BUCKETS, HUNGER, SCRAPS, WORMS, PACKS, PACK_KINDS, MOVE_EVERY, SPEED, CARRY_SPEED, RUN, REACH, seat, fireOf, gridOf, nearSeat, standFrom, shoreCast, shoreSit, shoreToward, fisherAt, dist, nearFire, faceFire, nearDoor, nearBoat, BOAT_AT, bucketNearSeat, packInReach, haulOf, dayHour, dayPart, clockText, skyAt, weatherText,
-  type BucketKind, type Catch, type ClientMessages, type DayPart, type Forecast, type Dir, type GroundView, type Hand, type HoleView, type PackKind, type PierView, type PlayerView, type ScrapEnd, type Point, type ServerMessages, type ShoreCast, type Sky, type WeatherKind, type WorldState,
+  World, Indoor, INDOOR, Isle, ISLE, Sea, SEA, SEA_ROOM, FISH, ITEMS, BUCKETS, HUNGER, SCRAPS, WORMS, PACKS, PACK_KINDS, MOVE_EVERY, SPEED, CARRY_SPEED, RUN, REACH, seat, fireOf, gridOf, nearSeat, standFrom, shoreCast, shoreSit, shoreToward, fisherAt, dist, nearFire, faceFire, nearDoor, nearBoat, BOAT_AT, bucketNearSeat, packInReach, haulOf, dayHour, dayPart, clockText, skyAt, weatherText, boatCast, shoalAt,
+  type Area, type BoatCast, type BucketKind, type FishSpot, type Voyage, type Catch, type ClientMessages, type DayPart, type Forecast, type Dir, type GroundView, type Hand, type HoleView, type PackKind, type PierView, type PlayerView, type ScrapEnd, type Point, type ServerMessages, type ShoreCast, type Sky, type WeatherKind, type WorldState,
 } from '@fh/shared';
 import { HERO } from './hero.ts';
 import { createFishingView, drawBite, drawFishing, createRod, rodAngle, type FishArt } from './fishing-view.ts';
@@ -36,20 +40,22 @@ import { createHouseView } from './house.ts';
 import { createPetsView } from './pets.ts';
 import { createInteriorView } from './interior.ts';
 import { createIslandView, ISLE_ART, type IsleArt } from './island-view.ts';
+import { createSeaView } from './sea-view.ts';
 
 // left и right — что сделает левая рука (Q) и правая (E): положить, что в ней (и ведро тоже), или поднять то, что рядом;
 // pack — надеть или снять рюкзак (B); open — рюкзак на спине или рядом: в него можно заглянуть (I);
 // light — зажечь или погасить лампу (L), когда она в руке или стоит на земле рядом; eat — еда (X): съесть рыбу из рук или достать её из ведра;
-// dig — копать червей (G), когда в руке лопата; door — войти в дом или выйти из него (H), когда стоишь у двери, а у лодки —
-// плыть на остров или обратно;
+// dig — копать червей (G), когда в руке лопата; door — войти в дом или выйти из него (H), когда стоишь у двери, а у лодки
+// (и в океане — в ней) — сесть в лодку и выбрать, куда плыть; stand — встать (Esc), в океане — поднять якорь;
 // fridge — стоишь у холодильника в доме: его можно открыть; chest — стоишь у своего сундука
-export interface Actions { left: string | null; right: string | null; pack: string | null; fish: string | null; hot: boolean; stand: boolean; open: boolean; light: string | null; eat: string | null; dig: string | null; door: string | null; fridge: boolean; chest: boolean }
+export interface Actions { left: string | null; right: string | null; pack: string | null; fish: string | null; hot: boolean; stand: string | null; open: boolean; light: string | null; eat: string | null; dig: string | null; door: string | null; fridge: boolean; chest: boolean }
 // Чей причал: owner — id хозяина, name — его имя, guest — ты здесь в гостях (в дом не войти, рюкзак не снять).
 export interface PierOwner { owner: string; name: string; guest: boolean }
 // Голод для интерфейса: food — сытость 0..100; until — когда герой проснётся (мс, наши часы; 0 — не спит).
 export interface HungerInfo { food: number; until: number }
-// Ведро на земле под рукой (не в руках): у сидящего рыбака — у места рыбака, у стоящего — рядом. haul — сколько каких рыб в нём.
-export interface NearPail { id: number; kind: string; haul: Record<string, number> }
+// Ведро на земле под рукой (не в руках): у сидящего рыбака — у места рыбака, у стоящего — рядом; в океане — в своей лодке (boat).
+// haul — сколько каких рыб в нём.
+export interface NearPail { id: number; kind: string; haul: Record<string, number>; boat?: boolean }
 // Время суток для интерфейса: подпись часов, насколько темно (0..1), минута игровых суток,
 // разрешает ли сервер переводить часы и выставлять погоду (разработка), переведены ли часы сейчас;
 // weather — погода словами, fixKind и fixWind — что из погоды выставлено вручную (null — идёт по расписанию).
@@ -58,8 +64,9 @@ export interface SkyInfo {
   weather: string; fixKind: WeatherKind | null; fixWind: boolean | null;
 }
 export type Tone = '' | 'good' | 'bad';
-// Клёв для интерфейса: какой он там, где герой (у причала или на острове), и почему — часть суток и погода (FISH.forecast).
-export interface BiteInfo extends Forecast { isle: boolean; part: DayPart['id']; weather: WeatherKind }
+// Клёв для интерфейса: какой он там, где герой (у причала, на острове или в океане — spot), и почему — часть суток и погода
+// (FISH.forecast); shoal — в океане якорь брошен у косяка: клюёт чаще и крупнее.
+export interface BiteInfo extends Forecast { isle: boolean; spot: FishSpot; shoal: boolean; part: DayPart['id']; weather: WeatherKind }
 // Шаги новичка — что герой уже сделал: надел рюкзак, взял удочку и червей в руки, поймал рыбу, пожарил её, зашёл в дом.
 export type Step = 'pack' | 'gear' | 'fish' | 'fried' | 'house';
 
@@ -82,13 +89,22 @@ export interface GameUI {
   pier(info: PierOwner): void;                           // на чьём ты причале
   bite(info: BiteInfo): void;                           // какой сейчас клёв там, где герой
   step(done: Step): void;                               // герой сделал это сам — шаг новичка выполнен (говорится раз за вход)
+  seen(list: Area[]): void;                             // где герой уже бывал (карта мира)
+  where(scene: Scene): void;                            // какой кадр сейчас на экране
+  voyage(m: ServerMessages['voyage']): void;            // сервер отпустил плыть в другую комнату: на остров, в океан или домой
+  sail(choices: Voyage[] | null): void;                 // сел в лодку: куда можно плыть отсюда (окно выбора); null — закрыть его
+  busy(): boolean;                                      // поверх игры открыто окно со своими клавишами (карта мира) — клавиши игры молчат
 }
+// С чем движок запускается: arriving — приплыли на лодке (куда): экран переправы ещё тёмный, кадр проявится, когда придёт «self».
+export interface GameStart { arriving?: Voyage | null }
 
 export interface GameHandle {
   handAction(side: Hand): void; packAction(): void; lampAction(): void; setPack(kind: PackKind): void; fishAction(): void; standUp(): void; destroy(): void;
   eatAction(): void;                                    // X: съесть рыбу из рук, а нет её — достать из ведра
   digAction(): void;                                    // G: копать червей — лопата в одной руке, банка в другой
-  doorAction(): void;                                   // H: войти в дом или выйти из него — стоя у двери; у лодки — плыть на остров или обратно
+  doorAction(): void;                                   // H: войти в дом или выйти из него — стоя у двери; у лодки — выбрать, куда плыть
+  sailTo(to: Voyage): void;                             // плыть туда (выбрали в окне лодки)
+  stay(): void;                                         // передумал плыть — закрыть окно лодки
   takeFish(species: string, pail?: number): void;       // достать рыбу этого вида в свободную руку — из ведра pail (не назвали — из первого под рукой, где она есть)
   setClock(hour: number | null): void;                  // перевести часы причала на этот час (на сервере, у всех); null — настоящее время
   setWeather(kind: WeatherKind | null, wind: boolean | null): void;   // выставить погоду и ветер (на сервере, у всех); null — по расписанию
@@ -96,12 +112,12 @@ export interface GameHandle {
 }
 
 // rest — сидит у костра (в доме — в кресле у камина); bed — спит в кровати; inside — в доме: x, y тогда в кадре комнаты (Indoor);
-// isle — на острове: x, y в кадре острова (Isle)
+// isle — на острове: x, y в кадре острова (Isle); sea — в своей лодке в океане: x, y — середина лодки (Sea), sitting — на якоре
 type Then = 'sit' | 'wear' | 'rest' | 'lift' | 'door' | 'boat' | 'bed' | 'fridge' | 'chest' | null;
-interface Hero { x: number; y: number; dir: Dir; sitting: boolean; rest: boolean; bed: boolean; inside: boolean; isle: boolean; moving: boolean; anim: number; path: { x: number; y: number }[] | null; then: Then; stuck: number; run: boolean }
-// Кадр: причал (карта), дом изнутри или остров. Кто где — по inside и isle.
-type Scene = 'pier' | 'room' | 'isle';
-const sceneOf = (p: { inside?: boolean; isle?: boolean }): Scene => (p.inside ? 'room' : p.isle ? 'isle' : 'pier');
+interface Hero { x: number; y: number; dir: Dir; sitting: boolean; rest: boolean; bed: boolean; inside: boolean; isle: boolean; sea: boolean; moving: boolean; anim: number; path: { x: number; y: number }[] | null; then: Then; stuck: number; run: boolean }
+// Кадр: причал (карта), дом изнутри, общий остров или открытый океан. Кто где — по inside, isle и sea.
+export type Scene = 'pier' | 'room' | 'isle' | 'sea';
+const sceneOf = (p: { inside?: boolean; isle?: boolean; sea?: boolean }): Scene => (p.inside ? 'room' : p.isle ? 'isle' : p.sea ? 'sea' : 'pier');
 interface Ghost { x: number; y: number; anim: number; moving: boolean; blink: number; seen: number; where: Scene }
 // pack — вид рюкзака на спине или null, если герой налегке
 // carrying — в какой руке ведро (null — ведра в руках нет), pail — какое; hands — виды других вещей в руках: в правой и в левой; lit — его лампа горит
@@ -129,8 +145,21 @@ function shoreSpot(c: ShoreCast): Spot {
     rod: { x: c.tip.x, tipY: c.tip.y, waterY: c.waterY }, line: { x: c.tip.x + World.line.x - World.rod.x, y: c.waterY + World.line.y - World.rod.waterY },
   };
 }
-// Где и как сидит рыбак p: на берегу острова — там, где сел, иначе — на месте рыбака у причала или на мостках острова.
-const seatedAt = (p: { x: number; y: number; dir: string; isle?: boolean }): Spot => { const c = shoreSit({ ...p, sitting: true }); return c ? shoreSpot(c) : spotOf(!!p.isle); };
+// Рыбак в лодке в океане (boatCast): сидит на корме так же, как на причале, — от места рыбака всё стоит так же. lift — на
+// сколько лодку подняла волна.
+function boatSpot(c: BoatCast, lift = 0): Spot {
+  const ox = c.seat.x - seat.x, oy = c.seat.y + lift - seat.y;
+  return {
+    seat: { x: c.seat.x, y: c.seat.y + lift }, fisher: { x: World.fisher.x + ox, y: World.fisher.y + oy }, pail: { x: c.pail.x, y: c.pail.y + lift }, flip: c.flip,
+    rod: { x: c.tip.x, tipY: c.tip.y + lift, waterY: c.waterY }, line: { x: c.tip.x + World.line.x - World.rod.x, y: c.waterY + World.line.y - World.rod.waterY },
+  };
+}
+// Где и как сидит рыбак p: в океане — на корме своей лодки, на берегу острова — там, где сел, иначе — на месте рыбака у
+// причала или на мостках острова. bob — качка лодки в этом месте (в океане).
+const seatedAt = (p: { x: number; y: number; dir: string; isle?: boolean; sea?: boolean }, bob = 0): Spot => {
+  if (p.sea) return boatSpot(boatCast(p, p.dir), bob);
+  const c = shoreSit({ ...p, sitting: true }); return c ? shoreSpot(c) : spotOf(!!p.isle);
+};
 const headOf = (s: Spot) => ({ x: s.seat.x + (s.flip ? -2 : 2), y: s.fisher.y });   // макушка сидящего рыбака
 const packKind = (v: string): PackKind => (PACKS.isKind(v) ? v : PACKS.DEFAULT);   // вид из состояния комнаты — просто строка
 
@@ -142,7 +171,10 @@ const flipped = (src: HTMLCanvasElement) => { const c = makeCanvas(src.width, sr
 const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
 const round2 = (v: number) => Math.round(v * 100) / 100;
 
-export async function startGame(canvas: HTMLCanvasElement, room: Room, ui: GameUI): Promise<GameHandle> {
+// Где уже сказали, что там особенного (arrived), — пока страница открыта.
+const told = new Set<string>();
+
+export async function startGame(canvas: HTMLCanvasElement, room: Room, ui: GameUI, start: GameStart = {}): Promise<GameHandle> {
   const ctx = ctx2d(canvas);
   const params = new URLSearchParams(location.search);
   const send = <K extends keyof ClientMessages>(type: K, ...msg: ClientMessages[K] extends void ? [] : [ClientMessages[K]]) => room.send(type as string, msg[0]);
@@ -155,7 +187,7 @@ export async function startGame(canvas: HTMLCanvasElement, room: Room, ui: GameU
   const sack = makeCanvas(P.w + 3, P.h + 3), sctx = ctx2d(sack);             // клетка рюкзака на земле: справа и снизу место под тень
   const dusk = makeCanvas(W, H), dctx = ctx2d(dusk);                         // слой темноты: цвет неба с дырами там, где горит свет
 
-  const hero: Hero = { x: seat.x, y: seat.y, dir: 'down', sitting: true, rest: false, bed: false, inside: false, isle: false, moving: false, anim: 0, path: null, then: null, stuck: 0, run: false };
+  const hero: Hero = { x: seat.x, y: seat.y, dir: 'down', sitting: true, rest: false, bed: false, inside: false, isle: false, sea: false, moving: false, anim: 0, path: null, then: null, stuck: 0, run: false };
   const pack = { x: P.baseX, y: P.baseY, worn: false, kind: PACKS.DEFAULT, blocked: null as number[] | null };
   let bags: ServerMessages['bags'] = [];                                     // вёдра в руках и что в них — как их назвал сервер
   let hooked: ServerMessages['fish'] | null = null;                          // подсечка: что сказал о ней сервер — покажем, когда рыба долетит
@@ -191,6 +223,7 @@ export async function startGame(canvas: HTMLCanvasElement, room: Room, ui: GameU
     room.onMessage('hunger', (m: ServerMessages['hunger']) => receive(['hunger', m])),
     room.onMessage('food', (m: ServerMessages['food']) => receive(['food', m])),
     room.onMessage('worms', (m: ServerMessages['worms']) => receive(['worms', m])),
+    room.onMessage('voyage', (m: ServerMessages['voyage']) => receive(['voyage', m])),
     room.onMessage('clock', (m: ServerMessages['clock']) => { skew = m.now - Date.now(); pier = { canSet: m.canSet, moved: m.moved }; }),
     room.onMessage('weather', (m: ServerMessages['weather']) => { weather = m; }),
   ];
@@ -273,7 +306,11 @@ export async function startGame(canvas: HTMLCanvasElement, room: Room, ui: GameU
   const isleFire = createFireView(Isle.fire);                                // костёр на поляне острова
   const isleNight = createNightView(island.water, Isle.canWalk, null);       // ночь у острова: светлячки, луна и звёзды в воде, окон нет
   const isleLife = createWildlifeView(W, H, island.water, [ISLE.pier.x - 24, ISLE.pier.x + ISLE.pier.w + 6]);   // утки и рыбы вокруг острова, не у мостков
-  const ferry = paintBoat(FERRY.kind), ferryBox = boatBox(FERRY.kind, FERRY.x, FERRY.y);   // лодка у мостков: на ней плывут на остров
+  const ferry = paintBoat(FERRY.kind), ferryBox = boatBox(FERRY.kind, FERRY.x, FERRY.y);   // лодка у мостков: на ней плывут в общие воды
+  const sea = createSeaView();                                               // открытый океан: небо, волны, лодки, косяк и чайки над ним
+  const seaNight = createNightView(sea.water, () => false, null);            // ночь в океане: луна и звёзды в воде, светлячков нет
+  let frameT = 0;                                                            // секунды кадра — по ним качаются лодки
+  const bobAt = (x: number, y: number) => sea.bob(x, y, frameT, wx.st.wind);   // насколько волна подняла лодку в этом месте
 
   // ---------- размер ----------
   // Карта — это и есть кадр: она 16:9 и вписывается в окно целиком. На экране 16:9 она занимает его весь, на любом
@@ -310,7 +347,7 @@ export async function startGame(canvas: HTMLCanvasElement, room: Room, ui: GameU
   const ownPail = () => { const me = ownView(); return me ? pailHand(me) : null; };
 
   // ---------- рюкзак ----------
-  const canWear = () => !hero.sitting && !hero.inside && !hero.isle && !pack.worn && dist(hero, pack) <= REACH;   // снятый рюкзак — у причала
+  const canWear = () => !hero.sitting && !hero.inside && !hero.isle && !hero.sea && !pack.worn && dist(hero, pack) <= REACH;   // снятый рюкзак — у причала
   function settlePack(x: number, y: number) {            // снятый рюкзак ложится на землю и, как ведро, становится препятствием
     pack.x = Math.round(x); pack.y = Math.round(y); pack.worn = false;
     pack.blocked = World.block(pack.x, pack.y - 1, 5, 2); mapRev++;
@@ -329,6 +366,7 @@ export async function startGame(canvas: HTMLCanvasElement, room: Room, ui: GameU
     if (guest()) { ui.toast('В гостях рюкзак не снимают — его место у тебя дома', 'bad'); return false; }
     if (hero.inside) { ui.toast('В доме рюкзак не снимают — он остался бы на улице', 'bad'); return false; }
     if (hero.isle) { ui.toast('На острове рюкзак не снимают — его место у причала', 'bad'); return false; }
+    if (hero.sea) { ui.toast('В лодке рюкзак не снимают — его место у причала', 'bad'); return false; }
     // сбоку: боком — за спиной, лицом к нам или спиной — с бока, где нет ведра (руки настоящие: HERO.hand, hand2)
     const pail = ownPail(), side = hero.dir === 'left' ? 1 : hero.dir === 'right' ? -1 : pail ? -(pail === 'left' ? HERO.hand2 : HERO.hand)(hero.dir, 0).out : hero.dir === 'down' ? 1 : -1;
     const spots = [[12 * side, 1], [-12 * side, 1], [0, 8], [12 * side, 6], [-12 * side, 6], [12 * side, -5], [-12 * side, -5], [0, -8], [17 * side, 1], [-17 * side, 1]];
@@ -342,7 +380,7 @@ export async function startGame(canvas: HTMLCanvasElement, room: Room, ui: GameU
   function packAction() {
     if (hero.sitting) return;
     if (!pack.worn && guest()) { ui.toast('Рюкзак остался у тебя дома', 'bad'); return; }
-    if (!pack.worn && hero.isle) { ui.toast('Рюкзак остался у причала', 'bad'); return; }
+    if (!pack.worn && (hero.isle || hero.sea)) { ui.toast('Рюкзак остался у причала', 'bad'); return; }
     if (pack.worn) takeOff(); else putOn();
   }
   function setPack(kind: PackKind) {                     // другой рюкзак — меняется и на спине, и на земле
@@ -354,12 +392,14 @@ export async function startGame(canvas: HTMLCanvasElement, room: Room, ui: GameU
   // ---------- герой ----------
   // По какой сетке ходит герой: по карте, по комнате в доме или по острову.
   const here = () => gridOf(hero);
-  // Сесть рыбачить можно у места рыбака (на причале, на мостках острова) и на берегу острова, где удилище достаёт до воды.
+  // Сесть рыбачить можно у места рыбака (на причале, на мостках острова), на берегу острова, где удилище достаёт до воды, и в
+  // океане где угодно — бросив якорь.
   const shoreNow = () => (hero.isle && !hero.sitting && !nearSeat(hero, true) ? shoreCast(hero, hero.dir) : null);
-  const nearSeatNow = () => !hero.sitting && !hero.inside && (nearSeat(hero, hero.isle) || !!shoreNow());
+  const nearSeatNow = () => !hero.sitting && !hero.inside && (hero.sea || nearSeat(hero, hero.isle) || !!shoreNow());
   let castDir: Dir | null = null;                       // куда сесть лицом, дойдя до берега (клик по воде у острова)
   const onFishingSpot = (x: number, y: number) => {    // рыбак на месте рыбака, а сидя — там, где сидит сам
-    const s = hero.sitting ? seatedAt(hero) : spotOf(hero.isle), l = s.flip ? 14 : 10, r = s.flip ? 10 : 14;
+    if (hero.sea && !hero.sitting) return false;       // в океане место рыбака — своя лодка, где бы она ни была
+    const s = hero.sitting ? seatedAt(hero, hero.sea ? bobAt(hero.x, hero.y) : 0) : spotOf(hero.isle), l = s.flip ? 14 : 10, r = s.flip ? 10 : 14;
     return x >= s.seat.x - l && x <= s.seat.x + r && y >= s.seat.y - 31 && y <= s.seat.y + 12;
   };
   const onPack = (x: number, y: number) => !pack.worn && scene === 'pier' && x >= pack.x - 7 && x <= pack.x + 7 && y >= pack.y - 12 && y <= pack.y + 2;
@@ -368,7 +408,7 @@ export async function startGame(canvas: HTMLCanvasElement, room: Room, ui: GameU
   const onHero = (x: number, y: number) => Math.abs(x - hero.x) <= 10 && y <= hero.y + 2 && y >= hero.y - FH;
   // Река и причал с его сваями: всё непроходимое ниже линии берега. Линия снята с картинки; по бокам от неё берег свой.
   const bankY = (px: number) => (px < 0 ? 205 : px < 60 ? 226 : px < 132 ? 232 : px < World.pic.w ? 250 : 244);
-  const inWater = (x: number, y: number) => (hero.isle ? island.wet(x, y) : !World.canWalk(x, y) && y >= bankY(x - World.pic.x) + World.pic.y);
+  const inWater = (x: number, y: number) => (hero.sea ? sea.water[y * W + x] === 1 : hero.isle ? island.wet(x, y) : !World.canWalk(x, y) && y >= bankY(x - World.pic.x) + World.pic.y);
 
   function standUp() {
     if (hero.rest || hero.bed) {                        // из кресла и с кровати — рядом с ними, как и на сервере
@@ -380,11 +420,19 @@ export async function startGame(canvas: HTMLCanvasElement, room: Room, ui: GameU
     if (!hero.sitting) return;
     fishing.leave();
     const p = standFrom(hero);
-    hero.sitting = false; hero.x = p.x; hero.y = p.y; hero.dir = 'down'; lastSent = { x: p.x, y: p.y };
+    hero.sitting = false; hero.x = p.x; hero.y = p.y; if (!hero.sea) hero.dir = 'down'; lastSent = { x: p.x, y: p.y };   // в океане — поднял якорь, лодка смотрит, куда смотрела
     send('stand');
   }
   function sitDown() {
     if (hero.sitting) return;
+    if (hero.sea) {                                     // в океане — бросить якорь там, где лодка: рыбак садится на корму
+      flushMove();
+      if (hero.dir !== 'right') hero.dir = 'left';
+      hero.sitting = true; hero.path = null; hero.then = null; hero.moving = false; marker = null;
+      lastSent = { x: hero.x, y: hero.y };
+      fishing.sit(); send('sit'); sound.cue('anchor');
+      return;
+    }
     const shore = shoreNow();
     if (shore) {                                        // на берегу острова садятся, где стоят, лицом к воде — сервер должен знать, куда смотрим
       hero.x = shore.x; hero.y = shore.y; hero.dir = shore.flip ? 'right' : 'left';
@@ -436,7 +484,8 @@ export async function startGame(canvas: HTMLCanvasElement, room: Room, ui: GameU
   const nearFridgeNow = () => free() && hero.inside && Indoor.nearFridge(hero);
   // Сундук: стоя у него, открыть — вещи в нём показывает окно рюкзака рядом с рюкзаком (components/GameBackpack.vue).
   const nearChestNow = () => free() && hero.inside && Indoor.nearChest(hero);
-  function fishAction() {                               // F, пробел: сесть, забросить, подсечь; у погасшего костра — разжечь; в доме — кресло, кровать, холодильник, сундук
+  function fishAction() {                               // F, пробел: сесть, забросить, подсечь; у погасшего костра — разжечь; в доме — кресло, кровать, холодильник, сундук; в океане — бросить якорь
+    if (!ready || asleep() || door) return;
     if (hero.sitting) send('press'); else if (nearSeatNow()) sitDown(); else if (hero.rest && fireOut()) kindle();
     else if (nearBedNow()) bedDown(); else if (nearFridgeNow()) ui.fridge(); else if (nearChestNow()) ui.chest(); else restDown();
   }
@@ -480,17 +529,20 @@ export async function startGame(canvas: HTMLCanvasElement, room: Room, ui: GameU
   // Войти и выйти решает сервер: ему — enter или exit, в ответ «self» уже по ту сторону двери. Пока он отвечает, кадр
   // гаснет (OUT), потом экран загрузки (не короче LOAD), потом новый кадр проявляется (IN). Рисуется тот кадр, что в scene:
   // он меняется только на тёмном экране. Сервер не пустил (ответил тем же местом или молчит WAIT) — проявляем прежний.
-  // Лодка — так же: sail у лодки, в ответ «self» уже на том берегу; переправа на тёмном экране чуть дольше (SAIL).
+  // Лодка — так же: у лодки выбирают, куда плыть (sail), переправа на тёмном экране чуть дольше (SAIL). Между островом и
+  // океаном ответ — «self» уже там; в другую комнату (от причала в общие воды, оттуда домой) — «voyage»: экран остаётся
+  // тёмным (away), страница игры переходит в другую комнату, и новый движок начинает с того же тёмного экрана (GameStart.arriving).
   const DOOR = { OUT: 0.3, LOAD: 0.75, SAIL: 1.5, IN: 0.35, WAIT: 4 };
-  let scene: Scene = 'pier';                            // какой кадр рисуем: карту, комнату в доме или остров
-  let door: { to: Scene; boat: boolean; t: number; done: boolean; failed: boolean; shown: number } | null = null;   // shown — с какого t проявляем
-  let sailed = false;                                   // уже плавал на остров — подсказку о нём больше не показываем
+  let scene: Scene = 'pier';                            // какой кадр рисуем: карту, комнату в доме, остров или океан
+  // shown — с какого t проявляем; away — плывём в другую комнату; come — приплыли из другой комнаты (кадр — какой скажет сервер)
+  let door: { to: Scene; boat: boolean; t: number; done: boolean; failed: boolean; shown: number; away?: boolean; come?: boolean } | null = null;
+  let sailing: Voyage[] | null = null;                  // открыто окно выбора, куда плыть, — с этими местами
   const doorBusy = () => !!door;
-  const atDoor = () => !hero.sitting && !hero.isle && (hero.inside ? Indoor.nearExit(hero) : nearDoor(hero));
-  const atBoat = () => !hero.sitting && !hero.bed && nearBoat(hero);
+  const atDoor = () => !hero.sitting && !hero.isle && !hero.sea && (hero.inside ? Indoor.nearExit(hero) : nearDoor(hero));
+  const atBoat = () => !hero.bed && (hero.sea || !hero.sitting && nearBoat(hero));   // в океане герой и так в своей лодке
   function doorAction() {
     if (!ready || asleep() || digging > 0 || door) return;
-    if (atBoat()) { sail(); return; }
+    if (atBoat()) { openSail(); return; }
     if (hero.isle) { walkTo(Isle.landing.x, Isle.landing.y, 'boat'); return; }   // с острова — только на лодке
     if (!hero.inside && guest()) { ui.toast('Это чужой дом — войти можно только в свой', 'bad'); return; }
     if (!atDoor()) { if (hero.inside) walkTo(Indoor.door.x, Indoor.door.y, 'door'); else walkTo(World.door.x, World.door.y, 'door'); return; }
@@ -501,21 +553,35 @@ export async function startGame(canvas: HTMLCanvasElement, room: Room, ui: GameU
     send(hero.inside ? 'exit' : 'enter');
     sound.cue('door');
   }
-  // Сесть в лодку у мостков (или у пляжа острова) и плыть на тот берег: решает сервер.
-  function sail() {
+  // Куда можно плыть отсюда: от причала — в общие воды (на остров или в океан), с острова — в океан или домой, из океана —
+  // к острову или домой (к причалу, от которого отплыл).
+  const voyages = (): Voyage[] => (hero.sea ? ['isle', 'home'] : hero.isle ? ['sea', 'home'] : ['isle', 'sea']);
+  function openSail() {
     if (hero.rest) standUp();
     flushMove();
+    hero.path = null; hero.then = null; marker = null;
+    sailing = voyages(); ui.sail(sailing);
+  }
+  function closeSail() { if (sailing) { sailing = null; ui.sail(null); } }
+  // Сесть в лодку и плыть (выбрали в окне): решает сервер. В океане якорь поднимают — сервер поднимет его и сам.
+  function sailTo(to: Voyage) {
+    closeSail();
+    if (!ready || asleep() || digging > 0 || door || !atBoat() || !voyages().includes(to)) return;
+    if (hero.rest) standUp();
+    if (hero.sitting) { fishing.leave(); hero.sitting = false; }
+    flushMove();
     hero.path = null; hero.then = null; marker = null; hero.moving = false; keys.clear();
-    door = { to: hero.isle ? 'pier' : 'isle', boat: true, t: 0, done: false, failed: false, shown: Infinity };
-    send('sail');
+    door = { to: to === 'home' ? 'pier' : to, boat: true, t: 0, done: false, failed: false, shown: Infinity, away: to === 'home' || (!hero.isle && !hero.sea) };
+    send('sail', { to });
     sound.cue('row');
   }
-  // Кадр сменился: погоде — вода этого кадра (круги от капель).
+  // Кадр сменился: погоде — вода этого кадра (круги от капель), карте мира — где герой.
   function setScene(to: Scene) {
     if (to === scene) return;
     scene = to;
-    wx.useWater(scene === 'isle' ? island.water : river.water);
+    wx.useWater(scene === 'isle' ? island.water : scene === 'sea' ? sea.water : river.water);
     if (scene === 'room') did('house');
+    ui.where(scene);
   }
   const loadTime = () => (door?.boat ? DOOR.SAIL : DOOR.LOAD);   // сколько показывать экран загрузки
   // Как темно сейчас от двери: 0 — кадр виден, 1 — экран загрузки.
@@ -528,18 +594,31 @@ export async function startGame(canvas: HTMLCanvasElement, room: Room, ui: GameU
   function updateDoor(dt: number) {
     if (!door) return;
     door.t += dt; keys.clear();
+    if (door.away && !door.failed) {                    // плывём в другую комнату: темно, пока страница не перейдёт; сервер не ответил — не отплыли
+      if (!door.done && door.t >= DOOR.OUT + DOOR.WAIT) door.failed = true; else return;
+    }
     if (door.shown === Infinity && door.t >= DOOR.OUT + loadTime() && (door.done || door.failed || door.t >= DOOR.OUT + DOOR.WAIT)) {
       if (!door.done && !door.failed) door.failed = true;
       setScene(sceneOf(hero));                          // кадр меняется, пока экран тёмный
       door.shown = door.t;
       if (door.failed) ui.toast(door.boat ? 'Отплыть не вышло — подойди к самой лодке' : door.to === 'room' ? 'Войти не вышло — подойди к самой двери' : 'Выйти не вышло — подойди к порогу', 'bad');
-      else if (door.boat && scene === 'isle') {         // приплыли: впервые — что здесь особенного; без рюкзака — что он остался на том берегу
-        const first = !sailed, bag = !pack.worn && !guest();
-        sailed = true;
-        if (first || bag) ui.toast([first && 'Остров! С мостков и с берега тут клюют лещ и сом — у причала их нет. Сом берёт ночью', bag && 'Рюкзак остался у причала'].filter(Boolean).join('. '), first ? 'good' : '');
-      }
+      else if (door.boat) arrived();
     }
     if (door.shown !== Infinity && door.t >= door.shown + DOOR.IN) door = null;
+  }
+  // Приплыли: впервые за то, что страница открыта (told — вне движка: на каждую переправу между комнатами он новый), — что здесь
+  // особенного; без рюкзака — что он остался у причала.
+  function arrived() {
+    const first = !told.has(scene), bag = !pack.worn && (scene === 'isle' || scene === 'sea');
+    told.add(scene);
+    // по одной короткой подсказке: что здесь особенного (впервые), потом — что осталось у причала или в лодке
+    const say = [
+      first && scene === 'isle' && 'Общий остров — сюда приплывают со всех причалов. Тут клюют лещ и сом',
+      first && scene === 'sea' && 'Открытый океан! F — бросить якорь. Где кружат чайки — косяк: там клюёт лучше',
+      scene !== 'sea' && ownView()?.boat && 'Ведро осталось в лодке — освободи руку и возьми его у лодки (Q или E)',
+      bag && 'Рюкзак остался у причала',
+    ].filter((x): x is string => !!x);
+    say.forEach((text, i) => setTimeout(() => { if (alive) ui.toast(text, first && i === 0 && scene !== 'pier' ? 'good' : ''); }, i * 3500));
   }
 
   // ---------- сеть ----------
@@ -551,12 +630,13 @@ export async function startGame(canvas: HTMLCanvasElement, room: Room, ui: GameU
   // Сервер говорит, где мы на самом деле: при входе и когда не принял наш ход.
   function applySelf(w: WorldState) {
     hero.x = w.x; hero.y = w.y; hero.dir = w.dir; hero.path = null; hero.then = null; marker = null;
-    hero.inside = !!w.inside; hero.isle = !!w.isle;
-    if (door && door.shown === Infinity) { if (sceneOf(hero) === door.to) door.done = true; else door.failed = true; }   // ответ на enter, exit или sail
+    hero.inside = !!w.inside; hero.isle = !!w.isle; hero.sea = !!w.sea;
+    if (door && door.shown === Infinity) { if (door.away) { /* встали у лодки — ждём «voyage» */ } else if (door.come || sceneOf(hero) === door.to) door.done = true; else door.failed = true; }   // ответ на enter, exit или sail
     else if (!door) setScene(sceneOf(hero));            // при входе в игру, проснулся у крыльца — сразу там
     if (w.sitting && (!hero.sitting || fishing.st.phase === 'off')) { hero.sitting = true; fishing.sit(); }   // в т.ч. первый вход сидя
     else if (!w.sitting && hero.sitting) { hero.sitting = false; fishing.leave(); }
-    if (hero.sitting && !shoreSit(hero)) { const s = spotOf(hero.isle).seat; hero.x = s.x; hero.y = s.y; }   // на берегу острова сидят там, где сели
+    if (hero.sitting && !hero.sea && !shoreSit(hero)) { const s = spotOf(hero.isle).seat; hero.x = s.x; hero.y = s.y; }   // на берегу острова и в лодке сидят там, где сели
+    ui.seen([...(w.seen ?? ['pier'])]);
     hero.rest = !!w.rest && !hero.sitting; hero.bed = !!w.bed;
     liftPack();
     pack.kind = w.pack.kind; ui.pack(pack.kind);
@@ -575,6 +655,7 @@ export async function startGame(canvas: HTMLCanvasElement, room: Room, ui: GameU
   }
   function handle([type, m]: Inbox) {
     if (type === 'self') applySelf(m);
+    else if (type === 'voyage') { if (door?.away) door.done = true; closeSail(); ui.voyage(m); }   // страница переходит в другую комнату — экран остаётся тёмным
     else if (type === 'bags') { bags = m; if (hooked) hooked.bags = undefined; ui.bags(bags); }
     else if (type === 'hunger') hungerNews(m);
     else if (type === 'worms') wormsNews(m);
@@ -586,11 +667,11 @@ export async function startGame(canvas: HTMLCanvasElement, room: Room, ui: GameU
     else if (m.e === 'needRod' || m.e === 'needBait') {   // рыбачат с удочкой в одной руке и червями в другой; заодно скажем и про ведро, чтобы не ходить дважды
       const want = m.e === 'needBait' ? 'Нужны черви: возьми банку из рюкзака в другую руку'
         : ownHands().some(ITEMS.isBait) ? 'Нужна удочка: возьми её из рюкзака в другую руку' : 'Нужны удочка и черви — по одной в каждую руку. Они в рюкзаке';
-      ui.toast(pailBySeat() ? want : `${want}, а ведро поставь рядом ${deck()}`, 'bad');
+      ui.toast(pailBySeat() || boatPail() ? want : `${want}, а ведро поставь ${hero.sea ? 'в лодку' : 'рядом ' + deck()}`, 'bad');
     }
     else if (m.e === 'noWorms') ui.toast('Черви кончились — накопай ещё: лопату в одну руку, банку в другую, и копай на траве (G)', 'bad');
-    else if (m.e === 'needBucket') ui.toast(`Без ведра не рыбачат: поставь ведро рядом ${deck()} — руки заняты удочкой и червями`, 'bad');
-    else if (m.e === 'bucketFull') { ui.toast('Ведро полное — рыбу некуда класть. Достань из него рыбу или поставь рядом другое ведро', 'bad'); fishing.apply(m); }
+    else if (m.e === 'needBucket') ui.toast(hero.sea ? 'Без ведра не рыбачат: поставь ведро в лодку (Q или E) — руки заняты удочкой и червями' : `Без ведра не рыбачат: поставь ведро рядом ${deck()} — руки заняты удочкой и червями`, 'bad');
+    else if (m.e === 'bucketFull') { ui.toast(hero.sea ? 'Ведро полное — рыбу некуда класть. Достань из него рыбу (X) или плыви домой' : 'Ведро полное — рыбу некуда класть. Достань из него рыбу или поставь рядом другое ведро', 'bad'); fishing.apply(m); }
     else {
       if (m.e === 'early') ui.toast('Рано дёрнул — рыба ушла', 'bad');
       else if (m.e === 'miss') ui.toast('Сорвалась…', 'bad');
@@ -602,9 +683,9 @@ export async function startGame(canvas: HTMLCanvasElement, room: Room, ui: GameU
 
   // Куда летит пойманная рыба: в ведро, куда её положил сервер (catchTo), — в руке (рисуется рядом на настиле) или на земле.
   // Его уже унесли — в своё в руке или ближнее у места рыбака.
-  const deck = () => (shoreSit(hero) ? 'на берег' : 'на настил');   // куда ставят ведро сидящему рыбаку
+  const deck = () => (hero.sea ? 'в лодку' : shoreSit(hero) ? 'на берег' : 'на настил');   // куда ставят ведро сидящему рыбаку
   function catchPail() {
-    const by = seatedAt(hero).pail;
+    const by = seatedAt(hero, hero.sea ? bobAt(hero.x, hero.y) : 0).pail;
     if (catchTo !== null && bags.some(b => b.id === catchTo)) return by;
     return groundHere().find(g => g.id === catchTo) ?? (ownPail() ? by : pailBySeat());
   }
@@ -625,11 +706,17 @@ export async function startGame(canvas: HTMLCanvasElement, room: Room, ui: GameU
   const mealInHand = () => { const h = ownHands(); return h.includes('fish-fried') ? 'fish-fried' : h.includes('fish') ? 'fish' : null; };
   // Ведро на земле под рукой (NearPail): у сидящего — у места рыбака, у стоящего — ближайшее рядом. Чьё — не важно: достать
   // рыбу из ведра на земле может любой. В дом ведро приносят в руке.
-  const groundPail = () => (hero.inside ? null : hero.sitting ? pailBySeat() : ITEMS.nearest(hero, groundHere().filter(g => ITEMS.isBucket(g.kind))));
-  const pailNear = () => !!ownPail() || !!groundPail();
+  const groundPail = () => (hero.inside || hero.sea ? null : hero.sitting ? pailBySeat() : ITEMS.nearest(hero, groundHere().filter(g => ITEMS.isBucket(g.kind))));
+  // Ведро в своей лодке под рукой: в океане — у ног, на берегу — у лодки, если осталось там (руки были заняты). id и улов —
+  // из «bags» (boat), вид — из состояния комнаты.
+  const boatPail = () => {
+    const b = bags.find(x => x.boat), kind = ownView()?.boat;
+    return b && kind && (hero.sea || !hero.sitting && !hero.inside && !hero.bed && nearBoat(hero)) ? { id: b.id, kind, bag: b.bag } : null;
+  };
+  const pailNear = () => !!ownPail() || !!groundPail() || !!boatPail();
   const handFree = () => !inHand('right') || !inHand('left');
   // Сколько рыбы этого вида под рукой: во всех вёдрах в руках и в ведре на земле рядом.
-  const fishNear = (species: string) => bags.reduce((n, b) => n + (b.bag.counts[species] ?? 0), 0) + (haulOf(groundPail()?.haul ?? '')[species] ?? 0);
+  const fishNear = (species: string) => bags.reduce((n, b) => n + (!b.boat || boatPail() ? b.bag.counts[species] ?? 0 : 0), 0) + (haulOf(groundPail()?.haul ?? '')[species] ?? 0);
   const firstFish = () => FISH.SPECIES.find(sp => fishNear(sp.id))?.id ?? null;   // самую простую — первой
   function takeFish(species: string, pail?: number) {
     if (!ready || asleep()) return;
@@ -654,12 +741,14 @@ export async function startGame(canvas: HTMLCanvasElement, room: Room, ui: GameU
   // Копать (G): стоя, лопата в одной руке, банка в другой, перед героем трава. Решает сервер; что видно и так, говорим сразу.
   // Пока копает (digging — сколько ещё секунд), герой стоит на месте: ушёл бы — сервер не дал бы червей.
   let digging = 0;
+  let rowPhase = 0;                                     // в океане: где в гребке вёсла своей лодки (sea.stroke) — новый гребок плещет
   const shovelInHand = () => ownHands().find(WORMS.isShovel) ?? null;
   function digAction() {
     if (!ready || asleep() || digging > 0) return;
     if (hero.sitting || hero.rest) { ui.toast('Сначала встань — копают стоя', 'bad'); return; }
     if (hero.inside) { ui.toast('В доме не копают — червей ищи на траве у причала', 'bad'); return; }
     if (hero.isle) { ui.toast('На острове червей не накопать — тут песок и корни. Копай на траве у причала', 'bad'); return; }
+    if (hero.sea) { ui.toast('В океане червей не накопать — копай на траве у причала', 'bad'); return; }
     if (!shovelInHand()) { ui.toast('Нужна лопата в руке — она в рюкзаке', 'bad'); return; }
     if (!ownHands().some(ITEMS.isBait)) { ui.toast('Червей класть некуда — возьми банку в другую руку', 'bad'); return; }
     if (!WORMS.canDig(WORMS.spot(hero, hero.dir))) { ui.toast('Здесь не копают — только на траве, не у воды и не на тропинках', 'bad'); return; }
@@ -728,7 +817,7 @@ export async function startGame(canvas: HTMLCanvasElement, room: Room, ui: GameU
     let dx = 0, dy = 0, passed = false;
     for (const code of keys) { dx += DIRS[code]![0]; dy += DIRS[code]![1]; }
     const running = shift || (!dx && !dy && hero.run && !!hero.path);   // клавишами бежим с Shift, по клику — с Shift или двойным кликом
-    const pace = (running ? RUN : 1) * HUNGER.pace(food), step = (ownPail() ? CARRY_SPEED : SPEED) * pace * dt;   // голодный еле плетётся
+    const pace = (running ? RUN : 1) * HUNGER.pace(food), step = (hero.sea ? SPEED * SEA.ROW : ownPail() ? CARRY_SPEED : SPEED) * pace * dt;   // голодный еле плетётся, на вёслах — медленнее шага
     if (dx || dy) {                                   // клавиши важнее пути
       if (hero.sitting || hero.rest || hero.bed) standUp();
       hero.path = null; hero.then = null; marker = null; noteMoved();
@@ -742,7 +831,8 @@ export async function startGame(canvas: HTMLCanvasElement, room: Room, ui: GameU
     hero.moving = passed;
     if ((dx || dy) && !hero.sitting) {
       const len = Math.hypot(dx, dy); dx /= len; dy /= len;
-      if (Math.abs(dx) >= Math.abs(dy) * 0.95) hero.dir = dx < 0 ? 'left' : 'right'; else hero.dir = dy < 0 ? 'up' : 'down';
+      if (hero.sea) { if (Math.abs(dx) > 0.2) hero.dir = dx < 0 ? 'left' : 'right'; }   // лодка смотрит только влево или вправо
+      else if (Math.abs(dx) >= Math.abs(dy) * 0.95) hero.dir = dx < 0 ? 'left' : 'right'; else hero.dir = dy < 0 ? 'up' : 'down';
       hero.moving = tryMove(dx * step, dy * step);
       if (hero.path) {                                // упёрлись на пути — бросаем его
         hero.stuck = hero.moving ? 0 : hero.stuck + dt;
@@ -754,10 +844,11 @@ export async function startGame(canvas: HTMLCanvasElement, room: Room, ui: GameU
     fishing.update(dt);
     const ph = fishing.st.phase;                       // заброс и поклёвку слышно
     if (ph !== heard) { if (ph === 'cast' || ph === 'bite') sound.cue(ph); heard = ph; }
-    // в доме дождь и ветер слышно глуше, а трещит камин
+    // в доме дождь и ветер слышно глуше, а трещит камин; в океане — прибой и чайки, громче у косяка; вёсла плещут на каждом гребке
     const snd = hero.inside ? { ...wx.st, rain: wx.st.rain * 0.35, wind: wx.st.wind * 0.25, fire: Math.max(0, 1 - dist(hero, Indoor.fire) / 160) }
+      : hero.sea ? { ...wx.st, fire: 0, sea: true, shoal: Math.max(0, 1 - dist(hero, shoalAt(Date.now() + skew)) / 220) }
       : { ...wx.st, fire: fireLit() ? Math.max(0, 1 - dist(hero, fireOf(hero.isle)) / 110) : 0 };
-    sound.update(dt, { dark: skyAt(hourNow()).dark, ...snd, walk: hero.moving ? (running ? 2 : 1) : 0 });
+    sound.update(dt, { dark: skyAt(hourNow()).dark, ...snd, walk: hero.moving && !hero.sea ? (running ? 2 : 1) : 0 });
 
     sendIn -= dt;
     if (sendIn <= 0) flushMove();
@@ -767,7 +858,7 @@ export async function startGame(canvas: HTMLCanvasElement, room: Room, ui: GameU
   // Что у героя в руке, где стоит его лампа и горит ли она — по состоянию комнаты: там то, что решил сервер и что видят остальные.
   // Чей это причал — в состоянии комнаты; хозяин не ты — ты в гостях.
   const whose = () => room.state as unknown as Partial<PierView>;
-  const guest = () => { const o = whose().owner, me = ownView()?.pid; return !!o && !!me && o !== me; };
+  const guest = () => { const o = whose().owner, me = ownView()?.pid; return !!o && !!me && o !== me && o !== SEA_ROOM; };   // в общих водах хозяина нет — там не в гостях
   const ownView = () => { let me: PlayerView | null = null; players()?.forEach((p, sid) => { if (sid === room.sessionId) me = p; }); return me as PlayerView | null; };
   const ownHands = () => { const me = ownView(); return me ? [me.hand, me.off].filter(Boolean) : []; };
   // Что в правой и в левой руке (тяжёлая — в обеих), как это видит сервер; '' — рука пуста.
@@ -780,8 +871,8 @@ export async function startGame(canvas: HTMLCanvasElement, room: Room, ui: GameU
     (room.state as { ground?: { forEach(cb: (g: GroundView, key: string) => void): void } } | undefined)?.ground?.forEach((g, key) => out.push({ id: Number(key), kind: g.kind, x: g.x, y: g.y, lit: g.lit, fish: g.fish, end: g.end, haul: g.haul, isle: !!g.isle }));
     return out;
   };
-  // Земля там, где герой: у причала или на острове (x, y у вещей острова — в его кадре).
-  const groundHere = () => groundItems().filter(g => g.isle === hero.isle);
+  // Земля там, где герой: у причала или на острове (x, y у вещей острова — в его кадре). В океане земли нет.
+  const groundHere = () => (hero.sea ? [] : groundItems().filter(g => g.isle === hero.isle));
   const groundInReach = () => (hero.sitting || hero.inside ? null : ITEMS.nearest(hero, groundHere()));   // земля — снаружи
   // На какую вещь на земле показали: по её картинке, с запасом в пиксель; из нескольких — ближайшая к точке.
   const groundAt = (x: number, y: number) => groundHere().filter(g => {
@@ -797,13 +888,16 @@ export async function startGame(canvas: HTMLCanvasElement, room: Room, ui: GameU
   }
   // Поднять ближайшую вещь с земли — в эту руку (не назвали — в свободную; занята — сервер уберёт вещь в рюкзак, если он рядом).
   function liftUp(side?: Hand) {
-    const g = groundInReach(); if (!ready || !g) return;
+    const b = boatPail(), g = hero.sea || b ? null : groundInReach();   // в океане и у лодки, где осталось ведро, — оно (вещь с земли поднимут кликом); иначе — то, что на земле
+    if (b) { if (ready) { flushMove(); send('itemPick', { id: b.id, ...(side && { left: side === 'left' }) }); } return; }
+    if (!ready || !g) return;
     flushMove(); send('itemPick', { id: g.id, ...(side && { left: side === 'left' }) });
   }
   // Кладём то, что в этой руке, рядом с собой — с её стороны (HERO.hand, hand2: руки настоящие, по взгляду героя). Лицом к нам
   // или спиной — с того бока, где эта рука на экране; боком — чуть впереди, ближней рукой ближе к нам (ниже на экране),
   // дальней — по ту сторону. Туда, где вещь видно и где не лежит другая; с её стороны тесно — рядом, где выйдет.
   function layDown(side: Hand) {
+    if (hero.sea) { flushMove(); send('itemPut', { x: Math.round(hero.x), y: Math.round(hero.y), left: side === 'left' }); return; }   // в океане — ведро в лодку
     const at = (side === 'left' ? HERO.hand2 : HERO.hand)(hero.dir, 0), o = at.out, lying = groundHere();
     const pail = ITEMS.isBucket(inHand(side)), k = pail ? 1.45 : 1, room = pail ? 11 : 5;   // ведро шире — ставим дальше и просторнее
     let spots: number[][];
@@ -822,9 +916,16 @@ export async function startGame(canvas: HTMLCanvasElement, room: Room, ui: GameU
     ui.toast('Здесь не положить — тесно', 'bad');
   }
   // E — правая рука, Q — левая. В руке что-то есть (и ведро тоже) — кладём на землю; пусто — поднимаем ближайшую вещь.
+  // В океане — только ведро: поставить в лодку (если там нет другого) и взять из неё; можно и сидя на якоре.
   function handTarget(side: Hand): 'drop' | 'lift' | null {
+    if (hero.sea) {                                     // взять — свободной рукой (правой, а занята — левой), чтобы кнопка была одна
+      if (ITEMS.isBucket(inHand(side))) return boatPail() ? null : 'drop';
+      const free: Hand | null = !inHand('right') ? 'right' : !inHand('left') ? 'left' : null;
+      return side === free && boatPail() ? 'lift' : null;
+    }
     if (hero.sitting || hero.inside) return null;       // в доме на пол не кладут
     if (inHand(side)) return 'drop';
+    if (boatPail()) return side === (!inHand('right') ? 'right' : 'left') ? 'lift' : null;   // у лодки — сперва ведро, оставшееся в ней: положил удочку — бери ведро
     return groundInReach() ? 'lift' : null;
   }
   function handAction(side: Hand) {
@@ -835,7 +936,9 @@ export async function startGame(canvas: HTMLCanvasElement, room: Room, ui: GameU
   const handText = (side: Hand) => {
     const what = handTarget(side); if (!what) return null;
     const hand = side === 'left' ? 'левой' : 'правой';
+    if (hero.sea) return what === 'drop' ? 'Поставить ведро в лодку' : 'Взять ведро из лодки';
     if (what === 'drop') return ITEMS.isBucket(inHand(side)) ? 'Поставить ведро' : 'Положить из ' + hand;
+    if (boatPail()) return 'Взять ведро из лодки';
     return ITEMS.isBucket(groundInReach()!.kind) ? 'Взять ведро ' + hand : 'Поднять ' + hand;
   };
   // Горит ли лампа под рукой; null — лампы под рукой нет.
@@ -844,26 +947,28 @@ export async function startGame(canvas: HTMLCanvasElement, room: Room, ui: GameU
     const ph = fishing.st.phase;
     const a: Actions = {
       left: handText('left'), right: handText('right'),
-      pack: hero.sitting || guest() || hero.isle ? null : pack.worn ? 'Снять рюкзак' : canWear() ? 'Надеть рюкзак' : null,   // на острове рюкзак не снимают
+      pack: hero.sitting || guest() || hero.isle || hero.sea ? null : pack.worn ? 'Снять рюкзак' : canWear() ? 'Надеть рюкзак' : null,   // в общих водах рюкзак не снимают
       fish: hero.sitting
         ? (ph === 'rest' ? 'Забросить' : ph === 'bite' ? 'Подсекай!' : ph === 'wait' || ph === 'cast' || ph === 'scare' ? 'Подсечь' : 'Есть!')
-        : nearSeatNow() ? 'Сесть рыбачить' : fireOut() && (nearFireNow() || hero.rest) ? 'Разжечь костёр' : nearFireNow() ? (hero.inside ? 'Сесть в кресло у камина' : 'Сесть у костра')
+        : hero.sea ? (door ? null : 'Бросить якорь') : nearSeatNow() ? 'Сесть рыбачить' : fireOut() && (nearFireNow() || hero.rest) ? 'Разжечь костёр' : nearFireNow() ? (hero.inside ? 'Сесть в кресло у камина' : 'Сесть у костра')
           : nearBedNow() ? 'Лечь спать' : nearFridgeNow() ? 'Холодильник' : nearChestNow() ? 'Сундук' : null,
       hot: hero.sitting && ph === 'bite',
-      stand: hero.sitting || hero.rest || hero.bed,
+      stand: hero.sitting && hero.sea ? 'Поднять якорь' : hero.sitting || hero.rest || hero.bed ? 'Встать' : null,
       open: packInReach(hero, pack),
       light: lampOn() === null ? null : lampOn() ? 'Погасить лампу' : 'Зажечь лампу',
       eat: asleep() ? null : eatText(),
-      dig: !asleep() && !hero.sitting && !hero.inside && !hero.isle && shovelInHand() ? 'Копать червей' : null,
-      door: asleep() || door ? null : atBoat() ? (hero.isle ? 'Плыть к причалу' : 'Плыть на остров')
+      dig: !asleep() && !hero.sitting && !hero.inside && !hero.isle && !hero.sea && shovelInHand() ? 'Копать червей' : null,
+      door: asleep() || door ? null : atBoat() ? (hero.sea ? 'Плыть дальше' : 'Сесть в лодку')
         : atDoor() && (hero.inside || !guest()) ? (hero.inside ? 'Выйти из дома' : 'Войти в дом') : null,
       fridge: !door && nearFridgeNow(),
       chest: !door && nearChestNow(),
     };
     const key = JSON.stringify(a);
     if (key !== actionsKey) { actionsKey = key; ui.actions(a); }
-    const g = ready && !asleep() ? groundPail() : null, near = g && `${g.id}:${g.kind}:${g.haul}`;
-    if ((near || '') !== nearKey) { nearKey = near || ''; ui.near(g && { id: g.id, kind: g.kind, haul: haulOf(g.haul) }); }
+    const g = ready && !asleep() ? groundPail() : null, b = ready && !asleep() ? boatPail() : null;
+    const near = g ? `${g.id}:${g.kind}:${g.haul}` : b ? `${b.id}:${b.kind}:boat:${JSON.stringify(b.bag.counts)}` : '';
+    if (near !== nearKey) { nearKey = near; ui.near(g ? { id: g.id, kind: g.kind, haul: haulOf(g.haul) } : b ? { id: b.id, kind: b.kind, haul: { ...b.bag.counts }, boat: true } : null); }
+    if (sailing && (!atBoat() || door || asleep())) closeSail();   // отошёл от лодки — окно выбора закрывается
   }
 
   // ---------- время суток ----------
@@ -884,11 +989,15 @@ export async function startGame(canvas: HTMLCanvasElement, room: Room, ui: GameU
     ui.sky(info);
   }
   // Клёв там, где герой: в доме — у причала, куда он выйдет. Меняется с частью суток, погодой и берегом — тогда и сообщаем.
+  // В океане клёв ещё зависит от косяка: бросил якорь рядом с ним — клюёт чаще (SEA.SHOAL.pace).
   let biteKey = '';
   function refreshBite(hour: number) {
-    const part = dayPart(hour).id, isle = hero.isle, key = `${part}:${weather.kind}:${isle}`;
+    const part = dayPart(hour).id, isle = hero.isle, spot: FishSpot = hero.sea ? 'sea' : isle ? 'isle' : 'pier';
+    const near = hero.sea && dist(hero, shoalAt(Date.now() + skew)) <= SEA.SHOAL.r, key = `${part}:${weather.kind}:${spot}:${near}`;
     if (key === biteKey) return; biteKey = key;
-    ui.bite({ ...FISH.forecast(isle ? 'isle' : 'pier', { hour, weather: weather.kind }), isle, part, weather: weather.kind });
+    const f = FISH.forecast(spot, { hour, weather: weather.kind });
+    const pace = near ? f.pace * SEA.SHOAL.pace : f.pace, level = near ? (Math.min(2, f.level + 1) as Forecast['level']) : f.level;
+    ui.bite({ ...f, pace, level, isle, spot, shoal: near, part, weather: weather.kind });
   }
 
   // ---------- шаги новичка ----------
@@ -1180,14 +1289,18 @@ export async function startGame(canvas: HTMLCanvasElement, room: Room, ui: GameU
   // земле, чьи бы они ни были. В рюкзаке лампа не горит. Так сказал сервер.
   const light = createLightView();
   // В доме — камин (горит всегда) и лампа в своей руке: дом у каждого свой. На острове — его костёр и лампы на его земле.
+  // В океане костра и земли нет — светят только лампы в руках у тех, кто в лодках.
   function lampSpots() {
     const isle = scene === 'isle', f = fireOf(isle);
-    const out: LightSpot[] = scene === 'room' ? [interior.light] : fireLit(isle) ? [{ x: f.x, y: f.y - 4, k: 1.5 }] : [];   // костёр светит дальше лампы
-    if (scene !== 'room') for (const g of groundItems()) if (g.isle === isle && g.kind === 'lamp' && g.lit) out.push({ x: g.x, y: g.y - 4 });
+    const out: LightSpot[] = scene === 'room' ? [interior.light] : scene !== 'sea' && fireLit(isle) ? [{ x: f.x, y: f.y - 4, k: 1.5 }] : [];   // костёр светит дальше лампы
+    if (scene !== 'room' && scene !== 'sea') for (const g of groundItems()) if (g.isle === isle && g.kind === 'lamp' && g.lit) out.push({ x: g.x, y: g.y - 4 });
     players()?.forEach((p, sid) => {
       if (!p.lamp || p.hand !== 'lamp' && p.off !== 'lamp' || !shown(p, sid)) return;
       const mine = sid === room.sessionId, g = mine ? (ready ? hero : null) : ghosts.get(sid); if (!g) return;
-      if (mine ? hero.sitting : p.sitting) { const s = seatedAt(mine ? hero : p).seat; out.push({ x: s.x, y: s.y - 12 }); } else out.push({ x: g.x, y: g.y - 14 });
+      const w = mine ? hero : p, lift = scene === 'sea' ? bobAt(g.x, g.y) : 0;
+      if (w.sitting) { const s = seatedAt(scene === 'sea' ? { ...w, x: g.x, y: g.y } : w, lift).seat; out.push({ x: s.x, y: s.y - 12 }); }
+      else if (scene === 'sea') { const r = rowerAt(g.x, g.y, w.dir, lift, null); out.push({ x: r.x, y: r.y - 14 }); }
+      else out.push({ x: g.x, y: g.y - 14 });
     });
     return out;
   }
@@ -1327,11 +1440,11 @@ export async function startGame(canvas: HTMLCanvasElement, room: Room, ui: GameU
     const lying = groundInReach(), tall = lying && (ITEMS.isBucket(lying.kind) ? B.bodyH + 2 : groundSprite(lying.kind, lying.lit)?.h);   // чем поднять: правой, а занята — левой
     const key = handTarget('right') === 'lift' ? 'E' : handTarget('left') === 'lift' ? 'Q' : null;
     if (lying && tall && key && !hero.moving) drawKeycap(key, lying.x, lying.y - tall - 10 - bob);
-    if ((nearSeatNow() || nearFireNow() || hero.rest && fireOut() || nearBedNow() || nearFridgeNow() || nearChestNow()) && !hero.moving) drawKeycap('F', Math.round(hero.x), Math.round(hero.y) - FH - 11 - bob);
+    if ((nearSeatNow() && !hero.sea || nearFireNow() || hero.rest && fireOut() || nearBedNow() || nearFridgeNow() || nearChestNow()) && !hero.moving) drawKeycap('F', Math.round(hero.x), Math.round(hero.y) - FH - 11 - bob);
     if (atDoor() && !door && !hero.moving) {           // над дверью — H: войти или выйти
       if (hero.inside) drawKeycap('H', Indoor.door.x, INDOOR.room.bottom - 34 - bob); else drawKeycap('H', World.entry.x + (World.entry.w >> 1), World.entry.y - 12 - bob);
     }
-    if (atBoat() && !door && !hero.moving) {           // над лодкой — H: плыть
+    if (atBoat() && !door && !hero.moving && !hero.sea) {   // над лодкой — H: сесть в неё и плыть (в океане герой и так в ней)
       const b = hero.isle ? island.boat : ferryBox;
       drawKeycap('H', b.x + (b.w >> 1), b.y - 11 - bob);
     }
@@ -1339,8 +1452,8 @@ export async function startGame(canvas: HTMLCanvasElement, room: Room, ui: GameU
 
   function buildDebugLayer() {
     const c = makeCanvas(W, H), x = ctx2d(c), id = x.createImageData(W, H);
-    if (scene !== 'pier') {                             // в доме и на острове — только где можно ходить
-      const walk = scene === 'room' ? Indoor.walk : Isle.walk;
+    if (scene !== 'pier') {                             // в доме, на острове и в океане — только где можно ходить (грести)
+      const walk = scene === 'room' ? Indoor.walk : scene === 'sea' ? Sea.walk : Isle.walk;
       for (let i = 0; i < W * H; i++) if (walk[i]) { const o = i * 4; id.data[o] = id.data[o + 1] = id.data[o + 2] = 255; id.data[o + 3] = 90; }
       x.putImageData(id, 0, 0); return c;
     }
@@ -1353,7 +1466,7 @@ export async function startGame(canvas: HTMLCanvasElement, room: Room, ui: GameU
     x.putImageData(id, 0, 0); return c;
   }
   function drawDebug() {
-    const rev = scene === 'room' ? -2 : scene === 'isle' ? -3 : mapRev;
+    const rev = scene === 'room' ? -2 : scene === 'isle' ? -3 : scene === 'sea' ? -4 : mapRev;
     if (!debugLayer || debugFor !== rev) { debugLayer = buildDebugLayer(); debugFor = rev; }   // проходимость меняется, когда ведро или рюкзак переставляют, и в доме она своя
     fctx.drawImage(debugLayer, 0, 0);
     fctx.fillStyle = '#f0f'; fctx.fillRect(Math.round(hero.x), Math.round(hero.y), 1, 1);
@@ -1377,6 +1490,11 @@ export async function startGame(canvas: HTMLCanvasElement, room: Room, ui: GameU
     const sitters: string[] = [];
     all.forEach((p, sid) => {
       if (sid === room.sessionId || !shown(p, sid)) return;
+      if (scene === 'sea') {                            // в океане каждый в своей лодке: имя — над головой
+        const g = ghosts.get(sid); if (!g) return;
+        const lift = bobAt(g.x, g.y), head = p.sitting ? headOf(seatedAt({ ...p, x: g.x, y: g.y }, lift)) : ((r) => ({ x: r.x, y: r.y - FH + HERO.REST }))(rowerAt(g.x, g.y, p.dir, lift, null));
+        label(p.name, head.x, head.y - 3); return;
+      }
       if (p.sitting) { const c = shoreSit(p); if (c) { const h = headOf(shoreSpot(c)); label(p.name, h.x, h.y - 3); } else sitters.push(p.name); return; }   // на берегу острова каждый сидит сам по себе
       const g = ghosts.get(sid); if (g) label(p.name, g.x, g.y - FH - 2);
     });
@@ -1384,15 +1502,22 @@ export async function startGame(canvas: HTMLCanvasElement, room: Room, ui: GameU
     if (sitters.length) label(sitters[0] + (sitters.length > 1 ? ` и ещё ${sitters.length - 1}` : ''), at.seat.x, at.fisher.y - 3);
   }
 
-  // Кого видно в нынешнем кадре: дом у каждого свой — в доме видно только себя; у причала — тех, кто у причала, на острове — тех, кто на острове.
-  const shown = (p: { inside?: boolean; isle?: boolean }, sid: string) => { const w = sceneOf(p); return w === scene && (w !== 'room' || sid === room.sessionId); };
+  // Кого видно в нынешнем кадре: дом у каждого свой — в доме видно только себя; у причала — тех, кто у причала, на острове — тех,
+  // кто на острове, в океане — тех, кто в океане.
+  const shown = (p: { inside?: boolean; isle?: boolean; sea?: boolean }, sid: string) => { const w = sceneOf(p); return w === scene && (w !== 'room' || sid === room.sessionId); };
+  // Где ноги гребца в лодке (точка лодки x, y; смотрит dir; lift — качка): он сидит на средней банке (sea.ROWER) и на гребке
+  // (row — фаза вёсел) подаётся вперёд-назад (sea.lean).
+  const rowerAt = (x: number, y: number, dir: string, lift: number, row: number | null) =>
+    ({ x: Math.round(x) + (sea.ROWER.dx + (row === null ? 0 : sea.lean(row))) * (dir === 'right' ? -1 : 1), y: Math.round(y) + sea.ROWER.dy + lift });
+  // Свой номер гребка у каждой лодки, чтобы вёсла у всех не шли в ногу.
+  const seedOf = (sid: string) => { let h = 7; for (let i = 0; i < sid.length; i++) h = (h * 31 + sid.charCodeAt(i)) | 0; return (h >>> 0) % 1000 / 1000; };
   // Как рисовать своего героя и чужого (из состояния комнаты и его плавного места g).
   const selfDrawn = (t: number): Drawn => {
     const me = ownView() ?? { hand: '', off: '' };
     return { ...hero, carrying: pailHand(me), pail: pailKind(me), pack: pack.worn ? pack.kind : null, hands: otherHands(me), lit: !!ownView()?.lamp, recent: handRecent(), blink: 0, eat: eatOf(ownView(), room.sessionId, t), dig: digOf(ownView(), room.sessionId, t) };
   };
   // хвосты над своим ведром в руке — из того, что прислал сервер (bags); у чужих — из состояния комнаты (recent)
-  const handRecent = () => bags[0]?.bag.recent ?? [];
+  const handRecent = () => bags.find(b => !b.boat)?.bag.recent ?? [];
   const ghostDrawn = (p: PlayerView, sid: string, g: Ghost, t: number): Drawn => ({
     x: g.x, y: g.y, dir: p.dir, rest: p.rest, moving: g.moving, anim: g.anim, carrying: pailHand(p), pail: pailKind(p), pack: p.wearing ? packKind(p.pack) : null, hands: otherHands(p), lit: p.lamp, recent: p.recent, blink: g.blink, eat: eatOf(p, sid, t), dig: digOf(p, sid, t),
   });
@@ -1456,24 +1581,25 @@ export async function startGame(canvas: HTMLCanvasElement, room: Room, ui: GameU
     }
     const dpr = window.devicePixelRatio || 1, size = Math.round(clamp(view.k * 7, 18 * dpr, 34 * dpr));
     ctx.font = `700 ${size}px "Segoe UI", system-ui, sans-serif`; ctx.textAlign = 'center'; ctx.textBaseline = 'top'; ctx.fillStyle = '#f4e3c1';
-    ctx.fillText(into ? 'Дом рыбака' : door.to === 'isle' ? 'Остров' : 'Причал у реки', cw / 2, py + ph + size * 0.6);
+    ctx.fillText(into ? 'Дом рыбака' : door.to === 'isle' ? 'Общий остров' : door.to === 'sea' ? 'Открытый океан' : 'Причал у реки', cw / 2, py + ph + size * 0.6);
     // полоска: идёт, пока ждём, и доходит до конца, когда сервер ответил
     const load = loadTime(), left = Math.max(0, door.t - DOOR.OUT), k = door.done || door.failed ? Math.min(1, left / load) : Math.min(0.9, left / load * 0.9);
     const bw = Math.round(cw * 0.22), bh = Math.max(4, view.k * 2), bx = Math.round((cw - bw) / 2), by = Math.round(py + ph + size * 2.1);
     ctx.fillStyle = 'rgba(244, 227, 193, 0.18)'; ctx.fillRect(bx, by, bw, bh);
     ctx.fillStyle = '#eda50b'; ctx.fillRect(bx, by, Math.round(bw * k), bh);
     ctx.font = `600 ${Math.round(size * 0.55)}px "Segoe UI", system-ui, sans-serif`; ctx.fillStyle = 'rgba(244, 227, 193, 0.7)';
-    const what = door.boat ? (door.to === 'isle' ? 'Плывём на остров' : 'Плывём к причалу') : into ? 'Входим в дом' : 'Выходим на улицу';
+    const what = door.boat ? (door.to === 'isle' ? 'Плывём на остров' : door.to === 'sea' ? 'Выходим в открытый океан' : 'Плывём к причалу') : into ? 'Входим в дом' : 'Выходим на улицу';
     ctx.fillText(what + '.'.repeat(1 + Math.floor(t * 3) % 3), cw / 2, by + bh * 3);
     ctx.globalAlpha = 1;
   }
 
   function render(t: number) {
+    frameT = t;
     trackEaters(t); trackDiggers(t); trackScraps(t); trackFire(t);
     const sky = skyAt(hourNow());
-    if (scene === 'room') drawRoom(t, sky); else if (scene === 'isle') drawIsle(t, sky); else drawOutside(t, sky);
+    if (scene === 'room') drawRoom(t, sky); else if (scene === 'isle') drawIsle(t, sky); else if (scene === 'sea') drawSea(t, sky); else drawOutside(t, sky);
     // всё, что ниже, — подсказки: они не темнеют
-    if (hero.sitting) drawBite(fctx, fishing.st, headOf(seatedAt(hero)));
+    if (hero.sitting) drawBite(fctx, fishing.st, headOf(seatedAt(hero, hero.sea ? bobAt(hero.x, hero.y) : 0)));
     drawMarker(); drawPrompts(t);
     if (debug) drawDebug();
     ctx.drawImage(frame, 0, 0, canvas.width, canvas.height);
@@ -1540,6 +1666,63 @@ export async function startGame(canvas: HTMLCanvasElement, room: Room, ui: GameU
     drawNight(frameTint(sky), 0, wx.haze() * Math.max(0, 1 - sky.dark * 1.6), lampSpots(), lampPower(sky), t);
     isleNight.draw(fctx, t, sky.dark, 0, wx.st);
   }
+  // Открытый океан: небо и волны, косяк под водой, лодки всех, кто здесь (каждый в своей), — дальние раньше; над косяком
+  // кружат чайки. Земли, костра, дома и зверей тут нет.
+  function drawSea(t: number, sky: Sky) {
+    const ms = Date.now() + skew;
+    sea.draw(fctx, t, { clouds: wx.st.clouds, wind: wx.st.wind });
+    drawSparkles(t, 1 - 0.9 * wx.st.clouds, sea.sparkles);
+    sea.shoalBelow(fctx, t, ms);
+    const queue: { y: number; draw: () => void }[] = [];
+    boatQueue(queue, t);
+    queue.sort((a, b) => a.y - b.y);
+    for (const q of queue) q.draw();
+    drawCast(t);
+    sea.shoalAbove(fctx, t, ms);
+    wx.draw(fctx);
+    drawNight(frameTint(sky), 0, wx.haze() * Math.max(0, 1 - sky.dark * 1.6), lampSpots(), lampPower(sky), t);
+    sea.night(fctx, t, sky.dark);
+    seaNight.draw(fctx, t, sky.dark, 0, wx.st);
+  }
+  // Лодки в океане: свою и чужие. Лодка качается на волне (bobAt); на якоре — рыбак на корме (тот же, что на причале) и ведро
+  // у ног, на ходу — гребец на средней банке с вёслами и след за кормой.
+  function boatQueue(queue: { y: number; draw: () => void }[], t: number) {
+    // row — фаза вёсел (на ходу) или null; ведро — до гребца: оно чуть заходит ему за спину.
+    const boat = (x: number, y: number, dir: string, sitting: boolean, row: number | null, seed: number, person: () => void, pail: { kind: string; recent: ArrayLike<string> } | null) => {
+      const lift = bobAt(x, y), flip = dir === 'right', bx = Math.round(x), by = Math.round(y) + lift;
+      queue.push({ y, draw: () => {
+        if (row !== null) sea.wake(fctx, bx, Math.round(y), flip, t, 1, seed);
+        sea.boatBack(fctx, bx, by, flip, t);
+        if (pail) { const c = boatCast({ x: bx, y: by }, dir); drawBucket({ x: c.pail.x, y: c.pail.y, ...pail }); }
+        person();
+        sea.boatFront(fctx, bx, by, flip, t, { row, anchored: sitting });
+      } });
+    };
+    if (ready && hero.sea && scene === 'sea') {
+      const b = boatPail(), lift = bobAt(hero.x, hero.y), pail = b ? { kind: b.kind, recent: b.bag.recent } : null;
+      if (hero.sitting) {
+        const spot = seatedAt(hero, lift);
+        boat(hero.x, hero.y, hero.dir, true, null, 0, () => drawSitter(spot, rodAngle(fishing.st), ownHands().find(ITEMS.isRod) ?? null, pack.worn ? pack.kind : null), pail);
+      } else {
+        const row = hero.moving ? sea.stroke(t) : null, r = rowerAt(hero.x, hero.y, hero.dir, lift, row);
+        if (row !== null && row < rowPhase) sound.cue('row');   // вёсла вошли в воду — всплеск
+        rowPhase = row ?? 0;
+        boat(hero.x, hero.y, hero.dir, false, row, 0, () => drawHero({ ...selfDrawn(t), x: r.x, y: r.y, rest: true, moving: false, anim: 0 }, t), pail);
+      }
+    }
+    players()?.forEach((p, sid) => {
+      if (sid === room.sessionId || !p.sea || scene !== 'sea') return;
+      const g = ghosts.get(sid); if (!g) return;
+      const lift = bobAt(g.x, g.y), pail = p.boat ? { kind: p.boat, recent: p.recent } : null;
+      if (p.sitting) {
+        const spot = seatedAt({ ...p, x: g.x, y: g.y }, lift), rod = ITEMS.isRod(p.hand) ? p.hand : ITEMS.isRod(p.off) ? p.off : null;
+        boat(g.x, g.y, p.dir, true, null, 0, () => drawSitter(spot, 0, rod, p.wearing ? packKind(p.pack) : null), pail);
+      } else {
+        const seed = seedOf(sid), row = g.moving ? sea.stroke(t, seed) : null, r = rowerAt(g.x, g.y, p.dir, lift, row);
+        boat(g.x, g.y, p.dir, false, row, seed, () => drawHero({ ...ghostDrawn(p, sid, g, t), x: r.x, y: r.y, rest: true, moving: false, anim: 0 }, t), pail);
+      }
+    });
+  }
   // Вещи на земле этого места — свои и чужие.
   function groundQueue(queue: { y: number; draw: () => void }[], isle: boolean, t: number) {
     for (const g of groundItems()) if (g.isle === isle) queue.push({ y: g.y - 0.5, draw: () => (ITEMS.isBucket(g.kind) ? drawBucket({ x: g.x, y: g.y, kind: g.kind, recent: g.fish ? g.fish.split(',') : [] }) : drawLying(g, t)) });
@@ -1589,7 +1772,7 @@ export async function startGame(canvas: HTMLCanvasElement, room: Room, ui: GameU
   // Леска, поплавок и рыба своего героя, если он сидит с удочкой.
   function drawCast(t: number) {
     if (!hero.sitting) return;
-    const at = seatedAt(hero);
+    const at = seatedAt(hero, hero.sea ? bobAt(hero.x, hero.y) : 0);
     drawFishing(fctx, fishing.st, t, {
       x: at.rod.x, tipY: at.rod.tipY, waterY: at.rod.waterY, flip: at.flip, head: headOf(at),
       bucket: ((b) => b && { x: b.x, y: b.y - B.bodyH + 4 })(catchPail()),
@@ -1611,6 +1794,8 @@ export async function startGame(canvas: HTMLCanvasElement, room: Room, ui: GameU
     if (ev.ctrlKey || ev.metaKey || ev.altKey) return;
     if ((ev.target as HTMLElement | null)?.closest?.('input, textarea')) return;
     if (asleep()) return;                              // спящий ничего не делает
+    if (ui.busy()) { keys.clear(); return; }           // открыта карта: Esc и M — её, герой стоит
+    if (ev.defaultPrevented) return;                   // клавишу уже взяло окно поверх игры (закрыло карту по Esc, выбрало, куда плыть)
     if (DIRS[ev.code]) { keys.add(ev.code); ev.preventDefault(); return; }
     if (ev.repeat) return;
     if (ev.code === 'KeyF' || ev.code === 'Space' || ev.code === 'Enter') { fishAction(); ev.preventDefault(); }
@@ -1621,7 +1806,7 @@ export async function startGame(canvas: HTMLCanvasElement, room: Room, ui: GameU
     else if (ev.code === 'KeyX') eatAction();
     else if (ev.code === 'KeyG') digAction();
     else if (ev.code === 'KeyH') doorAction();
-    else if (ev.code === 'Escape') standUp();
+    else if (ev.code === 'Escape') { if (sailing) closeSail(); else standUp(); }
     else if (ev.code === 'F2') { debug = !debug; if (!debug) ui.debug(null); ev.preventDefault(); }
   });
   on<KeyboardEvent>(window, 'keyup', ev => { keys.delete(ev.code); if (ev.key === 'Shift') shift = false; });
@@ -1646,6 +1831,12 @@ export async function startGame(canvas: HTMLCanvasElement, room: Room, ui: GameU
       else if (interior.onBed(p.x, p.y)) { if (!hero.bed) { if (nearBedNow()) bedDown(); else walkTo(Indoor.bed.stand.x, Indoor.bed.stand.y, 'bed', run); } }
       else if (interior.onFridge(p.x, p.y)) { if (nearFridgeNow()) ui.fridge(true); else walkTo(Indoor.fridge.x, Indoor.fridge.y, 'fridge', run); }
       else if (interior.onChest(p.x, p.y)) { if (nearChestNow()) ui.chest(true); else walkTo(Indoor.chest.x, Indoor.chest.y, 'chest', run); }
+      else walkTo(p.x, p.y, undefined, run);
+      return;
+    }
+    if (scene === 'sea') {                             // в океане: клик по своей лодке — куда плыть; сидя на якоре клик по воде — рыбалка; иначе — грести туда
+      if (sea.hit(Math.round(hero.x), Math.round(hero.y) + bobAt(hero.x, hero.y), p.x, p.y)) { if (hero.sitting && onFishingSpot(p.x, p.y)) fishAction(); else doorAction(); }
+      else if (hero.sitting && inWater(p.x, p.y)) fishAction();
       else walkTo(p.x, p.y, undefined, run);
       return;
     }
@@ -1682,18 +1873,20 @@ export async function startGame(canvas: HTMLCanvasElement, room: Room, ui: GameU
     raf = requestAnimationFrame(tick);
   }
   layout();
+  // приплыли на лодке из другой комнаты: экран переправы уже тёмный — кадр проявится, когда сервер скажет, где мы («self»)
+  if (start.arriving) door = { to: start.arriving === 'home' ? 'pier' : start.arriving, boat: true, t: DOOR.OUT + DOOR.SAIL * 0.5, done: false, failed: false, shown: Infinity, come: true };
   for (const m of inbox) handle(m);
   inbox = null;
   if (debug) ui.debug('');
   raf = requestAnimationFrame(tick);
 
   // для отладки из консоли; step(dt, n) прокручивает игру вручную
-  (window as any).FH_GAME = { hero, pack, view, keys, ghosts, fishing, room, sitDown, standUp, walkTo, putOn, takeOff, setPack, fishAction, handAction, packAction, digAction, doorAction,
+  (window as any).FH_GAME = { hero, pack, view, keys, ghosts, fishing, room, sitDown, standUp, walkTo, putOn, takeOff, setPack, fishAction, handAction, packAction, digAction, doorAction, sailTo, sea,
     step: (dt: number, n = 1) => { for (let i = 0; i < n; i++) update(dt); render(performance.now() / 1000); },
     hourNow, setClock, setWeather, wx, river, island, scene: () => scene, setHour: (hour: number | null) => { fixedHour = hour ?? NaN; } };   // setHour(22) останавливает время на этом часе, setHour(null) — пускает снова
 
   return {
-    handAction, packAction, lampAction, setPack, fishAction, standUp, eatAction, digAction, doorAction, takeFish, setClock, setWeather, setSound: sound.setOn,
+    handAction, packAction, lampAction, setPack, fishAction, standUp, eatAction, digAction, doorAction, sailTo, stay: closeSail, takeFish, setClock, setWeather, setSound: sound.setOn,
     destroy() {
       sound.destroy();
       alive = false; cancelAnimationFrame(raf);

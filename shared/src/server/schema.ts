@@ -51,7 +51,7 @@ export const items = pgTable('items', {
   held: boolean('held').notNull().default(false),                  // в руке у героя, а не в рюкзаке; x, y, rot — где лежала до того
   leftHand: boolean('left_hand').notNull().default(false),         // в руке — в левой (иначе в правой; тяжёлая — в обеих, числится в правой)
   ground: boolean('ground').notNull().default(false),              // лежит на земле, общей для всех; тогда x, y — место на карте, а player_id — кто выложил
-  place: text('place').notNull().default('pier'),                  // на земле какого места лежит (pierPlace — причал игрока); в другом месте её не видно
+  place: text('place').notNull().default('pier'),                  // на земле какого места лежит (pierPlace — причал игрока, ISLE_PLACE — общий остров, boatPlace — лодка игрока в океане); в другом месте её не видно
   lit: boolean('lit').notNull().default(false),                    // горит на земле (лампа); в руке горит ли лампа — players.world.lamp
   fish: text('fish').notNull().default(''),                        // рыба (fish, fish-fried) — её вид; у ведра пусто (что в нём — catches.bucket_id)
   worms: smallint('worms').notNull().default(0),                   // банка червей: сколько в ней (новая — пустая, WORMS.MAX — полная); у других вещей ничего не значит

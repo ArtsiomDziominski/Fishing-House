@@ -315,7 +315,7 @@ watch([() => game.items, () => game.hands, () => game.chest], () => { if (select
 
 // Клавиши ловим раньше движка: Esc при открытом рюкзаке закрывает его, а не поднимает рыбака с места.
 function key(ev: KeyboardEvent) {
-  if (ev.ctrlKey || ev.metaKey || ev.altKey || game.hunger.until) return;
+  if (ev.ctrlKey || ev.metaKey || ev.altKey || game.hunger.until || game.mapOpen) return;   // поверх — карта: клавиши её
   if ((ev.target as HTMLElement | null)?.closest?.('input, textarea, select')) return;
   if (ev.code === 'KeyI') { if (!ev.repeat) { if (game.chestOpen) close(); else game.togglePack(); } ev.preventDefault(); return; }
   if (!open.value) return;

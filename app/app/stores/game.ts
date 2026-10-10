@@ -2,8 +2,8 @@
 // Пишет сюда движок (через GameUI), читают компоненты.
 
 import { defineStore } from 'pinia';
-import { CHESTS, HUNGER, PACKS, type Item, type PackKind, type PierInfo, type ServerMessages } from '@fh/shared';
-import type { Actions, BiteInfo, GameUI, HungerInfo, NearPail, PierOwner, SkyInfo, Step, Tone } from '~/game/engine';
+import { CHESTS, HUNGER, PACKS, type Area, type Item, type PackKind, type PierInfo, type ServerMessages, type Voyage } from '@fh/shared';
+import type { Actions, BiteInfo, GameUI, HungerInfo, NearPail, PierOwner, Scene, SkyInfo, Step, Tone } from '~/game/engine';
 
 const SOUND_KEY = 'fh-sound';
 const recall = (key: string) => { try { return localStorage.getItem(key); } catch { return null; } };   // на сервере и в частном окне хранилища нет
@@ -11,7 +11,7 @@ const keep = (key: string, value: string) => { try { localStorage.setItem(key, v
 // Шаги новичка — в этом браузере, у каждого игрока свои: 'off' — не показывать (прошёл, закрыл или он не новичок), иначе — что уже сделано.
 export const STEPS: Step[] = ['pack', 'gear', 'fish', 'fried', 'house'];
 const STEPS_KEY = (pid: string) => 'fh-steps-' + pid;
-export type Status = 'idle' | 'connecting' | 'online' | 'reconnecting' | 'replaced' | 'offline' | 'error';
+export type Status = 'idle' | 'connecting' | 'sailing' | 'online' | 'reconnecting' | 'replaced' | 'offline' | 'error';   // sailing — входим в другую комнату на лодке: на холсте — экран переправы
 
 export const useGameStore = defineStore('game', {
   state: () => ({
@@ -36,7 +36,7 @@ export const useGameStore = defineStore('game', {
     // шаги новичка: для кого (pid), показывать ли, что уже сделано; seen — что герой сделал за этот вход, ещё до того, как
     // стало ясно, новичок ли он; all — всё сделано, панель скоро уйдёт
     steps: { pid: '', show: false, done: [] as Step[], seen: [] as Step[], all: false },
-    actions: { left: null, right: null, pack: null, fish: null, hot: false, stand: false, open: false, light: null, eat: null, dig: null, door: null, fridge: false, chest: false } as Actions,
+    actions: { left: null, right: null, pack: null, fish: null, hot: false, stand: null, open: false, light: null, eat: null, dig: null, door: null, fridge: false, chest: false } as Actions,
     hunger: { food: HUNGER.MAX, until: 0 } as HungerInfo,   // сытость и сон от голода
     robbed: false,                // очнулся после голодного сна — пока спал, могли что-то украсть (GameSleep говорит об этом)
     toast: { text: '', tone: '' as Tone, fishId: null as string | null, show: false, seq: 0 },
@@ -44,6 +44,11 @@ export const useGameStore = defineStore('game', {
     debug: null as string | null,
     online: [] as { pid: string; name: string }[],
     sound: recall(SOUND_KEY) !== '0',   // звук включён; помним выбор игрока в этом браузере
+    seen: ['pier'] as Area[],     // где герой уже бывал: на карте мира остальное скрыто темнотой
+    where: 'pier' as Scene,       // какой кадр сейчас: причал (свой или чужой — whose), дом, общий остров или открытый океан
+    mapOpen: false,               // открыта карта мира (M или кнопка)
+    voyage: null as ServerMessages['voyage'] | null,   // сервер отпустил плыть в другую комнату — страница игры переходит туда
+    sailing: null as Voyage[] | null,                   // сел в лодку: куда можно плыть отсюда (окно выбора, GameVoyage.vue)
   }),
   actions: {
     reset() { this.$reset(); },
@@ -73,6 +78,12 @@ export const useGameStore = defineStore('game', {
       if (want) this.fridgeOpen = false; else this.packOpen = false;
     },
     setSound(on: boolean) { this.sound = on; keep(SOUND_KEY, on ? '1' : '0'); },
+    // Открыть или закрыть карту мира (M или кнопка): что открыто, где герой бывал (seen), а где он сейчас — where.
+    // Карта открывается поверх всего: рюкзак, холодильник, сундук и выбор, куда плыть, — закрываются.
+    toggleMap(open?: boolean) {
+      this.mapOpen = open ?? !this.mapOpen;
+      if (this.mapOpen) { this.packOpen = false; this.fridgeOpen = false; this.chestOpen = false; }
+    },
     // Шаги новичка: показываем тому, кто ещё не поймал ни одной рыбы (по профилю) и не прошёл и не закрыл их в этом браузере.
     async startSteps(pid: string) {
       if (!pid || this.steps.pid === pid) return;
@@ -121,6 +132,11 @@ export const useGameStore = defineStore('game', {
         hunger: info => { this.hunger = info; },
         bite: info => { this.bite = info; },
         step: done => this.stepDone(done),
+        seen: list => { this.seen = list; },
+        where: scene => { this.where = scene; },
+        voyage: m => { this.voyage = m; },
+        sail: choices => { this.sailing = choices; },
+        busy: () => this.mapOpen,
         // сколько червей в банке: в рюкзаке она или в руке, у неё новый счёт
         worms: (id, n) => {
           const set = (list: Item[]) => (list.some(it => it.id === id) ? list.map(it => (it.id === id ? { ...it, worms: n } : it)) : list);

@@ -11,7 +11,7 @@ onBeforeUnmount(() => clearInterval(timer));
 // связь закрылась — чёрный экран уходит: под ним кнопки «Подключиться снова»; пока переподключаемся, он остаётся
 const inGame = computed(() => game.status === 'online' || game.status === 'reconnecting');
 const left = computed(() => Math.max(0, Math.ceil((game.hunger.until - now.value) / 1000)));
-const where = computed(() => (game.whose.guest ? 'у дома' : 'у своего дома'));   // в гостях просыпаются у дома хозяина
+const where = computed(() => (game.whose.guest && game.where !== 'isle' && game.where !== 'sea' ? 'у дома' : 'у своего дома'));   // в гостях просыпаются у дома хозяина, в общих водах лодку прибивает к своему причалу
 const clock = computed(() => `${Math.floor(left.value / 60)}:${String(left.value % 60).padStart(2, '0')}`);
 </script>
 

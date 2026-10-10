@@ -22,7 +22,7 @@ function press(ev: MouseEvent, what: 'left' | 'right' | 'pack' | 'open' | 'lamp'
       <button v-if="game.actions.dig" type="button" @click="press($event, 'dig')"><kbd>G</kbd><span>{{ game.actions.dig }}</span></button>
       <button v-if="game.actions.door" type="button" @click="press($event, 'door')"><kbd>H</kbd><span>{{ game.actions.door }}</span></button>
       <button v-if="game.actions.fish" type="button" :class="{ hot: game.actions.hot }" @click="press($event, 'fish')"><kbd>F</kbd><span>{{ game.actions.fish }}</span></button>
-      <button v-if="game.actions.stand" type="button" @click="press($event, 'stand')"><kbd>Esc</kbd><span>Встать</span></button>
+      <button v-if="game.actions.stand" type="button" @click="press($event, 'stand')"><kbd>Esc</kbd><span>{{ game.actions.stand }}</span></button>
     </div>
 
     <div v-if="game.debug !== null" class="hint debug">{{ game.debug }}</div>
@@ -34,10 +34,11 @@ function press(ev: MouseEvent, what: 'left' | 'right' | 'pack' | 'open' | 'lamp'
       <span v-if="game.actions.light" class="for-keys"><kbd>L</kbd> — зажечь или погасить лампу</span>
       <span class="for-keys"><kbd>F</kbd> или пробел — рыбачить</span>
       <span class="for-keys"><kbd>H</kbd> у двери — войти в дом или выйти; в доме <kbd>F</kbd> — сесть в кресло у камина, лечь в кровать, открыть холодильник</span>
-      <span class="for-keys"><kbd>H</kbd> у лодки справа от мостков — плыть на остров и обратно; там рыбачат и с берега — кликни по воде</span>
+      <span class="for-keys"><kbd>H</kbd> у лодки справа от мостков — сесть в неё и плыть: на общий остров или в открытый океан; <kbd>M</kbd> — карта мира</span>
+      <span v-if="game.where === 'sea'" class="for-keys">В океане: стрелки или клик по воде — грести, <kbd>F</kbd> — бросить якорь и рыбачить, <kbd>Q</kbd>/<kbd>E</kbd> — ведро в лодку и обратно</span>
       <span class="for-keys"><kbd>X</kbd> — достать рыбу из ведра или съесть; у костра она жарится</span>
       <span v-if="game.actions.dig" class="for-keys"><kbd>G</kbd> — копать червей на траве: лопата в одной руке, банка в другой</span>
-      <span class="for-touch">Коснись места — рыбак пойдёт туда; на острове коснись воды — сядет рыбачить на берегу</span>
+      <span class="for-touch">Коснись места — рыбак пойдёт туда; на острове коснись воды — сядет рыбачить на берегу; в океане — лодка поплывёт туда</span>
       <span class="for-touch">Руки, ведро, рюкзак, еда, лопата, дверь, лодка и рыбалка — кнопками внизу</span>
     </div>
   </div>

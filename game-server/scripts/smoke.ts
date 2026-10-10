@@ -3,7 +3,8 @@
 // в ведро на настиле; достаёт рыбу из ведра, жарит её у костра (в дождь костёр гаснет, и его разжигают) и съедает, выложенную на землю рыбу уносит чайка,
 // сосед достаёт рыбу из чужого ведра на земле и уносит ведро вместе с уловом,
 // входит в дом и выходит из него, садится в кресло у камина (второй игрок там жарит рыбу, кладёт улов в холодильник и
-// достаёт его, спит в кровати), а голодным засыпает (у него крадут часть вещей) и просыпается у дома;
+// достаёт его, спит в кровати), плывёт на лодке в общие воды — на общий остров и в открытый океан (третий игрок ловит там
+// рыбу в ведро в лодке) и обратно, а голодным засыпает (у него крадут часть вещей) и просыпается у дома;
 // заодно проверяет, что телепорт сервер не принимает.
 //
 //   npm run smoke -w game-server            (нужны запущенные база и игровой сервер, .env с DATABASE_URL и GAME_SECRET)
@@ -11,7 +12,7 @@
 //   npm run smoke:own -w game-server        (то же, но сервер бот поднимает сам — smoke-own.ts)
 
 import { Client, type Room } from '@colyseus/sdk';
-import { World, Indoor, Isle, BOAT_AT, boatPoint, islePlace, shoreToward, ITEMS, HUNGER, SCRAPS, FIRE, ROOM, pierPlace, DAY_LENGTH, WEATHERS, REACH, dayHour, weatherText, dist, WORMS, seat, standPoint, homePoint, haulOf, type GroundView, type Item, type PlayerView, type ServerMessages, type WorldState } from '@fh/shared';
+import { World, Indoor, Isle, SEA, SEA_ROOM, ISLE_PLACE, BOAT_AT, boatPoint, boatPlace, shoreToward, ITEMS, FISH, HUNGER, SCRAPS, FIRE, ROOM, pierPlace, DAY_LENGTH, WEATHERS, REACH, dayHour, weatherText, dist, WORMS, seat, standPoint, homePoint, haulOf, type GroundView, type Item, type PlayerView, type ServerMessages, type WorldState } from '@fh/shared';
 import { createDb, createAccount, issueTicket, getProfile, loadItems, loadGround, loadBags, loadPlayer, saveWorld, recordCatch, loadFridge, loadChest, robItems } from '@fh/shared/server';
 
 const url = process.env.GAME_URL || 'http://localhost:2567';
@@ -471,21 +472,23 @@ await sleep(500);
 const profile = await getProfile(db, me.id);
 check(profile?.bag.total === 1 && profile.latest.length === 1, 'улов записан в базу и виден в профиле');
 
-// второй вход: место и ведро сохранились
-const again: Room = await client.joinOrCreate(ROOM, { ticket: issueTicket(me.id, me.name), pier: me.id });
+// второй вход: место и ведро сохранились. again — комната, где бот сейчас: на лодке он переходит в общие воды и обратно,
+// и listen вешает те же обработчики на новую комнату.
+let voyage: ServerMessages['voyage'] | null = null;
+const listen = (r: Room) => {
+  r.onMessage('self', (m: WorldState) => { self = m; });
+  r.onMessage('bags', (m: ServerMessages['bags']) => { bags = m; });
+  r.onMessage('items', (m: ServerMessages['items']) => { items = m; });
+  r.onMessage('hunger', (m: ServerMessages['hunger']) => { hunger = m; });
+  r.onMessage('food', (m: ServerMessages['food']) => { food.push(m); });
+  r.onMessage('worms', (m: ServerMessages['worms']) => { worm.push(m); });
+  r.onMessage('voyage', (m: ServerMessages['voyage']) => { voyage = m; });
+  for (const type of ['fish', 'chest', 'clock', 'weather', 'fridge']) r.onMessage(type, () => {});
+  return r;
+};
 self = null;
-again.onMessage('self', (m: WorldState) => { self = m; });
-again.onMessage('bags', (m: ServerMessages['bags']) => { bags = m; });
-again.onMessage('fish', () => {});
-again.onMessage('chest', () => {});
-again.onMessage('clock', () => {});
-again.onMessage('weather', () => {});
-again.onMessage('items', (m: ServerMessages['items']) => { items = m; });
-again.onMessage('hunger', (m: ServerMessages['hunger']) => { hunger = m; });
-again.onMessage('food', (m: ServerMessages['food']) => { food.push(m); });
 worm.length = 0;
-again.onMessage('worms', (m: ServerMessages['worms']) => { worm.push(m); });
-again.onMessage('fridge', () => {});
+let again: Room = listen(await client.joinOrCreate(ROOM, { ticket: issueTicket(me.id, me.name), pier: me.id }));
 items = null;
 await until('себя после входа', () => !!self);
 const pailNow = (await loadGround(db, pierPlace(me.id))).find(g => g.id === pail.id);
@@ -720,17 +723,32 @@ check(!(await loadItems(db, me.id)).hands.some(it => ITEMS.isFish(it.kind)) && (
   at.x = self!.x; at.y = self!.y;
 }
 
-// остров: плывут на лодке от мостков и обратно от пляжа; там свой кадр (Isle) и своя земля, а копать и снимать рюкзак нельзя
+// общие воды: у лодки на мостках — выбор, куда плыть; общий остров и открытый океан — одна комната на всех (pier = SEA_ROOM),
+// туда браузер переходит сам по «voyage». На острове свой кадр (Isle) и общая земля, копать и снимать рюкзак нельзя.
 {
   self = null;
-  again.send('sail');
+  again.send('sail', { to: 'isle' });
   await until('отказ отплыть от крыльца', () => !!self);
-  check(!self!.isle && hand()?.isle === false, 'от крыльца на остров не уплыть — только от лодки');
+  check(!self!.isle && hand()?.isle === false && !voyage, 'от крыльца не уплыть — только от лодки');
   await walk(BOAT_AT, again, at);
   self = null;
+  again.send('sail', { to: 'home' });
+  await until('отказ плыть домой от причала', () => !!self);
+  check(!voyage && !self!.isle && !self!.sea, 'от причала домой не плывут — только на остров или в океан');
+  self = null;
   again.send('sail');
+  await until('отказ без «куда»', () => !!self);
+  check(!voyage && again.connection.isOpen, 'sail без «куда» (вкладка старше общих вод) не выкидывает из игры — герой просто остаётся у лодки');
+  self = null;
+  again.send('sail', { to: 'isle' });
+  await until('лодку на остров', () => !!voyage && !!self);
+  check(voyage!.to === 'isle' && dist(self!, boatPoint()) < 1 && !self!.isle, 'у лодки сел в неё — сервер ставит героя к лодке и отпускает на общий остров');
+  await again.leave();
+  self = null; voyage = null;
+  again = listen(await client.joinOrCreate(ROOM, { ticket: issueTicket(me.id, me.name), pier: SEA_ROOM, to: 'isle' }));
   await until('приплыл на остров', () => !!self && hand()?.isle === true);
-  check(self!.isle && self!.x === Isle.landing.x && self!.y === Isle.landing.y, 'у лодки сел и приплыл на остров — стоит на пляже, и это видно всем');
+  check(self!.isle && !self!.sea && self!.x === Isle.landing.x && self!.y === Isle.landing.y, 'приплыл на общий остров — стоит на пляже, и это видно всем');
+  check((again.state as { owner: string }).owner === SEA_ROOM && self!.seen.includes('isle') && self!.seen.includes('pier'), 'общие воды — без хозяина; остров теперь открыт на карте мира');
   const isAt = { x: self!.x, y: self!.y };
   const walkIsle = async (to: { x: number; y: number }) => {
     for (const q of Isle.findPath(isAt, to)!) for (;;) {
@@ -748,12 +766,12 @@ check(!(await loadItems(db, me.id)).hands.some(it => ITEMS.isFish(it.kind)) && (
   again.send('packOff', { x: isAt.x + 12, y: isAt.y });
   await until('отказ снять рюкзак', () => !!self);
   check(self!.isle && self!.pack.worn === wearing, 'на острове рюкзак не снимают');
-  // земля острова своя: удочка, положенная тут, лежит в его месте (islePlace), а не у причала
+  // земля острова общая на всех (ISLE_PLACE): удочка, положенная тут, лежит там, а не у причала
   const rodLeft = !!(await loadItems(db, me.id)).hands.find(it => it.id === rod.id)?.left;
   again.send('itemDrop', { id: rod.id });
   await until('удочка на земле острова', () => onGround(rod.id, again)?.isle === true);
   await sleep(400);
-  check((await loadGround(db, islePlace(me.id))).some(g => g.id === rod.id) && !(await loadGround(db, pierPlace(me.id))).some(g => g.id === rod.id), 'удочка лежит на земле острова — в базе у острова, не у причала');
+  check((await loadGround(db, ISLE_PLACE)).some(g => g.id === rod.id) && !(await loadGround(db, pierPlace(me.id))).some(g => g.id === rod.id), 'удочка лежит на общем острове — в базе у острова, не у причала');
   again.send('itemPick', { id: rod.id, left: rodLeft });
   await until('удочка снова в руке', () => !onGround(rod.id, again) && [hand()?.hand, hand()?.off].includes(rod.kind));
   check(true, 'с земли острова удочку подняли обратно');
@@ -779,11 +797,26 @@ check(!(await loadItems(db, me.id)).hands.some(it => ITEMS.isFish(it.kind)) && (
   again.send('stand');
   await until('встал с берега', () => hand()?.sitting === false);
   check(hand()!.x === bank.x && hand()!.y === bank.y, 'с берега встал там же, где сидел');
-  await walkIsle(Isle.landing);
+  // перезагрузил страницу на острове — снова на острове, у лодки на пляже (место в общих водах не хранится)
+  await again.leave();
   self = null;
-  again.send('sail');
+  again = listen(await client.joinOrCreate(ROOM, { ticket: issueTicket(me.id, me.name), pier: SEA_ROOM, to: 'isle' }));
+  await until('снова на острове', () => !!self && hand()?.isle === true);
+  check(self!.x === Isle.landing.x && self!.y === Isle.landing.y && (await loadPlayer(db, me.id))!.world!.isle === false, 'перезашёл в общие воды — снова у лодки на пляже; дома в базе он по-прежнему у своего причала');
+  Object.assign(isAt, Isle.landing);
+  self = null;
+  again.send('sail', { to: 'isle' });
+  await until('отказ плыть туда, где он есть', () => !!self);
+  check(!voyage && self!.isle, 'на остров с острова не плывут');
+  self = null;
+  again.send('sail', { to: 'home' });
+  await until('лодку домой', () => !!voyage);
+  check(voyage!.to === 'home' && !voyage!.slept, 'с пляжа острова отчалил домой — сервер отпускает к причалу, откуда приплыл');
+  await again.leave();
+  self = null; voyage = null;
+  again = listen(await client.joinOrCreate(ROOM, { ticket: issueTicket(me.id, me.name), pier: me.id, to: 'home' }));
   await until('приплыл обратно', () => !!self && hand()?.isle === false);
-  check(!self!.isle && dist(self!, boatPoint()) < 1, 'от пляжа острова приплыл обратно — стоит на мостках у лодки');
+  check(!self!.isle && !self!.sea && dist(self!, boatPoint()) < 1 && self!.seen.includes('isle'), 'приплыл обратно — стоит на мостках у лодки, остров на карте остался открыт');
   at.x = self!.x; at.y = self!.y;
 }
 
@@ -823,6 +856,138 @@ check(!(await loadItems(db, me.id)).hands.some(it => ITEMS.isFish(it.kind)) && (
 }
 await again.leave();
 await sleep(500);
+
+// открытый океан: новичок с ведром в руке плывёт в океан, ставит ведро в лодку (в кожаный рюкзак оно не влезает, а руки нужны
+// под удочку и червей), бросает якорь и ловит рыбу в ведро в лодке; сходит на остров — ведро из лодки берёт в руку;
+// плывёт домой с ведром в лодке — дома оно у него в руке. Копать и класть в воду что-то, кроме ведра, нельзя.
+{
+  const sailor = await createAccount(db, 'моряк_' + Math.random().toString(36).slice(2, 8), 'не-для-входа');
+  const box = { self: null as WorldState | null, items: null as ServerMessages['items'] | null, bags: null as ServerMessages['bags'] | null, voyage: null as ServerMessages['voyage'] | null, fish: [] as ServerMessages['fish'][], worms: [] as ServerMessages['worms'][] };
+  const hear = (r: Room) => {
+    r.onMessage('self', (m: WorldState) => { box.self = m; });
+    r.onMessage('items', (m: ServerMessages['items']) => { box.items = m; });
+    r.onMessage('bags', (m: ServerMessages['bags']) => { box.bags = m; });
+    r.onMessage('voyage', (m: ServerMessages['voyage']) => { box.voyage = m; });
+    r.onMessage('fish', (m: ServerMessages['fish']) => { box.fish.push(m); });
+    r.onMessage('worms', (m: ServerMessages['worms']) => { box.worms.push(m); });
+    for (const type of ['clock', 'weather', 'hunger', 'food', 'fridge', 'chest']) r.onMessage(type, () => {});
+    return r;
+  };
+  const board = async (to: 'isle' | 'sea' | 'home') => {
+    await r.leave();
+    box.self = null; box.items = null; box.voyage = null;
+    r = hear(await client.joinOrCreate(ROOM, { ticket: issueTicket(sailor.id, sailor.name), ...(to === 'home' ? { pier: sailor.id, to } : { pier: SEA_ROOM, to }) }));
+    await until('вход после переправы', () => !!box.self && !!box.items && !!view());
+  };
+  let r = hear(await client.joinOrCreate(ROOM, { ticket: issueTicket(sailor.id, sailor.name), pier: sailor.id }));
+  const view = () => (r.state as { players: { get(sid: string): PlayerView | undefined } }).players.get(r.sessionId);
+  await until('моряка на причале', () => !!box.self && !!box.items && !!box.bags && !!view());
+  const pailId = box.items!.hands.find(it => ITEMS.isBucket(it.kind))!.id, sKit = box.items!.list;
+  r.send('stand');
+  const sAt = { ...standPoint() };
+  await walk({ x: World.pack.baseX, y: World.pack.baseY + 6 }, r, sAt);
+  r.send('packOn');
+  await until('рюкзак моряка на спине', () => !!view()?.wearing);
+  r.send('itemTake', { id: thing(sKit, 'rod-willow').id, left: false });
+  await until('удочку в правой руке', () => view()?.hand === 'rod-willow' && view()?.off === 'bucket');
+  await walk(BOAT_AT, r, sAt);
+  r.send('sail', { to: 'sea' });
+  await until('лодку в океан', () => !!box.voyage);
+  check(box.voyage!.to === 'sea', 'у лодки выбрал открытый океан — сервер отпускает туда');
+  await board('sea');
+  const b = SEA.box;
+  check(box.self!.sea && !box.self!.isle && view()!.sea && box.self!.x >= b.x0 && box.self!.x <= b.x1 && box.self!.y >= b.y0 && box.self!.y <= b.y1, 'приплыл в открытый океан — в своей лодке, на воде, и это видно всем');
+  check(box.self!.seen.includes('sea') && !box.self!.seen.includes('isle'), 'океан открыт на карте мира, остров — ещё нет');
+  box.worms.length = 0;
+  r.send('dig');
+  await until('отказ копать в океане', () => box.worms.length > 0);
+  check(box.worms[0]!.e === 'ground', 'в океане не копают');
+  // гребут: шаг по воде принят, как шаг по земле (медленнее — SEA.ROW), за горизонт не уплыть
+  const sea0 = { x: box.self!.x, y: box.self!.y };
+  box.self = null;
+  r.send('move', { x: sea0.x + 2, y: sea0.y, dir: 'right' });
+  await sleep(300);
+  check(!box.self && view()!.x === sea0.x + 2 && view()!.dir === 'right', 'на вёслах лодка идёт по воде');
+  r.send('move', { x: sea0.x + 2, y: SEA.horizon - 10, dir: 'up' });
+  await until('отказ за горизонт', () => !!box.self);
+  check(box.self!.y >= b.y0, 'за горизонт на лодке не уплыть');
+  // якорь: сел — рыбачит, но без ведра в лодке не забросить (руки заняты ведром)
+  r.send('sit');
+  await until('бросил якорь', () => view()?.sitting === true);
+  check(view()!.x === sea0.x + 2 && view()!.y === sea0.y, 'якорь бросают там, где лодка');
+  box.fish.length = 0;
+  r.send('press');
+  await until('отказ без червей', () => box.fish.length > 0);
+  check(box.fish[0]!.e === 'needBait', 'в руке ведро вместо червей — не забросить');
+  r.send('stand');
+  await until('поднял якорь', () => view()?.sitting === false);
+  check(view()!.x === sea0.x + 2 && view()!.y === sea0.y, 'якорь поднят — лодка там же');
+  // в воду ничего, кроме ведра, не положить: удочка «утонет» — сервер не даёт
+  box.items = null;
+  r.send('itemDrop', { id: thing(sKit, 'rod-willow').id });
+  await until('отказ положить удочку в воду', () => !!box.items);
+  check(box.items!.note === 'sea' && box.items!.hands.some(it => it.kind === 'rod-willow'), 'в океане удочку на землю не положить — некуда');
+  box.items = null;
+  r.send('itemPut', { x: sea0.x, y: sea0.y, left: true });
+  await until('ведро в лодке', () => view()?.boat === 'bucket' && !!box.items);
+  check(!box.items!.hands.some(it => it.id === pailId) && box.bags!.some(x => x.id === pailId && x.boat), 'ведро поставлено в лодку — у ног, и это видно всем');
+  r.send('itemTake', { id: thing(sKit, 'worms').id, left: true });
+  await until('червей в левой руке', () => view()?.off === 'worms');
+  r.send('sit');
+  await until('снова на якоре', () => view()?.sitting === true);
+  box.fish.length = 0;
+  r.send('press');
+  await until('заброс в океане', () => box.fish.some(f => f.e === 'cast'));
+  await until('поклёвку в океане', () => box.fish.some(f => f.e === 'bite'), 40000);
+  r.send('press');
+  await until('подсечку в океане', () => box.fish.some(f => f.e === 'hook'));
+  const got = box.fish.find(f => f.e === 'hook')!;
+  check(got.e === 'hook' && got.pail?.id === pailId && got.pail.n === 1 && FISH.where(FISH.SPECIES.find(sp => sp.id === got.fish.id)!).includes('sea'), `поймана морская рыба в ведро в лодке: ${got.e === 'hook' ? got.fish.id + ' ' + got.fish.grams + ' г' : ''}`);
+  await until('хвост над ведром в лодке', () => (view()?.recent.length ?? 0) > 0);
+  check(true, 'хвост рыбы над ведром в лодке видят все');
+  // сходит на остров с удочкой и червями в руках — ведру некуда, оно ждёт в лодке; освободил руку — взял его у лодки
+  box.self = null;
+  r.send('sail', { to: 'isle' });
+  await until('к острову', () => !!box.self && box.self.isle && view()?.isle === true);
+  check(!box.self!.sea && box.self!.x === Isle.landing.x && box.self!.y === Isle.landing.y && box.self!.seen.includes('isle'), 'из океана приплыл к острову — на пляж, в той же комнате');
+  await sleep(300);
+  check(view()!.boat === 'bucket' && view()!.off === 'worms' && box.bags!.some(x => x.id === pailId && x.boat), 'руки заняты, в кожаный рюкзак ведро не влезает — оно осталось в лодке');
+  r.send('itemStow', { id: thing(sKit, 'worms').id, at: null });
+  await until('черви в рюкзаке', () => view()?.off === '');
+  r.send('itemPick', { id: pailId });
+  await until('ведро из лодки в руке', () => view()?.boat === '' && view()?.off === 'bucket');
+  check(box.bags!.some(x => x.id === pailId && !x.boat && x.bag.total === 1), 'у лодки на пляже взял ведро с уловом из лодки в освободившуюся руку');
+  // снова в океан, ведро — в лодку, и домой: дома ведро из лодки опять в руке
+  r.send('sail', { to: 'sea' });
+  await until('снова в океане', () => view()?.sea === true);
+  r.send('itemPut', { x: view()!.x, y: view()!.y, left: true });
+  await until('ведро снова в лодке', () => view()?.boat === 'bucket');
+  await sleep(300);
+  check((await loadGround(db, boatPlace(sailor.id))).some(g => g.id === pailId), 'ведро в лодке записано в базу — в месте лодки игрока');
+  // перезашёл в океан — ведро так и стоит в лодке
+  await board('sea');
+  check(view()!.sea && view()!.boat === 'bucket' && box.bags!.some(x => x.id === pailId && x.boat && x.bag.total === 1), 'перезашёл в океан — ведро с уловом всё так же в лодке');
+  box.voyage = null;
+  r.send('sail', { to: 'home' });
+  await until('лодку домой из океана', () => !!box.voyage);
+  check(box.voyage!.to === 'home', 'из океана отпускают домой');
+  await board('home');
+  check(!box.self!.sea && !box.self!.isle && dist(box.self!, boatPoint()) < 1 && box.self!.pack.worn, 'приплыл домой — стоит у лодки на мостках, рюкзак на спине');
+  await until('ведро дома в руке', () => view()?.off === 'bucket' && view()?.boat === '');
+  await sleep(400);
+  check(box.bags!.some(x => x.id === pailId && !x.boat && x.bag.total === 1) && !(await loadGround(db, boatPlace(sailor.id))).length, 'дома ведро с морской рыбой у него в руке, лодка пуста');
+  await r.leave();
+  await sleep(500);
+  // уснувший от голода в общие воды не попадёт — сервер сразу отправляет его домой
+  const tired = (await loadPlayer(db, sailor.id))!.world!;
+  await saveWorld(db, sailor.id, { ...tired, sleep: Date.now() + 60_000 });
+  box.self = null; box.voyage = null;
+  r = hear(await client.joinOrCreate(ROOM, { ticket: issueTicket(sailor.id, sailor.name), pier: SEA_ROOM, to: 'sea' }));
+  await until('домой спящим', () => !!box.voyage);
+  check(box.voyage!.to === 'home' && box.voyage!.slept === true, 'спящий в общие воды не попадает — сервер сразу отправляет его домой, к крыльцу');
+  await r.leave();
+}
+await sleep(300);
 
 // жуёт рыбу HUNGER.EAT секунд — это в состоянии комнаты, его видят все; вторую рыбу в это время не съесть
 {

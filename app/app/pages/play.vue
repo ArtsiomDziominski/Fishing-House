@@ -1,9 +1,12 @@
 <!-- Игра. Страница живёт только в браузере (routeRules в nuxt.config): берём билет у сайта,
      входим в комнату-причал на игровом сервере и запускаем движок на холсте.
-     У каждого игрока свой причал; ?pier=<id> — сходить в гости к этому игроку (без него — к себе). -->
+     У каждого игрока свой причал; ?pier=<id> — сходить в гости к этому игроку (без него — к себе).
+     ?at=isle|sea — в общих водах (общий остров или открытый океан, комната SEA_ROOM), from — от чьего причала отплыл (туда
+     и вернётся; без него — к себе). Плывут туда и обратно по слову сервера («voyage»): страница сама меняет адрес и комнату,
+     а новый движок начинает с тёмного экрана переправы (arriving). -->
 <script setup lang="ts">
 import { Client, type Room } from '@colyseus/sdk';
-import { ROOM, World, ITEMS, FRIDGE, type ChestKind, type ClientMessages, type ItemKind, type Place, type ServerMessages, type WeatherKind } from '@fh/shared';
+import { ROOM, SEA_ROOM, World, ITEMS, FRIDGE, type ChestKind, type ClientMessages, type ItemKind, type Place, type ServerMessages, type Voyage, type WeatherKind } from '@fh/shared';
 import { startGame, type GameHandle } from '~/game/engine';
 
 definePageMeta({ layout: false, middleware: 'auth' });
@@ -41,6 +44,8 @@ const ITEM_NOTES: Record<NonNullable<ServerMessages['items']['note']>, string> =
   pail: 'Ведро далеко — подойди к нему или возьми его в руку',
   empty: 'Такой рыбы в ведре уже нет',
   indoor: 'В доме на пол ничего не кладут — выйди на улицу',
+  sea: 'За борт ничего не положить — утонет. В лодку ставят только ведро',
+  boat: 'В лодке уже стоит ведро — второе не поставить',
 };
 // Холодильник в доме: окно просит, сервер решает и присылает полку целиком («fridge»), а если не вышло — почему.
 const FRIDGE_NOTES: Record<NonNullable<ServerMessages['fridge']['note']>, string> = {
@@ -71,12 +76,40 @@ function chestKind(kind: ChestKind) { send('chestKind', { kind }); }
 
 // Чей причал открыть: из адреса (?pier=) или свой.
 const pierId = () => (typeof route.query.pier === 'string' && route.query.pier) || user.value?.id || '';
+// Общие воды из адреса (?at=): на острове или в океане; null — на причале.
+const atWaters = (): 'isle' | 'sea' | null => (route.query.at === 'isle' || route.query.at === 'sea' ? route.query.at : null);
+// От чьего причала отплыл в общие воды (?from=) — туда и вернётся; без него — к себе.
+const fromPier = () => (typeof route.query.from === 'string' && route.query.from) || user.value?.id || '';
+let arriving: Voyage | null = null;                     // плывём на лодке — куда: новый движок начнёт с тёмного экрана переправы
 // Сходить в гости (или домой): меняем адрес и входим на другой причал. Прежний причал покидаем до входа —
 // пусть он успеет сохранить героя.
 async function visit(owner: string) {
+  arriving = null;
   await router.replace({ query: owner === user.value?.id ? {} : { pier: owner } });
   await connect();
 }
+// Сервер отпустил плыть в другую комнату: в общие воды — запомним, от чьего причала; домой — к нему (уснул от голода — лодку
+// прибило к своему причалу: туда, и без переправы — он спит).
+watch(() => game.voyage, async m => {
+  if (!m) return;
+  game.voyage = null;
+  const me = user.value?.id, { pier: _p, at: _a, from: _f, ...keep } = route.query;   // ?hour=, ?debug — остаются
+  if (m.to === 'home') {
+    const to = m.slept ? '' : fromPier();
+    arriving = m.slept ? null : 'home';
+    await router.replace({ query: { ...keep, ...(to && to !== me && { pier: to }) } });
+  } else {
+    const from = atWaters() ? fromPier() : pierId();
+    arriving = m.to;
+    await router.replace({ query: { ...keep, at: m.to, ...(from && from !== me && { from }) } });
+  }
+  await connect();
+});
+// Переплыл между островом и океаном в общих водах — адрес тоже: перезагрузил страницу — и он там же.
+watch(() => game.where, where => {
+  const at = atWaters();
+  if (at && (where === 'isle' || where === 'sea') && where !== at) router.replace({ query: { ...route.query, at: where } });
+});
 
 function stop() {
   handle?.destroy(); handle = null;
@@ -92,11 +125,13 @@ function connect() { return (queue = queue.then(enter, enter)); }
 
 async function enter() {
   await stop()?.leave().catch(() => {});
+  const sail = arriving; arriving = null;
   game.reset();
-  game.status = 'connecting';
+  game.status = sail ? 'sailing' : 'connecting';
   try {
     const { ticket } = await $fetch<{ ticket: string }>('/api/game/ticket', { method: 'POST' });
-    const r = await new Client(endpoint()).joinOrCreate(ROOM, { ticket, pier: pierId() });
+    const at = atWaters();
+    const r = await new Client(endpoint()).joinOrCreate(ROOM, at ? { ticket, pier: SEA_ROOM, to: at } : { ticket, pier: pierId(), ...(sail === 'home' && { to: 'home' as const }) });
     room = r;
     game.roomId = r.roomId;
     r.onMessage('items', (m: ServerMessages['items']) => {
@@ -120,7 +155,7 @@ async function enter() {
       stop();
       game.status = reason === 'replaced' ? 'replaced' : 'offline';
     });
-    handle = await startGame(canvas.value!, r, game.ui());
+    handle = await startGame(canvas.value!, r, game.ui(), { arriving: sail });
     handle.setSound(game.sound);   // звук включают и выключают в настройках главного меню
     if (room === r) game.status = 'online';
     if (user.value?.id) game.startSteps(user.value.id);   // новичку — шаги в углу
@@ -137,7 +172,7 @@ onBeforeUnmount(() => { stop()?.leave().catch(() => {}); });
 
 const overlay = computed(() => {
   switch (game.status) {
-    case 'connecting': return { title: 'Идём на причал…', text: '' };
+    case 'connecting': return { title: atWaters() ? 'Плывём…' : 'Идём на причал…', text: '' };
     case 'reconnecting': return { title: 'Связь прервалась', text: 'Переподключаемся — герой ждёт на месте.' };
     case 'replaced': return { title: 'Игра открыта в другом окне', text: 'Играть можно только в одном окне сразу.' };
     case 'offline': return { title: 'Соединение закрыто', text: 'Улов сохранён.' };
@@ -170,6 +205,8 @@ const overlay = computed(() => {
     />
     <GameFridge @put="send('fridgePut', {})" @take="send('fridgeTake', { id: $event })" @stock="send('fridgeStock', undefined)" />
     <GameSleep />
+    <GameVoyage @go="handle?.sailTo($event)" @stay="handle?.stay()" />
+    <GameMap />
 
     <div v-if="overlay" class="overlay" :class="{ soft: game.status === 'reconnecting' || game.status === 'connecting' }">
       <div class="panel box">
@@ -177,7 +214,7 @@ const overlay = computed(() => {
         <p v-if="overlay.text" class="muted">{{ overlay.text }}</p>
         <div v-if="game.status !== 'connecting' && game.status !== 'reconnecting'" class="buttons">
           <button type="button" class="btn primary" @click="connect">{{ game.status === 'replaced' ? 'Играть здесь' : 'Подключиться снова' }}</button>
-          <button v-if="game.status === 'error' && route.query.pier" type="button" class="btn ghost" @click="visit(user?.id ?? '')">К себе на причал</button>
+          <button v-if="game.status === 'error' && (route.query.pier || route.query.at)" type="button" class="btn ghost" @click="visit(user?.id ?? '')">К себе на причал</button>
           <NuxtLink to="/" class="btn ghost">В меню</NuxtLink>
         </div>
       </div>

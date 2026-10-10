@@ -6,8 +6,11 @@ import { FISH, type Bag } from '@fh/shared';
 const props = defineProps<{ bag: Bag; compact?: boolean; pickable?: boolean }>();
 const emit = defineEmits<{ pick: [species: string] }>();
 const can = (id: string) => props.pickable && !!props.bag.counts[id];
-// у причала не клюёт (FISH: chance 0) — ловят её только с мостков острова
-const where = (sp: (typeof FISH.SPECIES)[number]) => (sp.chance ? '' : ' — клюёт только у острова');
+// где клюёт, если не у причала (FISH.where): лещ и сом — только у острова, морская рыба — только в открытом океане
+const where = (sp: (typeof FISH.SPECIES)[number]) => {
+  const at = FISH.where(sp);
+  return at.includes('pier') ? '' : at.includes('sea') ? ' — клюёт только в открытом океане' : ' — клюёт только у острова';
+};
 </script>
 
 <template>

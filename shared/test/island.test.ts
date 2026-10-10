@@ -44,8 +44,8 @@ test('лещ и сом клюют только у острова, а на ост
   let n = 0; const rnd = () => ((n = (n * 9301 + 49297) % 233280) / 233280);
   for (let k = 0; k < 20000; k++) { seen.pier.add(FISH.roll(rnd, 'pier').id); seen.isle.add(FISH.roll(rnd, 'isle').id); }
   assert.ok(!seen.pier.has('bream') && !seen.pier.has('catfish'), 'у причала их нет');
-  for (const sp of FISH.SPECIES) assert.ok(seen.isle.has(sp.id), `на острове клюёт ${sp.name}`);
-  const isleOnly = FISH.SPECIES.filter(sp => !sp.chance).map(sp => sp.id).sort();
+  for (const sp of FISH.SPECIES.filter(sp => !sp.sea)) assert.ok(seen.isle.has(sp.id), `на острове клюёт ${sp.name}`);
+  const isleOnly = FISH.SPECIES.filter(sp => !sp.chance && sp.isle).map(sp => sp.id).sort();   // морские не в счёт: они только в океане
   assert.deepEqual(isleOnly, ['bream', 'catfish']);
 });
 
