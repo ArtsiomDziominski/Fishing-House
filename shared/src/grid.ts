@@ -49,6 +49,20 @@ export function createGrid(W: number, H: number, walk: Uint8Array) {
     return true;
   }
 
+  // Сколько пикселей подряд прямая между двумя точками идёт там, где ходить нельзя, — самая толстая стена (вода, ствол)
+  // на пути. Откуда вышли, не считается: кто стоит в стене (сидел в кресле, карту правили), должен суметь из неё выйти.
+  // Так сервер проверяет шаг целиком, а не только куда он привёл: срезанный на пиксель угол — можно, насквозь — нет.
+  function wall(x0: number, y0: number, x1: number, y1: number): number {
+    const n = Math.ceil(Math.max(Math.abs(x1 - x0), Math.abs(y1 - y0)) * 2);
+    let run = 0, best = 0, out = false;
+    for (let i = 0; i <= n; i++) {
+      const t = n ? i / n : 0;
+      if (canWalk(x0 + (x1 - x0) * t, y0 + (y1 - y0) * t)) { out = true; run = 0; }
+      else if (out && ++run > best) best = run;
+    }
+    return n ? best * Math.hypot(x1 - x0, y1 - y0) / n : 0;
+  }
+
   // A* по восьми соседям, без срезания углов; затем путь выпрямляется по прямой видимости.
   const gScore = new Float32Array(W * H), came = new Int32Array(W * H), state = new Uint8Array(W * H);
   function findPath(from: Point, to: Point): Point[] | null {
@@ -107,5 +121,5 @@ export function createGrid(W: number, H: number, walk: Uint8Array) {
     return path;
   }
 
-  return { canWalk, nearestWalkable, findPath, block, unblock };
+  return { canWalk, nearestWalkable, findPath, wall, block, unblock };
 }

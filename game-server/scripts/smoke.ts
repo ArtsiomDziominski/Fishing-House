@@ -149,6 +149,22 @@ room.send('move', { x: seat.x, y: seat.y - 20, dir: 'down' });
 await until('поправку', () => !!self);
 check(Math.hypot(self!.x - pos.x, self!.y - pos.y) < 1, 'телепорт не принят, сервер вернул героя');
 
+// короткий шаг сквозь стену или воду: дойти туда запаса хода хватило бы, но сервер смотрит и на сам путь
+const hop = (() => {
+  for (let r = 8; r <= 30; r += 2) for (let a = 0; a < 32; a++) {
+    const p = { x: Math.round(pos.x + r * Math.cos(a * Math.PI / 16)), y: Math.round(pos.y + r * Math.sin(a * Math.PI / 16)) };
+    if (World.canWalk(p.x, p.y) && World.wall(pos.x, pos.y, p.x, p.y) > 6) return p;
+  }
+  return null;
+})();
+if (hop) {
+  await sleep(700);                                     // запас хода снова полон
+  self = null;
+  room.send('move', { x: hop.x, y: hop.y, dir: 'down' });
+  await until('поправку за шаг сквозь стену', () => !!self);
+  check(Math.hypot(self!.x - pos.x, self!.y - pos.y) < 1, 'шаг сквозь стену не принят, сервер вернул героя');
+}
+
 // рюкзак: подойти, надеть, выбрать другой, снять рядом и надеть снова — остальным всё это видно в состоянии комнаты
 const seen = () => (room.state as { players: { get(sid: string): PlayerView | undefined } }).players.get(room.sessionId);
 // что лежит на земле — у всех одно; who — в какой копии причала смотреть

@@ -58,10 +58,10 @@ const box = ([x, y, w, h]: readonly [number, number, number, number]): Box => ({
 function depthAt(x: number, y: number): number { return (x < 0 || y < 0 || x >= W || y >= H) ? 0 : depth[y * W + x]!; }
 
 // Ходить, искать путь и ставить временные препятствия (ведро, снятый рюкзак) — по общей сетке (grid.ts).
-const { canWalk, nearestWalkable, findPath, block, unblock } = createGrid(W, H, walk);
+const { canWalk, nearestWalkable, findPath, wall, block, unblock } = createGrid(W, H, walk);
 
 export const World = {
-  W, H, rev: DATA.rev, pic: DATA.pic, walk, depth, canWalk, depthAt, nearestWalkable, findPath, block, unblock,
+  W, H, rev: DATA.rev, pic: DATA.pic, walk, depth, canWalk, depthAt, nearestWalkable, findPath, wall, block, unblock,
   fisher: DATA.fisher, line: DATA.line, rod: DATA.rod, seat: DATA.seat, bucket: DATA.bucket, pack: DATA.pack, sparkles: DATA.sparkles as [number, number, number, number][],
   // Дом — отдельная картинка поверх карты (house.png), где он стоит: левый верх и размер.
   house: box([...HOUSE.at, ...HOUSE.size]),

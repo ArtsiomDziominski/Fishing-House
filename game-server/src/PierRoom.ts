@@ -384,7 +384,7 @@ export class PierRoom extends Room<{ state: PierState; client: Client<{ auth: Au
   private move(client: Client, x: number, y: number, dir: WorldState['dir']) {
     const s = this.sessions.get(client.sessionId); if (!s) return;
     const w = s.world, d = dist(w, { x, y });
-    if (w.sitting || !gridOf(w).canWalk(x, y) || d > s.budget + SLACK) { this.reject(client, s); return; }
+    if (w.sitting || !gridOf(w).canWalk(x, y) || d > s.budget + SLACK || gridOf(w).wall(w.x, w.y, x, y) > SLACK) { this.reject(client, s); return; }   // и не сквозь стену или воду: шаг проверяем целиком
     if (s.dig && d > 0.5) s.dig = null;                 // ушёл, не докопав, — червей нет
     s.budget = Math.max(0, s.budget - d);
     w.x = x; w.y = y; w.dir = dir; w.rest = false; w.bed = false; s.dirty = true;   // пошёл — значит, встал от костра (из кресла, с кровати)
