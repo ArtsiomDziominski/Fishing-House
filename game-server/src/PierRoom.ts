@@ -391,9 +391,10 @@ export class PierRoom extends Room<{ state: PierState; client: Client<{ auth: Au
     this.syncView(s);
   }
 
-  // Ведро, если оно в руке, остаётся в руке: сидящему рыбаку его рисуют рядом. На острове садятся на край его мостков или
-  // на берег там, где стоят, — если удилище оттуда достаёт до воды (shoreCast): лицом к воде, куда смотрел, если вода с обеих сторон.
-  // В океане бросают якорь где угодно: рыбак садится на корму лодки, лицом туда, куда она смотрит (влево или вправо).
+  // На причале и острове ведро, если оно в руке, остаётся в руке: сидящему рыбаку его рисуют рядом. На острове садятся на край
+  // его мостков или на берег там, где стоят, — если удилище оттуда достаёт до воды (shoreCast): лицом к воде, куда смотрел, если
+  // вода с обеих сторон. В океане бросают якорь где угодно: рыбак садится на корму лодки, лицом туда, куда она смотрит (влево
+  // или вправо), а руки готовятся сами (rig): ведро — в лодку, удочка и черви — из рюкзака в руки.
   private sit(client: Client) {
     const s = this.sessions.get(client.sessionId); if (!s) return;
     const w = s.world, at = seatOf(w.isle), shore = w.isle && dist(w, at) > seat.r + SLACK ? shoreCast(w, w.dir) : null;
@@ -402,6 +403,7 @@ export class PierRoom extends Room<{ state: PierState; client: Client<{ auth: Au
       w.sitting = true; if (w.dir !== 'right') w.dir = 'left'; s.dirty = true;
       s.fishing.sit();
       this.syncView(s);
+      this.rig(client, s);
       return;
     }
     if (w.inside || !shore && dist(w, at) > seat.r + SLACK) { this.reject(client, s); return; }
@@ -712,13 +714,45 @@ export class PierRoom extends Room<{ state: PierState; client: Client<{ auth: Au
     if (!ITEMS.isBucket(it.kind)) { this.tellItems(client, s, 'sea'); return; }
     if (s.boat.length) { this.tellItems(client, s, 'boat'); return; }
     if (it.id < 0) { this.tellItems(client, s); return; }
-    s.hands = s.hands.filter(h => h !== it); s.items = s.items.filter(h => h !== it); s.unsynced.delete(it.id);
-    const b: Item = { ...ITEMS.unheld(it), x: 0, y: 0, rot: false };
-    s.boat = [b];
+    this.boatIn(s, it);
     this.syncView(s);
     this.tellItems(client, s);
     this.tellBags(client, s);
+  }
+  // Ведро it (из руки или из рюкзака) — в пустую лодку; в базе — на землю места boatPlace(игрок).
+  private boatIn(s: Session, it: Item) {
+    s.hands = s.hands.filter(h => h !== it); s.items = s.items.filter(h => h !== it); s.unsynced.delete(it.id);
+    const b: Item = { ...ITEMS.unheld(it), x: 0, y: 0, rot: false };
+    s.boat = [b];
     this.write(s, () => dropItem(db, s.pid, { id: b.id, kind: b.kind, x: 0, y: 0, lit: false, fish: '' }, boatPlace(s.pid)));
+  }
+  // Бросил якорь — руки готовятся к рыбалке сами (игроку не надо помнить, что ведро ставят в лодку, а червей берут из
+  // рюкзака): ведро из руки (нет его там — из рюкзака на спине; полному — запасное с местом) встаёт в пустую лодку, а в
+  // свободные руки из рюкзака — удочка и банка с червями, если их ещё нет в руках. Что переложено — игроку в «items» (moved).
+  private rig(client: Client, s: Session) {
+    const moved: NonNullable<ServerMessages['items']['moved']> = [], pack = s.world.pack.worn ? s.items : [];
+    const pails = s.boat.length ? [] : [...s.hands, ...pack].filter(it => ITEMS.isBucket(it.kind) && it.id > 0);
+    const pail = pails.find(it => (this.bags.get(it.id)?.total ?? 0) < ITEMS.capacity(it.kind)) ?? pails[0];   // как bucketFor
+    if (pail) { this.boatIn(s, pail); moved.push('boat'); }
+    const taken: Stored[] = [];
+    for (const [what, is, ok] of [
+      ['rod', (it: Item) => ITEMS.isRod(it.kind), (_: Item) => true],
+      ['bait', (it: Item) => ITEMS.isBait(it.kind), (it: Item) => (it.worms ?? 0) > 0],   // пустую банку брать незачем
+    ] as const) {
+      if (s.hands.some(is)) continue;
+      const it = pack.find(o => is(o) && ok(o) && o.id > 0), hand = it && ITEMS.handFor(s.hands, it.kind);
+      if (!it || !hand) continue;
+      const r = ITEMS.take(ITEMS.grid(s.world.pack.kind), s.items, s.hands, it.id, hand);
+      if (typeof r === 'string' || r.back.length) continue;
+      s.items = r.list; s.hands = r.hands;
+      taken.push({ ...r.hands.find(h => h.id === it.id)!, held: true });
+      moved.push(what);
+    }
+    if (!moved.length) return;
+    if (taken.length) this.place(s, taken);
+    this.syncView(s);
+    this.tell(client, 'items', { list: s.items, hands: s.hands, moved });
+    if (moved.includes('boat')) this.tellBags(client, s);
   }
   // Взять ведро из лодки в руку left (не назвали — в свободную).
   private fromBoat(client: Client, s: Session, id: number, left?: boolean) {
@@ -735,10 +769,13 @@ export class PierRoom extends Room<{ state: PierState; client: Client<{ auth: Au
     this.write(s, () => claimItem(db, s.pid, { ...mine, held: true }));
   }
   // Сошёл на берег (или приплыл домой) — ведро из лодки с собой: в свободную руку, а нет её — в рюкзак на спине, если
-  // влезет. Некуда — ждёт в лодке до следующего выхода в океан.
+  // влезет; не влезет — банку червей (а нет её — удочку) в рюкзак, а ведро — в освободившуюся руку. Некуда — ждёт в лодке
+  // до следующего выхода в океан.
   private unload(client: Client, s: Session) {
     for (const it of [...s.boat]) {
-      const hand = ITEMS.handFor(s.hands, it.kind), at = hand || !s.world.pack.worn ? null : ITEMS.spot(ITEMS.grid(s.world.pack.kind), s.items, it.kind);
+      let hand = ITEMS.handFor(s.hands, it.kind);
+      const at = hand || !s.world.pack.worn ? null : ITEMS.spot(ITEMS.grid(s.world.pack.kind), s.items, it.kind);
+      if (!hand && !at) hand = this.freeHand(s, it.kind);
       if (!hand && !at) continue;
       const mine: Item = hand ? { ...it, left: hand === 'left' } : { ...it, ...at! };
       s.boat = s.boat.filter(b => b !== it);
@@ -748,6 +785,19 @@ export class PierRoom extends Room<{ state: PierState; client: Client<{ auth: Au
     this.syncView(s);
     this.tellItems(client, s);
     this.tellBags(client, s);
+  }
+  // Освободить руку под вещь kind: убрать в рюкзак на спине банку червей, а не влезет — удочку. Какая рука теперь свободна.
+  private freeHand(s: Session, kind: ItemKind) {
+    if (!s.world.pack.worn) return null;
+    for (const is of [ITEMS.isBait, ITEMS.isRod]) {
+      const h = s.hands.find(o => is(o.kind) && o.id > 0); if (!h) continue;
+      const r = ITEMS.stow(ITEMS.grid(s.world.pack.kind), s.items, s.hands, h.id);
+      if (!r) continue;
+      s.items = r.list; s.hands = r.hands;
+      this.place(s, [r.item]);
+      return ITEMS.handFor(s.hands, kind);
+    }
+    return null;
   }
 
   // Зажечь или погасить лампу: свою в руке или (id) ту, что стоит на земле рядом, — чью угодно.

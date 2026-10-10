@@ -47,6 +47,14 @@ const ITEM_NOTES: Record<NonNullable<ServerMessages['items']['note']>, string> =
   sea: 'За борт ничего не положить — утонет. В лодку ставят только ведро',
   boat: 'В лодке уже стоит ведро — второе не поставить',
 };
+// Бросил якорь в океане — сервер сам приготовил руки к рыбалке: что куда переложил.
+// «F — забросить» — только когда в руках и правда удочка и банка с червями (рука занята лампой, рюкзак остался дома — нет).
+function rigged({ moved = [], hands }: ServerMessages['items']) {
+  const took = [moved.includes('rod') && 'удочка', moved.includes('bait') && 'черви'].filter(Boolean);
+  const what = [moved.includes('boat') && 'ведро — в лодку', took.length && `${took.join(' и ')} — в ${took.length > 1 ? 'руки' : 'руку'}`].filter(Boolean).join(', ');
+  const ready = hands.some(h => ITEMS.isRod(h.kind)) && hands.some(h => ITEMS.isBait(h.kind) && (h.worms ?? 0) > 0);
+  return `${what[0]!.toUpperCase()}${what.slice(1)}${ready ? '. F — забросить' : ''}`;   // коротко: длинный тост уходит под чипы справа вверху
+}
 // Холодильник в доме: окно просит, сервер решает и присылает полку целиком («fridge»), а если не вышло — почему.
 const FRIDGE_NOTES: Record<NonNullable<ServerMessages['fridge']['note']>, string> = {
   far: 'Холодильник далеко — подойди к нему',
@@ -137,6 +145,7 @@ async function enter() {
     r.onMessage('items', (m: ServerMessages['items']) => {
       game.items = m.list; game.hands = m.hands;
       if (m.note) game.showToast(ITEM_NOTES[m.note], 'bad');
+      else if (m.moved?.length) game.showToast(rigged(m), 'good');
     });
     r.onMessage('fridge', (m: ServerMessages['fridge']) => {
       game.fridge = m.list;

@@ -857,8 +857,9 @@ check(!(await loadItems(db, me.id)).hands.some(it => ITEMS.isFish(it.kind)) && (
 await again.leave();
 await sleep(500);
 
-// открытый океан: новичок с ведром в руке плывёт в океан, ставит ведро в лодку (в кожаный рюкзак оно не влезает, а руки нужны
-// под удочку и червей), бросает якорь и ловит рыбу в ведро в лодке; сходит на остров — ведро из лодки берёт в руку;
+// открытый океан: новичок с ведром в руке и удочкой в рюкзаке плывёт в океан и бросает якорь — ведро само встаёт в лодку (в
+// кожаный рюкзак оно не влезает, а руки нужны под удочку и червей), удочка и черви — в руки; ловит рыбу в ведро в лодке; сходит на остров — черви в рюкзак,
+// ведро из лодки — в руку;
 // плывёт домой с ведром в лодке — дома оно у него в руке. Копать и класть в воду что-то, кроме ведра, нельзя.
 {
   const sailor = await createAccount(db, 'моряк_' + Math.random().toString(36).slice(2, 8), 'не-для-входа');
@@ -888,8 +889,6 @@ await sleep(500);
   await walk({ x: World.pack.baseX, y: World.pack.baseY + 6 }, r, sAt);
   r.send('packOn');
   await until('рюкзак моряка на спине', () => !!view()?.wearing);
-  r.send('itemTake', { id: thing(sKit, 'rod-willow').id, left: false });
-  await until('удочку в правой руке', () => view()?.hand === 'rod-willow' && view()?.off === 'bucket');
   await walk(BOAT_AT, r, sAt);
   r.send('sail', { to: 'sea' });
   await until('лодку в океан', () => !!box.voyage);
@@ -911,30 +910,42 @@ await sleep(500);
   r.send('move', { x: sea0.x + 2, y: SEA.horizon - 10, dir: 'up' });
   await until('отказ за горизонт', () => !!box.self);
   check(box.self!.y >= b.y0, 'за горизонт на лодке не уплыть');
-  // якорь: сел — рыбачит, но без ведра в лодке не забросить (руки заняты ведром)
+  // якорь: руки готовятся к рыбалке сами — ведро из руки встаёт в лодку, удочка и черви из рюкзака — в руки
+  box.items = null;
   r.send('sit');
-  await until('бросил якорь', () => view()?.sitting === true);
+  await until('бросил якорь', () => view()?.sitting === true && !!box.items?.moved);
   check(view()!.x === sea0.x + 2 && view()!.y === sea0.y, 'якорь бросают там, где лодка');
-  box.fish.length = 0;
-  r.send('press');
-  await until('отказ без червей', () => box.fish.length > 0);
-  check(box.fish[0]!.e === 'needBait', 'в руке ведро вместо червей — не забросить');
+  check(box.items!.moved!.join() === 'boat,rod,bait' && view()!.boat === 'bucket' && view()!.hand === 'rod-willow' && view()!.off === 'worms', 'бросил якорь — ведро само встало в лодку, удочка и черви из рюкзака — в руки');
+  await until('ведро в лодке среди вёдер', () => !!box.bags?.some(x => x.id === pailId && x.boat));
+  await sleep(300);
+  check((await loadGround(db, boatPlace(sailor.id))).some(g => g.id === pailId), 'ведро, само вставшее в лодку, записано в базу — в месте лодки игрока');
+  const rigged = await loadItems(db, sailor.id);
+  check(rigged.hands.some(it => it.kind === 'rod-willow') && rigged.hands.some(it => it.kind === 'worms') && !rigged.list.some(it => it.kind === 'rod-willow' || it.kind === 'worms') && !rigged.hands.some(it => it.id === pailId), 'удочка и черви, взятые на якоре, записаны в базу — в руках, а не в рюкзаке');
   r.send('stand');
   await until('поднял якорь', () => view()?.sitting === false);
-  check(view()!.x === sea0.x + 2 && view()!.y === sea0.y, 'якорь поднят — лодка там же');
+  check(view()!.x === sea0.x + 2 && view()!.y === sea0.y && view()!.off === 'worms', 'якорь поднят — лодка там же, черви в руке');
   // в воду ничего, кроме ведра, не положить: удочка «утонет» — сервер не даёт
   box.items = null;
   r.send('itemDrop', { id: thing(sKit, 'rod-willow').id });
   await until('отказ положить удочку в воду', () => !!box.items);
   check(box.items!.note === 'sea' && box.items!.hands.some(it => it.kind === 'rod-willow'), 'в океане удочку на землю не положить — некуда');
+  // ведро из лодки — только в свободную руку; руками его ставят обратно (Q, E)
+  box.items = null;
+  r.send('itemPick', { id: pailId });
+  await until('отказ взять ведро занятыми руками', () => !!box.items);
+  check(box.items!.note === 'busy' && view()!.boat === 'bucket', 'руки заняты удочкой и червями — ведро из лодки не взять');
+  r.send('itemStow', { id: thing(sKit, 'worms').id, at: null });
+  await until('черви в рюкзаке', () => view()?.off === '');
+  r.send('itemPick', { id: pailId });
+  await until('ведро из лодки в руке', () => view()?.boat === '' && view()?.off === 'bucket');
   box.items = null;
   r.send('itemPut', { x: sea0.x, y: sea0.y, left: true });
   await until('ведро в лодке', () => view()?.boat === 'bucket' && !!box.items);
-  check(!box.items!.hands.some(it => it.id === pailId) && box.bags!.some(x => x.id === pailId && x.boat), 'ведро поставлено в лодку — у ног, и это видно всем');
-  r.send('itemTake', { id: thing(sKit, 'worms').id, left: true });
-  await until('червей в левой руке', () => view()?.off === 'worms');
+  check(!box.items!.hands.some(it => it.id === pailId) && box.bags!.some(x => x.id === pailId && x.boat) && !box.items!.moved, 'ведро поставлено в лодку руками — у ног, и это видно всем');
+  box.items = null;
   r.send('sit');
-  await until('снова на якоре', () => view()?.sitting === true);
+  await until('снова на якоре', () => view()?.sitting === true && !!box.items?.moved);
+  check(box.items!.moved!.join() === 'bait' && view()!.off === 'worms', 'ведро уже в лодке — якорь взял из рюкзака только червей');
   box.fish.length = 0;
   r.send('press');
   await until('заброс в океане', () => box.fish.some(f => f.e === 'cast'));
@@ -945,18 +956,13 @@ await sleep(500);
   check(got.e === 'hook' && got.pail?.id === pailId && got.pail.n === 1 && FISH.where(FISH.SPECIES.find(sp => sp.id === got.fish.id)!).includes('sea'), `поймана морская рыба в ведро в лодке: ${got.e === 'hook' ? got.fish.id + ' ' + got.fish.grams + ' г' : ''}`);
   await until('хвост над ведром в лодке', () => (view()?.recent.length ?? 0) > 0);
   check(true, 'хвост рыбы над ведром в лодке видят все');
-  // сходит на остров с удочкой и червями в руках — ведру некуда, оно ждёт в лодке; освободил руку — взял его у лодки
+  // сходит на остров с удочкой и червями в руках: в кожаный рюкзак ведро не влезает — черви уходят в рюкзак, а ведро из лодки — в руку
   box.self = null;
   r.send('sail', { to: 'isle' });
   await until('к острову', () => !!box.self && box.self.isle && view()?.isle === true);
   check(!box.self!.sea && box.self!.x === Isle.landing.x && box.self!.y === Isle.landing.y && box.self!.seen.includes('isle'), 'из океана приплыл к острову — на пляж, в той же комнате');
-  await sleep(300);
-  check(view()!.boat === 'bucket' && view()!.off === 'worms' && box.bags!.some(x => x.id === pailId && x.boat), 'руки заняты, в кожаный рюкзак ведро не влезает — оно осталось в лодке');
-  r.send('itemStow', { id: thing(sKit, 'worms').id, at: null });
-  await until('черви в рюкзаке', () => view()?.off === '');
-  r.send('itemPick', { id: pailId });
-  await until('ведро из лодки в руке', () => view()?.boat === '' && view()?.off === 'bucket');
-  check(box.bags!.some(x => x.id === pailId && !x.boat && x.bag.total === 1), 'у лодки на пляже взял ведро с уловом из лодки в освободившуюся руку');
+  await until('ведро из лодки в руке на острове', () => view()?.boat === '' && view()?.off === 'bucket');
+  check(view()!.hand === 'rod-willow' && box.items!.list.some(it => it.kind === 'worms') && box.bags!.some(x => x.id === pailId && !x.boat && x.bag.total === 1), 'сошёл на остров — черви сами ушли в рюкзак, ведро с уловом из лодки — в руке');
   // снова в океан, ведро — в лодку, и домой: дома ведро из лодки опять в руке
   r.send('sail', { to: 'sea' });
   await until('снова в океане', () => view()?.sea === true);

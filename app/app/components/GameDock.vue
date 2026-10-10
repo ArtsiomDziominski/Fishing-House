@@ -35,7 +35,7 @@ function press(ev: MouseEvent, what: 'left' | 'right' | 'pack' | 'open' | 'lamp'
       <span class="for-keys"><kbd>F</kbd> или пробел — рыбачить</span>
       <span class="for-keys"><kbd>H</kbd> у двери — войти в дом или выйти; в доме <kbd>F</kbd> — сесть в кресло у камина, лечь в кровать, открыть холодильник</span>
       <span class="for-keys"><kbd>H</kbd> у лодки справа от мостков — сесть в неё и плыть: на общий остров или в открытый океан; <kbd>M</kbd> — карта мира</span>
-      <span v-if="game.where === 'sea'" class="for-keys">В океане: стрелки или клик по воде — грести, <kbd>F</kbd> — бросить якорь и рыбачить, <kbd>Q</kbd>/<kbd>E</kbd> — ведро в лодку и обратно</span>
+      <span v-if="game.where === 'sea'" class="for-keys">В океане: стрелки или клик по воде — грести, <kbd>F</kbd> — бросить якорь (ведро само встанет в лодку, удочка и черви — в руки) и рыбачить, <kbd>Q</kbd>/<kbd>E</kbd> — ведро в лодку и обратно</span>
       <span class="for-keys"><kbd>X</kbd> — достать рыбу из ведра или съесть; у костра она жарится</span>
       <span v-if="game.actions.dig" class="for-keys"><kbd>G</kbd> — копать червей на траве: лопата в одной руке, банка в другой</span>
       <span class="for-touch">Коснись места — рыбак пойдёт туда; на острове коснись воды — сядет рыбачить на берегу; в океане — лодка поплывёт туда</span>
