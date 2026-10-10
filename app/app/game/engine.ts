@@ -1,5 +1,5 @@
 // Игра в браузере: рыбак ходит по миру с картинки, носит ведро и рюкзак и ловит рыбу с края причала — вместе с другими игроками.
-// Мир — карта 569×320 «арт-пикселей», ровно 16:9. Она вся в кадре: экран стоит на месте, ходит только герой.
+// Мир — карта 640×360 «арт-пикселей», ровно 16:9. Она вся в кадре: экран стоит на месте, ходит только герой.
 // Кадр вписан в окно браузера целиком и на экране 16:9 занимает его весь.
 //
 // Сеть: свой герой ходит сразу (без ожидания сервера), шаги уходят на сервер раз в MOVE_EVERY.
@@ -777,7 +777,7 @@ export async function startGame(canvas: HTMLCanvasElement, room: Room, ui: GameU
   }
 
   // ---------- другие игроки ----------
-  const players = () => (room.state as { players?: { forEach(cb: (p: PlayerView, sid: string) => void): void } } | undefined)?.players;
+  const players = () => (room.state as { players?: { forEach(cb: (p: PlayerView, sid: string) => void): void; get(sid: string): PlayerView | undefined } } | undefined)?.players;
   function updateGhosts(dt: number) {
     frameNo++;
     players()?.forEach((p, sid) => {
@@ -859,20 +859,31 @@ export async function startGame(canvas: HTMLCanvasElement, room: Room, ui: GameU
   // Чей это причал — в состоянии комнаты; хозяин не ты — ты в гостях.
   const whose = () => room.state as unknown as Partial<PierView>;
   const guest = () => { const o = whose().owner, me = ownView()?.pid; return !!o && !!me && o !== me && o !== SEA_ROOM; };   // в общих водах хозяина нет — там не в гостях
-  const ownView = () => { let me: PlayerView | null = null; players()?.forEach((p, sid) => { if (sid === room.sessionId) me = p; }); return me as PlayerView | null; };
+  const ownView = (): PlayerView | null => players()?.get(room.sessionId) ?? null;
   const ownHands = () => { const me = ownView(); return me ? [me.hand, me.off].filter(Boolean) : []; };
   // Что в правой и в левой руке (тяжёлая — в обеих), как это видит сервер; '' — рука пуста.
   const inHand = (side: Hand) => { const me = ownView(); if (!me) return ''; return side === 'right' || ITEMS.weight(me.hand) > 1 ? me.hand : me.off; };
   const leftFree = () => !inHand('left');
   // Вещи на земле — общие для всех: что, где и горит ли (лампа). Поднять можно любую, до которой дотянешься, — она станет твоей.
   type Lying = GroundView & { id: number };
+  // За кадр землю спрашивают десятки раз (кнопки, подсказки, отрисовка), а меняется она только между кадрами: пока идёт
+  // кадр (inFrame), список собирается один раз. Вне кадра (клавиши, клики) — всегда заново.
+  let inFrame = false, groundAll: Lying[] | null = null, groundNear: Lying[] | null = null;
   const groundItems = () => {
+    if (inFrame && groundAll) return groundAll;
     const out: Lying[] = [];
     (room.state as { ground?: { forEach(cb: (g: GroundView, key: string) => void): void } } | undefined)?.ground?.forEach((g, key) => out.push({ id: Number(key), kind: g.kind, x: g.x, y: g.y, lit: g.lit, fish: g.fish, end: g.end, haul: g.haul, isle: !!g.isle }));
+    if (inFrame) groundAll = out;
     return out;
   };
   // Земля там, где герой: у причала или на острове (x, y у вещей острова — в его кадре). В океане земли нет.
-  const groundHere = () => (hero.sea ? [] : groundItems().filter(g => g.isle === hero.isle));
+  const groundHere = () => {
+    if (hero.sea) return [];
+    if (inFrame && groundNear) return groundNear;
+    const out = groundItems().filter(g => g.isle === hero.isle);
+    if (inFrame) groundNear = out;
+    return out;
+  };
   const groundInReach = () => (hero.sitting || hero.inside ? null : ITEMS.nearest(hero, groundHere()));   // земля — снаружи
   // На какую вещь на земле показали: по её картинке, с запасом в пиксель; из нескольких — ближайшая к точке.
   const groundAt = (x: number, y: number) => groundHere().filter(g => {
@@ -1866,10 +1877,16 @@ export async function startGame(canvas: HTMLCanvasElement, room: Room, ui: GameU
   on(window, 'resize', layout);
 
   // ---------- запуск ----------
+  // Один кадр: шаг игры и отрисовка. Землю за это время читаем из состояния комнаты один раз (groundItems).
+  function frameOf(dt: number, t: number, steps = 1) {
+    inFrame = true; groundAll = groundNear = null;
+    try { for (let i = 0; i < steps; i++) update(dt); render(t); }
+    finally { inFrame = false; groundAll = groundNear = null; }
+  }
   function tick(now: number) {
     if (!alive) return;
     const dt = Math.min(0.05, (now - last) / 1000 || 0); last = now;
-    update(dt); render(now / 1000);
+    frameOf(dt, now / 1000);
     raf = requestAnimationFrame(tick);
   }
   layout();
@@ -1882,7 +1899,7 @@ export async function startGame(canvas: HTMLCanvasElement, room: Room, ui: GameU
 
   // для отладки из консоли; step(dt, n) прокручивает игру вручную
   (window as any).FH_GAME = { hero, pack, view, keys, ghosts, fishing, room, sitDown, standUp, walkTo, putOn, takeOff, setPack, fishAction, handAction, packAction, digAction, doorAction, sailTo, sea,
-    step: (dt: number, n = 1) => { for (let i = 0; i < n; i++) update(dt); render(performance.now() / 1000); },
+    step: (dt: number, n = 1) => frameOf(dt, performance.now() / 1000, n),
     hourNow, setClock, setWeather, wx, river, island, scene: () => scene, setHour: (hour: number | null) => { fixedHour = hour ?? NaN; } };   // setHour(22) останавливает время на этом часе, setHour(null) — пускает снова
 
   return {

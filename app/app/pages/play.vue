@@ -186,7 +186,7 @@ const overlay = computed(() => {
   <div class="play">
     <img class="backdrop" :src="'/assets/world.png?v=' + World.rev" :style="{ '--dark': game.sky.dark }" alt="" aria-hidden="true">
     <main class="stage">
-      <canvas ref="canvas" width="569" height="320" aria-label="Домик рыбака у реки" />
+      <canvas ref="canvas" width="640" height="360" aria-label="Домик рыбака у реки" />
     </main>
 
     <!-- слева вверху колонкой: что в руках (у ведра — улов), под ним сытость, а новичку — первые шаги; каждое своей панелью, одной ширины -->

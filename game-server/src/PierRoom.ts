@@ -686,7 +686,7 @@ export class PierRoom extends Room<{ state: PierState; client: Client<{ auth: Au
     this.write(s, async () => {
       let ok: boolean;
       try { ok = await claimItem(db, s.pid, { ...mine, held }); }
-      catch (err) { this.loseItem(client, s, id); if (!this.ground.has(id)) this.setGround(g); throw err; }   // база не ответила — вещь остаётся на земле
+      catch (err) { if (!this.ground.has(id)) this.setGround(g); this.loseItem(client, s, id); throw err; }   // база не ответила — вещь остаётся на земле (сначала на землю: иначе loseItem забудет улов ведра)
       if (!ok) { this.loseItem(client, s, id, 'gone'); return; }
       this.news({ e: 'gone', id });
       if (lamp) void this.save(s, true);
